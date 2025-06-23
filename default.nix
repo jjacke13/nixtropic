@@ -3,6 +3,7 @@
 , fetchFromGitHub
 , cmake
 , pkg-config
+, DONGLE ? "TS1302"
 }:
 
 stdenv.mkDerivation rec {
@@ -22,9 +23,10 @@ stdenv.mkDerivation rec {
     pkg-config
   ];
 
-  cmakeFlags = [
-    "-DUSB_DONGLE_TS1302=1"
-  ];
+  cmakeFlags = if DONGLE == "TS1302" then
+    [ "-DUSB_DONGLE_TS1302=1" ]
+  else ## DONGLE == "TS1301"
+    [ "-DUSB_DONGLE_TS1301=1" ];
 
   installPhase = ''
     mkdir -p $out/bin

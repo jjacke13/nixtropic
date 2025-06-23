@@ -14,7 +14,8 @@
       pkgs = nixpkgs.legacyPackages.${system};
     in
     {
-    packages.libtropic-util = pkgs.callPackage ./default.nix {};
+      packages.libtropic-util_TS1302 = pkgs.callPackage ./default.nix {};
+      packages.libtropic-util_TS1301 = pkgs.callPackage ./default.nix { DONGLE = "TS1301"; };
     }
   );
 }
