@@ -22,11 +22,6 @@ stdenv.mkDerivation rec {
     pkg-config
   ];
 
-  # Add any runtime dependencies here
-  buildInputs = [
-    
-  ];
-
   cmakeFlags = [
     "-DUSB_DONGLE_TS1302=1"
   ];
