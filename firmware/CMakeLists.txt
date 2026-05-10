@@ -209,6 +209,8 @@ set(APP_SOURCES
     src/hid_rpc/rpc.c
     src/hid_rpc/rpc_cmds.c
     src/fido_hid/ctaphid.c
+    src/fido_hid/cbor.c
+    src/fido_hid/ctap2.c
     src/tropic/tropic.c
     # src/tropic/lt_crypto_stubs.c  — M4: replaced by trezor_crypto CAL below
     ${CMSIS_STARTUP}

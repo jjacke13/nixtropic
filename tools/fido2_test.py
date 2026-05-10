@@ -47,6 +47,10 @@ CMD_ERROR     = 0x3F
 
 CID_BROADCAST = 0xFFFFFFFF
 
+# CTAP2 sub-commands
+CTAP2_CMD_GET_INFO = 0x04
+CTAP2_OK           = 0x00
+
 
 def find_fido_path() -> str:
     """Locate /dev/hidrawN for VID:PID with FIDO usage page."""
@@ -168,6 +172,71 @@ def _format_init(payload: bytes) -> str:
             f"caps=0x{payload[16]:02x}")
 
 
+def cmd_cbor(dev: hid.Device, cid: int, sub: int, params: bytes = b"") -> tuple[int, bytes]:
+    """Send a CTAP2 CBOR command. Returns (status, response_body)."""
+    _, _, body = transact(dev, cid, CMD_CBOR, bytes([sub]) + params, timeout_ms=5000)
+    if not body:
+        raise RuntimeError("Empty CTAP2 response")
+    return body[0], body[1:]
+
+
+# ---------------- minimal CBOR decoder ----------------
+#
+# Just enough to parse the GetInfo response. CTAP2 GetInfo always returns
+# a map keyed by unsigned ints; values are uints, byte/text strings,
+# arrays, maps, and bools.
+
+def _cbor_decode(buf: bytes, off: int = 0):
+    if off >= len(buf):
+        raise ValueError("CBOR: unexpected end of buffer")
+    ib = buf[off]
+    mt = ib >> 5
+    ai = ib & 0x1F
+    off += 1
+    if ai < 24:
+        v = ai
+    elif ai == 24:
+        v = buf[off]; off += 1
+    elif ai == 25:
+        v = struct.unpack(">H", buf[off:off+2])[0]; off += 2
+    elif ai == 26:
+        v = struct.unpack(">I", buf[off:off+4])[0]; off += 4
+    elif ai == 27:
+        v = struct.unpack(">Q", buf[off:off+8])[0]; off += 8
+    else:
+        raise ValueError(f"CBOR: indefinite/reserved length ai={ai}")
+
+    if mt == 0:   return v, off
+    if mt == 1:   return -1 - v, off
+    if mt == 2:   data = bytes(buf[off:off+v]); return data, off + v
+    if mt == 3:   data = bytes(buf[off:off+v]).decode("utf-8"); return data, off + v
+    if mt == 4:
+        out = []
+        for _ in range(v):
+            item, off = _cbor_decode(buf, off); out.append(item)
+        return out, off
+    if mt == 5:
+        out = {}
+        for _ in range(v):
+            k, off = _cbor_decode(buf, off)
+            x, off = _cbor_decode(buf, off)
+            out[k] = x
+        return out, off
+    if mt == 7:
+        if v == 20: return False, off
+        if v == 21: return True, off
+        if v == 22: return None, off
+        raise ValueError(f"CBOR: unsupported simple {v}")
+    raise ValueError(f"CBOR: major type {mt} not implemented")
+
+
+def cbor_decode(buf: bytes):
+    obj, end = _cbor_decode(buf, 0)
+    if end != len(buf):
+        raise ValueError(f"CBOR: trailing bytes ({end} != {len(buf)})")
+    return obj
+
+
 # ---------------- subcommands ----------------
 
 def sub_init(args) -> int:
@@ -215,8 +284,32 @@ def sub_msg(args) -> int:
     return 0
 
 
+def sub_getinfo(args) -> int:
+    path = find_fido_path()
+    with open_dev(path) as dev:
+        new_cid, _ = cmd_init(dev)
+        status, body = cmd_cbor(dev, new_cid, CTAP2_CMD_GET_INFO)
+        if status != CTAP2_OK:
+            print(f"FAIL: GetInfo status 0x{status:02x}", file=sys.stderr)
+            return 1
+        info = cbor_decode(body)
+    versions  = info.get(1, [])
+    aaguid    = info.get(3, b"")
+    options   = info.get(4, {})
+    max_msg   = info.get(5)
+    transports = info.get(9, [])
+    algos     = info.get(10, [])
+    print(f"versions    = {versions}")
+    print(f"aaguid      = {aaguid.hex() if isinstance(aaguid, bytes) else aaguid}")
+    print(f"options     = {options}")
+    print(f"maxMsgSize  = {max_msg}")
+    print(f"transports  = {transports}")
+    print(f"algorithms  = {algos}")
+    return 0
+
+
 def sub_validate(args) -> int:
-    """Run a 4-test suite, exit 0 on full pass."""
+    """Run a 5-test suite, exit 0 on full pass."""
     path = find_fido_path()
     print(f"FIDO HID @ {path}")
     with open_dev(path) as dev:
@@ -246,9 +339,28 @@ def sub_validate(args) -> int:
         ok = (cmd == CMD_MSG and body == b"\x6e\x00")
         results.append(("MSG → SW=0x6E00 (CLA not supported)", ok, body.hex()))
 
+        # 5) CTAP2 GetInfo — must succeed and parse to a sane map
+        status, body = cmd_cbor(dev, new_cid, CTAP2_CMD_GET_INFO)
+        try:
+            info = cbor_decode(body) if status == CTAP2_OK else None
+        except Exception as e:
+            info = None
+        ok = (status == CTAP2_OK
+              and isinstance(info, dict)
+              and info.get(1) == ["FIDO_2_0"]
+              and isinstance(info.get(3), bytes) and len(info[3]) == 16
+              and isinstance(info.get(4), dict)
+              and info.get(5) == 1024
+              and info.get(9) == ["usb"]
+              and isinstance(info.get(10), list) and len(info[10]) >= 1)
+        detail = ("ok" if ok
+                  else f"status=0x{status:02x} info={info!r}")
+        results.append(("CTAP2 GetInfo (versions, aaguid, options, algorithms)",
+                        ok, detail))
+
     print()
     print("═" * 63)
-    print("  Phase 4 M2 — CTAPHID framing validation")
+    print("  Phase 4 — CTAPHID framing + CTAP2 GetInfo validation")
     print("═" * 63)
     n_ok = 0
     for i, (name, ok, detail) in enumerate(results, 1):
@@ -267,15 +379,17 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="cmd", required=True)
 
-    p_init = sub.add_parser("init",     help="one-shot CTAPHID_INIT")
-    p_ping = sub.add_parser("ping",     help="round-trip CTAPHID_PING")
+    p_init    = sub.add_parser("init",     help="one-shot CTAPHID_INIT")
+    p_ping    = sub.add_parser("ping",     help="round-trip CTAPHID_PING")
     p_ping.add_argument("--size", type=int, default=64)
-    p_msg  = sub.add_parser("msg",      help="CTAPHID_MSG → expect 6E00")
-    p_val  = sub.add_parser("validate", help="run full M2 suite")
+    p_msg     = sub.add_parser("msg",      help="CTAPHID_MSG → expect 6E00")
+    p_info    = sub.add_parser("getinfo",  help="CTAP2 authenticatorGetInfo")
+    p_val     = sub.add_parser("validate", help="run full M3 suite")
 
     p_init.set_defaults(func=sub_init)
     p_ping.set_defaults(func=sub_ping)
     p_msg.set_defaults(func=sub_msg)
+    p_info.set_defaults(func=sub_getinfo)
     p_val.set_defaults(func=sub_validate)
 
     args = parser.parse_args()
