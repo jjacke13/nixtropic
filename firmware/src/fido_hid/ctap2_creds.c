@@ -40,6 +40,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <string.h>
+#include <assert.h>
 
 /* trezor_crypto SHA-256. */
 #include "sha2.h"
@@ -47,6 +48,13 @@
 /* AAGUID exported from ctap2.c. Duplicate definition here would shadow.
  * Borrow via extern. */
 extern const uint8_t NIXTROPIC_AAGUID[16];
+
+/* Worst-case COSE_Key size for the keys we encode.
+ *   Ed25519 (OKP): 4-entry map = 46 bytes
+ *   ES256  (EC2):  5-entry map = 81 bytes (reserved for Phase-5 P-256)
+ * Pick a safe maximum that covers both with headroom. cpp-reviewer
+ * audit 2026-05-11 finding H3 — static_assert the buffer below. */
+#define COSE_KEY_MAX  96u
 
 /* ----- Helpers ----- */
 
@@ -312,17 +320,21 @@ int ctap2_make_credential(const uint8_t *req, size_t req_len,
     sha256_Raw(rp_id_p, (uint32_t) rp_id_len, rp_id_hash);
 
     /* COSE-encoded public key */
-    uint8_t cose_pub[64];
+    uint8_t cose_pub[COSE_KEY_MAX];
+    static_assert(sizeof cose_pub >= 46u,
+                  "cose_pub must hold at least the 46-byte Ed25519 COSE_Key");
     int cose_pub_len = build_cose_ed25519(credstore_pubkey(), cose_pub, sizeof cose_pub);
     if (cose_pub_len < 0) {
         resp[0] = CTAP2_ERR_OTHER;
         return 1;
     }
 
-    /* authData with AT bit set */
+    /* authData with AT bit set. Peek-then-commit the signCount so a
+     * failed build doesn't desync the counter. */
+    uint32_t sc = credstore_peek_signcount();
     uint8_t auth_data[256];
     int auth_data_len = build_authdata(rp_id_hash, FLAG_UP | FLAG_AT,
-                                       credstore_next_signcount(),
+                                       sc,
                                        credstore_cred_id(), CREDSTORE_CRED_ID_LEN,
                                        cose_pub, (size_t) cose_pub_len,
                                        auth_data, sizeof auth_data);
@@ -330,6 +342,7 @@ int ctap2_make_credential(const uint8_t *req, size_t req_len,
         resp[0] = CTAP2_ERR_OTHER;
         return 1;
     }
+    credstore_commit_signcount();
 
     /* Signature over authData || clientDataHash */
     uint8_t sig_input[sizeof auth_data + 32];
@@ -384,16 +397,19 @@ int ctap2_get_assertion(const uint8_t *req, size_t req_len,
     uint8_t rp_id_hash[32];
     sha256_Raw(rp_id_p, (uint32_t) rp_id_len, rp_id_hash);
 
-    /* authData WITHOUT attestedCredentialData (UP only) */
+    /* authData WITHOUT attestedCredentialData (UP only). Same
+     * peek-then-commit pattern as MakeCredential. */
+    uint32_t sc = credstore_peek_signcount();
     uint8_t auth_data[64];
     int auth_data_len = build_authdata(rp_id_hash, FLAG_UP,
-                                       credstore_next_signcount(),
+                                       sc,
                                        NULL, 0, NULL, 0,
                                        auth_data, sizeof auth_data);
     if (auth_data_len < 0) {
         resp[0] = CTAP2_ERR_OTHER;
         return 1;
     }
+    credstore_commit_signcount();
 
     /* sigInput = authData || clientDataHash */
     uint8_t sig_input[sizeof auth_data + 32];

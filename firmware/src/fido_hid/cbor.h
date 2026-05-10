@@ -86,8 +86,4 @@ int cbor_reader_read_map_header(cbor_reader_t *r, size_t *count);
  * for ignoring unknown / non-relevant map entries. Returns 0/-1. */
 int cbor_reader_skip(cbor_reader_t *r);
 
-/* Returns the byte position; useful for snapshotting/rewinding. */
-size_t cbor_reader_pos(const cbor_reader_t *r);
-void   cbor_reader_set_pos(cbor_reader_t *r, size_t pos);
-
 #endif /* NIXTROPIC_FIDO_HID_CBOR_H */

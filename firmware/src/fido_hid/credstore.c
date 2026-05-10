@@ -65,8 +65,12 @@ void credstore_sign(const uint8_t *msg, size_t msg_len, uint8_t *sig_out)
     ed25519_sign(msg, msg_len, STUB_SEED, sig_out);
 }
 
-uint32_t credstore_next_signcount(void)
+uint32_t credstore_peek_signcount(void)
+{
+    return s_signcount + 1u;
+}
+
+void credstore_commit_signcount(void)
 {
     s_signcount++;
-    return s_signcount;
 }

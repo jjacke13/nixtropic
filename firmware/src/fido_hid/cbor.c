@@ -144,9 +144,6 @@ void cbor_reader_init(cbor_reader_t *r, const uint8_t *buf, size_t len)
     r->err = 0;
 }
 
-size_t cbor_reader_pos(const cbor_reader_t *r) { return r->pos; }
-void   cbor_reader_set_pos(cbor_reader_t *r, size_t pos) { r->pos = pos; }
-
 int cbor_reader_peek_major(const cbor_reader_t *r)
 {
     if (r->pos >= r->len) return -1;
@@ -184,6 +181,14 @@ int cbor_reader_read_head(cbor_reader_t *r, uint8_t *mt, uint64_t *v)
             v_local = (v_local << 8) | (uint64_t) r->buf[r->pos + (size_t) i];
         }
         r->pos += 8u;
+        /* Reject values that would silently truncate when cast to
+         * size_t (32-bit on Cortex-M33). Without this, a crafted ai=27
+         * head with a value above 0xFFFFFFFF could fool the array/map
+         * header readers into iterating a wrong count, or pass an
+         * over-large length to byte/text string readers whose later
+         * (size_t) cast loses high bits. cpp-reviewer audit 2026-05-11
+         * findings H1/H2. */
+        if (v_local > (uint64_t) SIZE_MAX) { r->err = 1; return -1; }
     } else {
         /* ai 28..30 reserved; 31 = indefinite-length (we don't support). */
         r->err = 1;

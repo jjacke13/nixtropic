@@ -310,18 +310,38 @@ static void handle_init_packet(uint32_t cid, const uint8_t *pkt)
     uint16_t bcnt     = (uint16_t)(((uint16_t) pkt[5] << 8) | (uint16_t) pkt[6]);
     uint8_t  cmd      = (uint8_t)(cmd_byte & 0x7Fu);
 
-    /* CTAPHID_INIT may interrupt an assembly on its OWN CID (channel
-     * sync). Other commands on the broadcast CID are invalid. */
+    /* Broadcast CID is reserved for CTAPHID_INIT (channel allocation). */
     if (cid == FIDO_HID_CID_BROADCAST && cmd != FIDO_HID_CMD_INIT) {
         queue_error(cid, FIDO_HID_ERR_INVALID_CHANNEL);
         return;
     }
 
-    /* If a different CID has a transaction in flight, refuse with BUSY
-     * (FIDO U2F HID §3.4.3). EXCEPT for CTAPHID_INIT on its own CID,
-     * which is a "sync" command — handled inside handle_init. */
-    if (s_state == FH_STATE_ASSEMBLING && cid != s_cur_cid &&
-        !(cmd == FIDO_HID_CMD_INIT && cid != FIDO_HID_CID_BROADCAST)) {
+    /* CTAPHID_INIT is special: its request is always atomic (a single
+     * 8-byte nonce fits inside one INIT packet), it may arrive from any
+     * CID including the broadcast one, and per FIDO U2F HID §3.4.3 it
+     * must NEVER displace an in-flight transaction owned by a different
+     * CID. Dispatch it here without touching the assembly state machine.
+     *
+     * cpp-reviewer audit 2026-05-11 finding M2: prior code routed INIT
+     * through the same s_cur_cid-overwriting path as every other
+     * command, so a host that sent an INIT on a fresh CID mid-assembly
+     * silently clobbered the original transaction's state. */
+    if (cmd == FIDO_HID_CMD_INIT) {
+        if (bcnt > FIDO_HID_INIT_DATA_LEN) {
+            queue_error(cid, FIDO_HID_ERR_INVALID_LEN);
+            return;
+        }
+        /* INIT on the channel currently assembling = sync; reset it. */
+        if (s_state == FH_STATE_ASSEMBLING && cid == s_cur_cid) {
+            reset_assembly();
+        }
+        handle_init(cid, &pkt[7], (size_t) bcnt);
+        return;
+    }
+
+    /* Non-INIT commands: if another CID has a transaction in flight,
+     * refuse with CHANNEL_BUSY (FIDO U2F HID §3.4.3). */
+    if (s_state == FH_STATE_ASSEMBLING && cid != s_cur_cid) {
         queue_error(cid, FIDO_HID_ERR_CHANNEL_BUSY);
         return;
     }

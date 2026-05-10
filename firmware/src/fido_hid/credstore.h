@@ -49,12 +49,15 @@ const uint8_t *credstore_cred_id(void);
 void credstore_sign(const uint8_t *msg, size_t msg_len, uint8_t *sig_out);
 
 /**
- * @brief Read and atomically increment the global signature counter.
- *        Authenticator-data carries this as a big-endian uint32. The
- *        counter is volatile (RAM); rebooting resets to 0. That's fine
- *        for a stub but production must persist (Phase 5 stores in
- *        TROPIC01 R-mem).
+ * @brief Read the *next* signature counter value without incrementing.
+ *        Combined with credstore_commit_signcount() so the caller only
+ *        advances state after the response has been successfully built.
+ *        Phase 5 will persist the counter in TROPIC01 R-mem; advancing
+ *        on failure desyncs the relying party so the two-step API is
+ *        the production-shaped pattern. cpp-reviewer audit 2026-05-11
+ *        finding M3.
  */
-uint32_t credstore_next_signcount(void);
+uint32_t credstore_peek_signcount(void);
+void     credstore_commit_signcount(void);
 
 #endif /* NIXTROPIC_FIDO_HID_CREDSTORE_H */
