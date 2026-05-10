@@ -48,8 +48,14 @@ static int handle_get_random(const uint8_t *req, size_t req_len,
         return -1;
     }
     size_t n = req[0];
-    if (n == 0u) n = 1u;
-    if (n > 256u) n = 256u;
+    /* N=0 is invalid (host explicitly asked for nothing). Reject rather
+     * than silently coercing to 1, so a buggy caller gets a clear error. */
+    if (n == 0u) {
+        return -1;
+    }
+    /* req[0] is uint8_t so n is in [1, 255]. No 256u cap needed — kept
+     * here as a safety floor in case the request layout ever widens. */
+    if (n > 255u) n = 255u;
     if (n > resp_max) n = resp_max;
 
     /* Use the STM32 HW TRNG directly — no libtropic / TROPIC01 needed for

@@ -76,6 +76,11 @@ static void reset_assembly(void)
     s_req_received = 0;
     s_req_cmd      = 0;
     s_next_seq     = 0;
+    /* Zero the request buffer so an aborted-mid-transfer leak path can't
+     * carry payload bytes from the previous transaction into the next one
+     * (e.g., previous transaction's ECC sign challenge). Cheap (1 KB memset
+     * on a 160 MHz Cortex-M33) and removes a class of latent issues. */
+    memset(s_req_buf, 0, sizeof s_req_buf);
 }
 
 /* ===== Response queueing ===== */
@@ -158,15 +163,21 @@ static void dispatch_request(void)
     }
 
     /* Borrow s_resp_buf as scratch for the handler's output. The framing
-     * layer hasn't queued anything yet at this point. */
+     * layer hasn't queued anything yet at this point.
+     *
+     * IMPORTANT — assumes cooperative USB scheduling: tud_hid_set_report_cb
+     * is only ever called from tud_task() in the main loop (same thread as
+     * hid_rpc_task). If the firmware is ever ported to an IRQ-mode USB
+     * driver, an OUT report arriving mid-drain could clobber s_resp_buf
+     * while emit_response_packet is still copying from it. TinyUSB's
+     * stm32_fsdev driver pumps from tud_task, so we are safe today. */
     int n = fn(s_req_buf, s_req_received, s_resp_buf, HID_RPC_RESP_MAX);
     if (n < 0) {
         queue_error(LT_RPC_ERR_OTHER);
         return;
     }
-    /* queue_response copies; safe because s_resp_buf is the same buffer
-     * — memmove-like, but len is at most HID_RPC_RESP_MAX so any overlap
-     * is identity. Skip the memcpy in queue_response when src==dst. */
+    /* Set the response fields directly — handler already wrote into
+     * s_resp_buf so there's nothing to copy. */
     s_resp_total   = (uint16_t) n;
     s_resp_sent    = 0;
     s_resp_cmd     = (uint8_t)(LT_RPC_CMD_INIT_FLAG | s_req_cmd);
@@ -178,8 +189,8 @@ static void dispatch_request(void)
 
 static void handle_init_packet(const uint8_t *pkt)
 {
-    uint8_t cmd_byte = pkt[4];
-    uint16_t bcnt    = (uint16_t)((pkt[5] << 8) | pkt[6]);
+    uint8_t  cmd_byte = pkt[4];
+    uint16_t bcnt     = (uint16_t)(((uint16_t)pkt[5] << 8) | (uint16_t)pkt[6]);
 
     if (bcnt > LT_RPC_MAX_PAYLOAD) {
         /* Bigger than we can buffer. Reset + emit error. */
@@ -187,6 +198,14 @@ static void handle_init_packet(const uint8_t *pkt)
         queue_error(LT_RPC_ERR_INVALID_LEN);
         return;
     }
+
+    /* Zero the request buffer at the start of every INIT so any stale bytes
+     * from a previous (or abandoned-mid-assembly) transaction cannot leak
+     * into a handler that doesn't strictly gate on req_len. cppcheck-clean
+     * code today + audit 2026-05-10 confirmed the current handlers DO gate
+     * properly, but a future handler addition shouldn't have to remember
+     * this invariant. */
+    memset(s_req_buf, 0, sizeof s_req_buf);
 
     s_req_cmd      = (uint8_t)(cmd_byte & 0x7Fu);
     s_req_total    = bcnt;
