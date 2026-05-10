@@ -2,7 +2,7 @@
 
 > **Audience:** AI coding agents (Claude, Codex, etc.) working on this project across sessions.
 > **Status:** Living document. Update as decisions and facts evolve.
-> **Last updated:** 2026-05-11 (Phase 4 complete + decisions #7/#8/#9 amended to reflect retrospective)
+> **Last updated:** 2026-05-11 (Phase 5 planned; Decision #7 re-amended to v3 — hand-rolled with CanoKey + SoloKeys + CTAP2 spec as triangulating references; Phase 7 OpenPGP source = CanoKey)
 > **Read order:** This document first. Reference `research/` files for technical depth as needed (don't preload them — fetch by section when relevant).
 
 ---
@@ -29,7 +29,7 @@ Distribution: Nix flake (`nixtropic`) packaging the firmware build, the host too
 | 4 | **Execution: serial, no time pressure** | Each phase fully completes (with hardware-in-the-loop validation) before next begins. No parallel exploration. | 2026-05-10 |
 | 5 | **Commitment: yes, dongle is project-dedicated** | User got TS1302 free. Phase 0 establishes recovery path; reflashing is reversible. | 2026-05-10 |
 | 6 | **USB stack: TinyUSB (adapt U545 BSP for U535)** | U535 has no native TinyUSB BSP, but U545 (same FS controller, same PMA) port adapts trivially. Avoid ST USBX (proprietary leanings, heavier). | 2026-05-10 |
-| 7 | **FIDO2 stack: hybrid — own CTAPHID + CBOR + dispatcher, SoloKeys-derived ClientPIN + credential storage + extensions** | Original (2026-05-10): "SoloKeys-derived port" for the full stack. Amended 2026-05-11 after Phase 4 retrospective: we wrote ~1100 LOC of our own for CTAPHID, CBOR, CTAP2 dispatcher, GetInfo, and MakeCred/GetAssertion stubs in Phase 4 — these are clean, small, audited, and SoloKeys' equivalents aren't materially better. BUT: Phase 5+ needs `ctap_pin.c` (PIN/UV protocol — DIY is dangerous, subtle security bugs), `storage.c` (resident-key + eviction with monotonic per-credential signCount), and `extensions/hmac-secret.c` (required by Bitwarden, age-plugin-fido2). Port THOSE from SoloKeys onto our own credstore + libtropic L3 backend. OpenSK (Rust) still rejected for language consistency. | 2026-05-10 / 2026-05-11 |
+| 7 | **FIDO2 stack: hand-rolled C against FIDO CTAP2 specification (primary) + CanoKey + SoloKeys as triangulating references** | Original (2026-05-10): "SoloKeys-derived port". v2 amendment (2026-05-11): "hybrid with SoloKeys-derived ClientPIN/storage/extensions" — **WRONG**: those files don't exist as separate modules in SoloKeys (everything is in one 2 000 LOC `fido2/ctap.c` monolith). v3 amendment (2026-05-11 #2): hand-roll Phase 5 ClientPIN + storage + Reset + extensions same way Phase 4 was hand-rolled, against the CTAP2 specification as the authoritative source. Use **CanoKey** (active C FIDO2 firmware, 2026-current, Apache 2.0, modular `applets/ctap/ctap.c` + `ctap-parser.c` + `secret.c`) and **SoloKeys solo v1** (frozen 2019, monolithic) as two independent reference implementations to triangulate against when the spec is ambiguous. No vendored FIDO code. All crypto primitives come from `trezor_crypto` (decision #8). | 2026-05-10 / 2026-05-11 / 2026-05-11 #2 |
 | 8 | **Software crypto library: trezor_crypto (reused from libtropic L3 CAL)** | Original (2026-05-10): "TinyCrypt + Monocypher". Amended 2026-05-11: Phase 3 M4 already wired trezor_crypto in for libtropic's L3 secure session (AES-256-GCM, SHA256, HMAC-SHA256, X25519, Ed25519 via ed25519-donna). All the algorithms FIDO2 needs are already linked. Reuse for Phase 5 ClientPIN (AES-CBC + HMAC + HKDF) saves ~25 KB of new vendor surface. TinyCrypt + Monocypher were never linked — decision was changed silently in Phase 3 by absorbing trezor_crypto's broader algorithm set; documenting here. | 2026-05-10 / 2026-05-11 |
 | 9 | **Build: CMake + CMSIS + ST HAL** | Original (2026-05-10): "ST LL drivers". Amended 2026-05-11: Phase 1+ uses ST HAL (more Nix-friendly than expected; LL drivers would have required more glue for SPI/RNG init). HAL adds ~30 KB but well within budget. CMake + arm-none-eabi-gcc 14.3 unchanged. | 2026-05-10 / 2026-05-11 |
 | 10 | **Pairing keys at build: default to PRODUCTION (`*_prod0`)** | User's specific TS1302 (validated 2026-05-10) ships **production** silicon `TR01-C2P-T101`, **silicon rev ACAB**, NOT engineering samples. Default the firmware build to `sh0priv_prod0`/`sh0pub_prod0`. Build flag `NIXTROPIC_ENG_KEYS` switches to `*_eng_sample` for development of other (older / engineering-sample) chips. | 2026-05-10 |
@@ -286,6 +286,8 @@ Each phase is **independently shippable**. Stop anywhere = useful artifact. Hard
 ### Phase 7 — CCID OpenPGP card
 **Goal:** GnuPG / SSH (via gpg-agent) / QtPass work natively without host glue.
 
+**Port source (decision 2026-05-11):** CanoKey's `applets/openpgp/` (https://github.com/canokeys/canokey-core, Apache 2.0). CanoKey is the strongest active C-based OpenPGP card implementation; their applet is already modular and spec-compliant (OpenPGP Card v3.4). Same triangulation pattern as Phase 5 FIDO2: read the GnuPG smartcard spec as primary, use CanoKey as port-shape reference. Their crypto backend uses mbedtls; we adapt to use trezor_crypto + TROPIC01 (~500 LOC adapter, mostly trivial parameter shuffles).
+
 **Deliverables:**
 - USB descriptor: CDC + HID-FIDO2 + CCID
 - OpenPGP card APDU dispatcher
@@ -417,7 +419,8 @@ When you need depth, fetch these. Don't preload — they're large.
 | `https://tropicsquare.github.io/libtropic/latest/` | Official docs site | Architecture, tutorials, FAQ |
 | `https://github.com/tropicsquare/tropic01-stm32u5-usb-devkit-hw` | TS1302 schematics (KiCad) | Pinout disputes, hardware extensions |
 | `https://github.com/tropicsquare/tropic01-stm32u5-usb-devkit-fw` | Stock firmware source | Phase 0 build target; Phase 2 protocol replication reference |
-| `https://github.com/solokeys/solo` | SoloKeys FIDO2 firmware (port source for Phase 4) | Phase 4 |
+| `https://github.com/solokeys/solo` | SoloKeys FIDO2 firmware v1 — frozen 2019, monolithic. Used as a secondary reference for ClientPIN + CTAP2 control flow in Phase 5 (see Decision #7 v3). | Phase 4 / Phase 5 |
+| `https://github.com/canokeys/canokey-core` | **CanoKey core** — active C FIDO2 + OpenPGP + PIV + OATH firmware, Apache 2.0, modular `applets/ctap/`. **Primary triangulation reference for Phase 5 CTAP2 logic; port source for Phase 7 OpenPGP card.** | Phase 5 / Phase 7 |
 | `https://github.com/hathach/tinyusb` | USB stack (U545 BSP source) | Phase 2 |
 | `https://github.com/intel/tinycrypt` | Software crypto library | Phase 5 |
 | `https://github.com/LoupVaillant/Monocypher` | Software crypto library (X25519/Ed25519/ChaCha20) | Phase 5 |
