@@ -2,7 +2,7 @@
 
 > **Audience:** AI coding agents (Claude, Codex, etc.) working on this project across sessions.
 > **Status:** Living document. Update as decisions and facts evolve.
-> **Last updated:** 2026-05-11 (Phase 4 complete)
+> **Last updated:** 2026-05-11 (Phase 4 complete + decisions #7/#8/#9 amended to reflect retrospective)
 > **Read order:** This document first. Reference `research/` files for technical depth as needed (don't preload them — fetch by section when relevant).
 
 ---
@@ -29,9 +29,9 @@ Distribution: Nix flake (`nixtropic`) packaging the firmware build, the host too
 | 4 | **Execution: serial, no time pressure** | Each phase fully completes (with hardware-in-the-loop validation) before next begins. No parallel exploration. | 2026-05-10 |
 | 5 | **Commitment: yes, dongle is project-dedicated** | User got TS1302 free. Phase 0 establishes recovery path; reflashing is reversible. | 2026-05-10 |
 | 6 | **USB stack: TinyUSB (adapt U545 BSP for U535)** | U535 has no native TinyUSB BSP, but U545 (same FS controller, same PMA) port adapts trivially. Avoid ST USBX (proprietary leanings, heavier). | 2026-05-10 |
-| 7 | **FIDO2 stack: SoloKeys-derived port** | Mature C FIDO2 firmware, prior STM32 ports exist. OpenSK (Rust) rejected for language consistency + dependency surface. | 2026-05-10 |
-| 8 | **Software crypto library: TinyCrypt + Monocypher** | STM32U535 lacks AES/PKA accelerators (see §4). FIDO2 needs software AES-256-GCM (~10 KB) + P-256 ECDH (~15 KB) for ClientPIN. Total ~25 KB software-crypto budget. | 2026-05-10 |
-| 9 | **Build: CMake + CMSIS + ST LL drivers** | Skip STM32CubeMX (proprietary), skip ST HAL (too heavy, less Nix-friendly). Vanilla CMake with arm-none-eabi-gcc. | 2026-05-10 |
+| 7 | **FIDO2 stack: hybrid — own CTAPHID + CBOR + dispatcher, SoloKeys-derived ClientPIN + credential storage + extensions** | Original (2026-05-10): "SoloKeys-derived port" for the full stack. Amended 2026-05-11 after Phase 4 retrospective: we wrote ~1100 LOC of our own for CTAPHID, CBOR, CTAP2 dispatcher, GetInfo, and MakeCred/GetAssertion stubs in Phase 4 — these are clean, small, audited, and SoloKeys' equivalents aren't materially better. BUT: Phase 5+ needs `ctap_pin.c` (PIN/UV protocol — DIY is dangerous, subtle security bugs), `storage.c` (resident-key + eviction with monotonic per-credential signCount), and `extensions/hmac-secret.c` (required by Bitwarden, age-plugin-fido2). Port THOSE from SoloKeys onto our own credstore + libtropic L3 backend. OpenSK (Rust) still rejected for language consistency. | 2026-05-10 / 2026-05-11 |
+| 8 | **Software crypto library: trezor_crypto (reused from libtropic L3 CAL)** | Original (2026-05-10): "TinyCrypt + Monocypher". Amended 2026-05-11: Phase 3 M4 already wired trezor_crypto in for libtropic's L3 secure session (AES-256-GCM, SHA256, HMAC-SHA256, X25519, Ed25519 via ed25519-donna). All the algorithms FIDO2 needs are already linked. Reuse for Phase 5 ClientPIN (AES-CBC + HMAC + HKDF) saves ~25 KB of new vendor surface. TinyCrypt + Monocypher were never linked — decision was changed silently in Phase 3 by absorbing trezor_crypto's broader algorithm set; documenting here. | 2026-05-10 / 2026-05-11 |
+| 9 | **Build: CMake + CMSIS + ST HAL** | Original (2026-05-10): "ST LL drivers". Amended 2026-05-11: Phase 1+ uses ST HAL (more Nix-friendly than expected; LL drivers would have required more glue for SPI/RNG init). HAL adds ~30 KB but well within budget. CMake + arm-none-eabi-gcc 14.3 unchanged. | 2026-05-10 / 2026-05-11 |
 | 10 | **Pairing keys at build: default to PRODUCTION (`*_prod0`)** | User's specific TS1302 (validated 2026-05-10) ships **production** silicon `TR01-C2P-T101`, **silicon rev ACAB**, NOT engineering samples. Default the firmware build to `sh0priv_prod0`/`sh0pub_prod0`. Build flag `NIXTROPIC_ENG_KEYS` switches to `*_eng_sample` for development of other (older / engineering-sample) chips. | 2026-05-10 |
 | 11 | **Document audience: AI agents primary** | This file is for AI agents. User reads conversationally, references this file when needed. | 2026-05-10 |
 
