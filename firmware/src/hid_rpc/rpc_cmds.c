@@ -88,6 +88,49 @@ static int handle_chip_id(const uint8_t *req, size_t req_len,
     return tropic_chip_id_read(resp, resp_max);
 }
 
+static int handle_ecc_generate(const uint8_t *req, size_t req_len,
+                               uint8_t *resp, size_t resp_max)
+{
+    (void) resp;
+    (void) resp_max;
+    if (req_len < 2u) {
+        return -1;
+    }
+    if (tropic_ecc_generate(req[0], req[1]) != 0) {
+        return -1;
+    }
+    /* 0 B response → just OK acknowledgement. */
+    return 0;
+}
+
+static int handle_ecc_pubkey(const uint8_t *req, size_t req_len,
+                             uint8_t *resp, size_t resp_max)
+{
+    if (req_len < 1u) {
+        return -1;
+    }
+    return tropic_ecc_pubkey_read(req[0], resp, resp_max);
+}
+
+static int handle_ecc_sign(const uint8_t *req, size_t req_len,
+                           uint8_t *resp, size_t resp_max)
+{
+    if (req_len < 1u + 1u) {
+        return -1;
+    }
+    /* req layout: [0] slot | [1..] message bytes (up to 4 KB) */
+    return tropic_ecc_eddsa_sign(req[0], &req[1], req_len - 1u, resp, resp_max);
+}
+
+static int handle_ecc_erase(const uint8_t *req, size_t req_len,
+                            uint8_t *resp, size_t resp_max)
+{
+    (void) resp;
+    (void) resp_max;
+    if (req_len < 1u) return -1;
+    return (tropic_ecc_erase(req[0]) == 0) ? 0 : -1;
+}
+
 /* ===== Table + lookup ===== */
 
 typedef struct {
@@ -96,10 +139,13 @@ typedef struct {
 } rpc_entry_t;
 
 static const rpc_entry_t HANDLERS[] = {
-    { LT_RPC_CMD_PING,       handle_ping },
-    { LT_RPC_CMD_GET_RANDOM, handle_get_random },
-    { LT_RPC_CMD_CHIP_ID,    handle_chip_id },
-    /* M4: ECC_GENERATE, ECC_SIGN, ECC_PUBKEY */
+    { LT_RPC_CMD_PING,         handle_ping },
+    { LT_RPC_CMD_GET_RANDOM,   handle_get_random },
+    { LT_RPC_CMD_CHIP_ID,      handle_chip_id },
+    { LT_RPC_CMD_ECC_GENERATE, handle_ecc_generate },
+    { LT_RPC_CMD_ECC_SIGN,     handle_ecc_sign },
+    { LT_RPC_CMD_ECC_PUBKEY,   handle_ecc_pubkey },
+    { LT_RPC_CMD_ECC_ERASE,    handle_ecc_erase },
     { 0, NULL },  /* sentinel */
 };
 

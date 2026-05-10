@@ -39,6 +39,7 @@
 #define LT_RPC_CMD_ECC_GENERATE 0x04u
 #define LT_RPC_CMD_ECC_SIGN     0x05u
 #define LT_RPC_CMD_ECC_PUBKEY   0x06u
+#define LT_RPC_CMD_ECC_ERASE    0x07u
 
 /* Reserved: device-emitted error response */
 #define LT_RPC_CMD_ERROR        0x3Fu

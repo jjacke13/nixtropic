@@ -59,4 +59,39 @@ int tropic_l2_sweep(void);
  */
 int tropic_chip_id_read(uint8_t *out, size_t out_size);
 
+/**
+ * @brief Lazily open the L3 secure session (idempotent).
+ *
+ * First call: reads cert store, extracts STPUB, calls lt_session_start
+ * with default sh0_prod0 pairing keys. Subsequent calls: no-op.
+ *
+ * @return 0 on success; negative libtropic error on failure.
+ */
+int tropic_l3_session_ensure(void);
+
+/**
+ * @brief Generate an ECC keypair in the given slot.
+ * @param slot   0..31
+ * @param curve  0 = Ed25519, 1 = P-256
+ */
+int tropic_ecc_generate(uint8_t slot, uint8_t curve);
+
+/**
+ * @brief Read the ECC public key from a slot.
+ * @return number of pubkey bytes (32 for Ed25519, 64 for P-256), or negative.
+ */
+int tropic_ecc_pubkey_read(uint8_t slot, uint8_t *out, size_t out_size);
+
+/**
+ * @brief Sign a message with the Ed25519 key in `slot`. Always returns 64 B sig.
+ */
+int tropic_ecc_eddsa_sign(uint8_t slot, const uint8_t *msg, size_t msg_len,
+                          uint8_t *sig, size_t sig_size);
+
+/**
+ * @brief Erase the key in the given ECC slot (returns OK whether or not the
+ *        slot was occupied).
+ */
+int tropic_ecc_erase(uint8_t slot);
+
 #endif /* NIXTROPIC_TROPIC_H */

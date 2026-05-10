@@ -54,6 +54,7 @@ CMD_CHIP_ID       = 0x03
 CMD_ECC_GENERATE  = 0x04
 CMD_ECC_SIGN      = 0x05
 CMD_ECC_PUBKEY    = 0x06
+CMD_ECC_ERASE     = 0x07
 CMD_ERROR         = 0x3F
 
 ERR_NAMES = {
@@ -170,6 +171,9 @@ class LtRpc:
     def ecc_sign(self, slot: int, msg: bytes) -> bytes:
         return self.transact(CMD_ECC_SIGN, bytes([slot & 0xFF]) + msg)
 
+    def ecc_erase(self, slot: int) -> bytes:
+        return self.transact(CMD_ECC_ERASE, bytes([slot & 0xFF]))
+
 
 # ============================================================================
 # Sub-command entrypoints
@@ -219,14 +223,87 @@ def cmd_chip_id(args: argparse.Namespace) -> int:
 
 
 def cmd_sign_test(args: argparse.Namespace) -> int:
-    print("Not implemented yet — wait for M4.")
-    return 2
+    try:
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import (
+            Ed25519PublicKey,
+        )
+        from cryptography.exceptions import InvalidSignature
+    except ImportError:
+        print("ERROR: cryptography module missing. Enter the dev shell first:")
+        print("  nix develop")
+        return 2
+
+    slot = args.slot
+    rpc = LtRpc()
+    try:
+        print(f"Erasing slot {slot} (idempotent)...")
+        rpc.ecc_erase(slot)
+
+        print(f"Generating Ed25519 key in slot {slot}...")
+        rpc.ecc_generate(slot, 0)  # 0 = Ed25519
+
+        print(f"Reading pubkey from slot {slot}...")
+        pubkey = rpc.ecc_pubkey(slot)
+        print(f"  pubkey ({len(pubkey)} B): {pubkey.hex()}")
+        if len(pubkey) != 32:
+            print(f"  FAIL: expected 32 B Ed25519 pubkey, got {len(pubkey)}")
+            return 1
+
+        msg = os.urandom(32)
+        print(f"Signing 32 B challenge: {msg.hex()}")
+        sig = rpc.ecc_sign(slot, msg)
+        print(f"  signature ({len(sig)} B): {sig.hex()}")
+        if len(sig) != 64:
+            print(f"  FAIL: expected 64 B Ed25519 signature, got {len(sig)}")
+            return 1
+
+        print("Verifying signature with Ed25519 host code...")
+        host_pub = Ed25519PublicKey.from_public_bytes(pubkey)
+        try:
+            host_pub.verify(sig, msg)
+        except InvalidSignature:
+            print("  ✗ FAIL — signature does NOT verify against pubkey + message")
+            return 1
+        print("  ✓ PASS — signature verifies")
+        print()
+        print("End-to-end FIDO2-style flow validated over HID:")
+        print("  TROPIC01 generated Ed25519 keypair, signed challenge, host verified.")
+        return 0
+    finally:
+        rpc.close()
 
 
 def cmd_validate(args: argparse.Namespace) -> int:
     print("═══════════════════════════════════════════════════════════════")
     print("  Phase 3: lt-rpc-over-HID validation")
     print("═══════════════════════════════════════════════════════════════")
+
+    try:
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import (
+            Ed25519PublicKey,
+        )
+        from cryptography.exceptions import InvalidSignature
+        has_crypto = True
+    except ImportError:
+        has_crypto = False
+
+    def _sign_test(r: LtRpc) -> bool:
+        # Erase first so the test is idempotent regardless of slot state
+        # left over from a previous run.
+        r.ecc_erase(0)
+        r.ecc_generate(0, 0)
+        pubkey = r.ecc_pubkey(0)
+        if len(pubkey) != 32:
+            return False
+        msg = os.urandom(32)
+        sig = r.ecc_sign(0, msg)
+        if len(sig) != 64:
+            return False
+        try:
+            Ed25519PublicKey.from_public_bytes(pubkey).verify(sig, msg)
+        except InvalidSignature:
+            return False
+        return True
 
     tests = [
         ("PING (32 B echo)",
@@ -238,7 +315,12 @@ def cmd_validate(args: argparse.Namespace) -> int:
         ("CHIP_ID (128 B)",
          lambda r: len(r.chip_id()) == 128),
     ]
-    # M4+ tests are added here as milestones land.
+    if has_crypto:
+        tests.append(
+            ("ECC generate + sign + Ed25519 verify (slot 0)", _sign_test)
+        )
+    else:
+        print("(skipping sign-test: cryptography module not available)")
 
     rpc = LtRpc()
     failures = 0
@@ -283,7 +365,8 @@ def main() -> int:
     p_cid = sub.add_parser("chip-id", help="read TROPIC01 chip ID via HID (M3)")
     p_cid.set_defaults(fn=cmd_chip_id)
 
-    p_sign = sub.add_parser("sign-test", help="generate + sign + verify (M4)")
+    p_sign = sub.add_parser("sign-test", help="generate + sign + verify Ed25519 (M4)")
+    p_sign.add_argument("--slot", type=int, default=0)
     p_sign.set_defaults(fn=cmd_sign_test)
 
     p_val = sub.add_parser("validate", help="run the full Phase 3 test suite")

@@ -96,11 +96,74 @@ set(LIBTROPIC_SOURCES
     ${LIBTROPIC_SRC}/src/lt_tr01_attrs.c
     ${LIBTROPIC_SRC}/src/libtropic_secure_memzero.c
     ${LIBTROPIC_SRC}/hal/stm32/stm32u5xx/libtropic_port_stm32u5xx.c
+    # M4: L3 secure session
+    ${LIBTROPIC_SRC}/src/libtropic_l3.c
+    ${LIBTROPIC_SRC}/src/lt_l3_process.c
+    ${LIBTROPIC_SRC}/src/lt_hkdf.c
+    # M4: default sh0 pairing keys (sh0pub_prod0/sh0priv_prod0 etc.)
+    ${LIBTROPIC_SRC}/src/libtropic_default_sh0_keys.c
 )
 
 foreach(src ${LIBTROPIC_SOURCES})
   if(NOT EXISTS "${src}")
     message(FATAL_ERROR "libtropic source missing: ${src}")
+  endif()
+endforeach()
+
+# ----- Crypto Abstraction Layer (trezor_crypto) — M4 -----
+# Provides AES-GCM, SHA256, HMAC-SHA256, X25519 for libtropic's L3
+# secure session. Replaces our Phase 1 lt_crypto_stubs.c (which returned
+# LT_FAIL for everything). Trezor's ed25519-donna gives us X25519 via the
+# curve25519_scalarmult{,_basepoint} wrappers in ed25519.c.
+set(LT_CAL_SOURCES
+    ${LIBTROPIC_SRC}/cal/trezor_crypto/lt_trezor_crypto_common.c
+    ${LIBTROPIC_SRC}/cal/trezor_crypto/lt_trezor_crypto_aesgcm.c
+    ${LIBTROPIC_SRC}/cal/trezor_crypto/lt_trezor_crypto_sha256.c
+    ${LIBTROPIC_SRC}/cal/trezor_crypto/lt_trezor_crypto_hmac_sha256.c
+    ${LIBTROPIC_SRC}/cal/trezor_crypto/lt_trezor_crypto_x25519.c
+)
+
+set(TREZOR_VENDOR ${LIBTROPIC_SRC}/vendor/trezor_crypto)
+set(TREZOR_CRYPTO_SOURCES
+    # AES + GCM
+    ${TREZOR_VENDOR}/aes/aescrypt.c
+    ${TREZOR_VENDOR}/aes/aeskey.c
+    ${TREZOR_VENDOR}/aes/aestab.c
+    ${TREZOR_VENDOR}/aes/aes_modes.c
+    ${TREZOR_VENDOR}/aes/aesgcm.c
+    ${TREZOR_VENDOR}/aes/gf128mul.c
+    # SHA256 / SHA512 (both in sha2.c) + HMAC + hasher dispatcher.
+    ${TREZOR_VENDOR}/sha2.c
+    ${TREZOR_VENDOR}/hmac.c
+    ${TREZOR_VENDOR}/hasher.c
+    # Hasher dispatcher references all these even when we only ever ask for
+    # HASHER_SHA2. --gc-sections strips the unused code paths, but the
+    # linker still needs the symbols to resolve at link time. Cheaper to
+    # include them than to fork hasher.c.
+    ${TREZOR_VENDOR}/blake256.c
+    ${TREZOR_VENDOR}/blake2b.c
+    ${TREZOR_VENDOR}/blake2s.c
+    ${TREZOR_VENDOR}/sha3.c
+    ${TREZOR_VENDOR}/groestl.c
+    ${TREZOR_VENDOR}/ripemd160.c
+    ${TREZOR_VENDOR}/memzero.c
+    # X25519 via ed25519-donna's curve25519_scalarmult wrappers.
+    ${TREZOR_VENDOR}/ed25519-donna/ed25519.c
+    ${TREZOR_VENDOR}/ed25519-donna/curve25519-donna-32bit.c
+    ${TREZOR_VENDOR}/ed25519-donna/curve25519-donna-helpers.c
+    ${TREZOR_VENDOR}/ed25519-donna/curve25519-donna-scalarmult-base.c
+    ${TREZOR_VENDOR}/ed25519-donna/ed25519-donna-impl-base.c
+    ${TREZOR_VENDOR}/ed25519-donna/ed25519-donna-basepoint-table.c
+    ${TREZOR_VENDOR}/ed25519-donna/ed25519-donna-32bit-tables.c
+    ${TREZOR_VENDOR}/ed25519-donna/modm-donna-32bit.c
+    # rand.c — trezor uses it for ed25519 batch verify; we don't, but
+    # linker still wants the symbol.
+    ${TREZOR_VENDOR}/rand.c
+)
+
+foreach(src ${LT_CAL_SOURCES} ${TREZOR_CRYPTO_SOURCES})
+  if(NOT EXISTS "${src}")
+    message(FATAL_ERROR "CAL/vendor source missing: ${src}")
   endif()
 endforeach()
 
@@ -146,12 +209,14 @@ set(APP_SOURCES
     src/hid_rpc/rpc.c
     src/hid_rpc/rpc_cmds.c
     src/tropic/tropic.c
-    src/tropic/lt_crypto_stubs.c
+    # src/tropic/lt_crypto_stubs.c  — M4: replaced by trezor_crypto CAL below
     ${CMSIS_STARTUP}
     ${CMSIS_SYSTEM}
     ${HAL_SOURCES}
     ${TINYUSB_SOURCES}
     ${LIBTROPIC_SOURCES}
+    ${LT_CAL_SOURCES}
+    ${TREZOR_CRYPTO_SOURCES}
 )
 
 add_executable(${FIRMWARE_ELF} ${APP_SOURCES})
@@ -177,6 +242,9 @@ target_include_directories(${FIRMWARE_ELF} PRIVATE
     ${LIBTROPIC_SRC}/include
     ${LIBTROPIC_SRC}/src        # libtropic private headers (lt_l1.h etc.)
     ${LIBTROPIC_SRC}/hal/stm32/stm32u5xx
+    # M4: trezor_crypto CAL + vendor crypto headers
+    ${LIBTROPIC_SRC}/cal/trezor_crypto
+    ${LIBTROPIC_SRC}/vendor/trezor_crypto
 )
 
 # Suppress warnings on ST HAL sources only. Application code stays strict.
@@ -192,9 +260,24 @@ foreach(tu_src ${TINYUSB_SOURCES})
     COMPILE_FLAGS "-Wno-strict-prototypes -Wno-unused-parameter -Wno-undef -Wno-maybe-uninitialized -Wno-cast-align -Wno-conversion")
 endforeach()
 
-foreach(lt_src ${LIBTROPIC_SOURCES})
+foreach(lt_src ${LIBTROPIC_SOURCES} ${LT_CAL_SOURCES} ${TREZOR_CRYPTO_SOURCES})
   set_source_files_properties(${lt_src} PROPERTIES
-    COMPILE_FLAGS "-Wno-strict-prototypes -Wno-unused-parameter -Wno-undef -Wno-maybe-uninitialized -Wno-cast-align -Wno-conversion -Wno-shadow")
+    COMPILE_FLAGS "-Wno-strict-prototypes -Wno-unused-parameter -Wno-undef -Wno-maybe-uninitialized -Wno-cast-align -Wno-conversion -Wno-shadow -Wno-pointer-sign -Wno-sign-compare -Wno-unused-function -Wno-implicit-fallthrough")
+endforeach()
+
+# Trezor-vendor crypto needs three extra defines per upstream's
+# tests/functional/src/CMakeLists.txt:134 build recipe:
+#   AES_VAR                      — enable variable-key AES dispatcher (so
+#                                  aes_encrypt_key(key, key_len, ctx)
+#                                  resolves to 128/192/256 variants)
+#   USE_INSECURE_PRNG            — rand.c uses a non-secure stub PRNG;
+#                                  fine for us since we never call into
+#                                  ed25519 batch verify (key gen/sign
+#                                  happen on TROPIC01, not the MCU)
+#   ed25519_verify=...           — collision-avoidance no-op for us
+foreach(tz_src ${TREZOR_CRYPTO_SOURCES})
+  set_source_files_properties(${tz_src} PROPERTIES
+    COMPILE_DEFINITIONS "AES_VAR;USE_INSECURE_PRNG;ed25519_verify=trezor_crypto_ed25519_verify")
 endforeach()
 
 target_link_options(${FIRMWARE_ELF} PRIVATE

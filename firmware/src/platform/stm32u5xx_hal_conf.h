@@ -84,6 +84,20 @@ extern "C" {
 /* No full assert in release; conservative for now */
 /* #define USE_FULL_ASSERT    1U */
 
+/* Disable register-callback functionality across HAL modules. Phase 3 M4
+ * adds tropic.c (which pulls in stm32u5xx_hal.h) to APP_SOURCES with
+ * strict -Wundef enabled; without these explicit `0` defines, the
+ * `#if (USE_HAL_*_REGISTER_CALLBACKS == 1)` checks in HAL headers blow up. */
+#define USE_HAL_RCC_REGISTER_CALLBACKS    0U
+#define USE_HAL_GPIO_REGISTER_CALLBACKS   0U
+#define USE_HAL_PWR_REGISTER_CALLBACKS    0U
+#define USE_HAL_FLASH_REGISTER_CALLBACKS  0U
+#define USE_HAL_CORTEX_REGISTER_CALLBACKS 0U
+#define USE_HAL_RNG_REGISTER_CALLBACKS    0U
+#define USE_HAL_SPI_REGISTER_CALLBACKS    0U
+#define USE_HAL_DMA_REGISTER_CALLBACKS    0U
+#define USE_HAL_EXTI_REGISTER_CALLBACKS   0U
+
 /* ##################### Module Headers ##################### */
 #ifdef HAL_RCC_MODULE_ENABLED
 #include "stm32u5xx_hal_rcc.h"

@@ -6,6 +6,7 @@
  * functions work without a session via direct L2 GET_INFO requests.
  */
 
+#include <stdbool.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -17,13 +18,19 @@
 #include "libtropic.h"
 #include "libtropic_port_stm32u5xx.h"
 
+/* M4: trezor_crypto CAL provides AES-GCM/SHA256/HMAC/X25519 for L3. */
+#include "libtropic_trezor_crypto.h"
+
 /* Pump USB CDC between blocking SPI ops so the host doesn't lose
  * /dev/ttyACM* during a long L2 sweep. */
 #include "tusb.h"
 
 /* libtropic device + handle held statically (decision P1.8: no malloc). */
-static lt_dev_stm32u5xx_t s_device;
-static lt_handle_t        s_handle;
+static lt_dev_stm32u5xx_t      s_device;
+static lt_handle_t             s_handle;
+/* M4: crypto context (~1.4 KB) wired into the handle BEFORE lt_init. */
+static lt_ctx_trezor_crypto_t  s_crypto_ctx;
+static bool                    s_session_open = false;
 
 /* ----- Helpers ----- */
 
@@ -99,6 +106,11 @@ int tropic_init(void)
 
     s_handle.l2.device = &s_device;
 
+    /* M4: wire the trezor_crypto context into the handle BEFORE lt_init
+     * so lt_init's internal lt_crypto_ctx_init() has a valid pointer. */
+    memset(&s_crypto_ctx, 0, sizeof s_crypto_ctx);
+    s_handle.l3.crypto_ctx = &s_crypto_ctx;
+
     lt_ret_t r = lt_init(&s_handle);
     if (r != LT_OK) {
         printf("[tropic] lt_init failed: %d\n", (int) r);
@@ -107,6 +119,118 @@ int tropic_init(void)
 
     printf("[tropic] lt_init OK (TROPIC01 powered + L1 link up)\n");
     return 0;
+}
+
+/* ----- L3 secure session ----- */
+
+/* Cert store buffers (4 × 700 B). Static to avoid stack overflow during
+ * session start. ~2.8 KB total. */
+static uint8_t s_cert_buf[LT_NUM_CERTIFICATES][TR01_L2_GET_INFO_REQ_CERT_SIZE_SINGLE];
+static uint8_t s_stpub[TR01_STPUB_LEN];
+
+int tropic_l3_session_ensure(void)
+{
+    if (s_session_open) {
+        return 0;
+    }
+
+    /* Step 1: fetch chip's cert store (1.6-2.4 KB read over L2). */
+    struct lt_cert_store_t store = {
+        .certs   = { s_cert_buf[0], s_cert_buf[1], s_cert_buf[2], s_cert_buf[3] },
+        .buf_len = { TR01_L2_GET_INFO_REQ_CERT_SIZE_SINGLE,
+                     TR01_L2_GET_INFO_REQ_CERT_SIZE_SINGLE,
+                     TR01_L2_GET_INFO_REQ_CERT_SIZE_SINGLE,
+                     TR01_L2_GET_INFO_REQ_CERT_SIZE_SINGLE },
+    };
+    lt_ret_t r = lt_get_info_cert_store(&s_handle, &store);
+    if (r != LT_OK) {
+        printf("[tropic] lt_get_info_cert_store failed: %d\n", (int) r);
+        return -(int) r;
+    }
+
+    /* Step 2: parse STPUB out of the device cert. */
+    r = lt_get_st_pub(&store, s_stpub);
+    if (r != LT_OK) {
+        printf("[tropic] lt_get_st_pub failed: %d\n", (int) r);
+        return -(int) r;
+    }
+
+    /* Step 3: open the L3 secure session using the default sh0_prod0
+     * pairing keys (PROJECT.md §5 — production silicon, public dev keys). */
+    r = lt_session_start(&s_handle,
+                         s_stpub,
+                         TR01_PAIRING_KEY_SLOT_INDEX_0,
+                         sh0priv_prod0,
+                         sh0pub_prod0);
+    if (r != LT_OK) {
+        printf("[tropic] lt_session_start failed: %d\n", (int) r);
+        return -(int) r;
+    }
+    s_session_open = true;
+    printf("[tropic] L3 session OPEN\n");
+    return 0;
+}
+
+int tropic_ecc_generate(uint8_t slot, uint8_t curve)
+{
+    if (tropic_l3_session_ensure() != 0) return -1;
+    lt_ecc_curve_type_t c = (curve == 0) ? TR01_CURVE_ED25519 : TR01_CURVE_P256;
+    lt_ret_t r = lt_ecc_key_generate(&s_handle, (lt_ecc_slot_t)(TR01_ECC_SLOT_0 + slot), c);
+    if (r != LT_OK) {
+        return -(int) r;
+    }
+    return 0;
+}
+
+int tropic_ecc_pubkey_read(uint8_t slot, uint8_t *out, size_t out_size)
+{
+    if (out == NULL || out_size < 32u) return -1;
+    if (tropic_l3_session_ensure() != 0) return -1;
+
+    uint8_t pubkey[64];
+    lt_ecc_curve_type_t curve;
+    lt_ecc_key_origin_t origin;
+    lt_ret_t r = lt_ecc_key_read(&s_handle,
+                                 (lt_ecc_slot_t)(TR01_ECC_SLOT_0 + slot),
+                                 pubkey, (uint8_t) sizeof pubkey,
+                                 &curve, &origin);
+    if (r != LT_OK) {
+        return -(int) r;
+    }
+    /* Ed25519 pubkey = 32 bytes; P-256 = 64 bytes uncompressed. M4 only
+     * exercises Ed25519, so cap at 32 bytes for now. */
+    size_t n = (curve == TR01_CURVE_ED25519) ? 32u : 64u;
+    if (n > out_size) n = out_size;
+    memcpy(out, pubkey, n);
+    return (int) n;
+}
+
+int tropic_ecc_erase(uint8_t slot)
+{
+    if (tropic_l3_session_ensure() != 0) return -1;
+    lt_ret_t r = lt_ecc_key_erase(&s_handle, (lt_ecc_slot_t)(TR01_ECC_SLOT_0 + slot));
+    /* Empty slot returns an error too; treat both as success because the
+     * caller's intent is "make sure this slot is empty". */
+    (void) r;
+    return 0;
+}
+
+int tropic_ecc_eddsa_sign(uint8_t slot, const uint8_t *msg, size_t msg_len,
+                          uint8_t *sig, size_t sig_size)
+{
+    if (sig == NULL || sig_size < 64u) return -1;
+    if (tropic_l3_session_ensure() != 0) return -1;
+
+    uint8_t sig_buf[64];
+    lt_ret_t r = lt_ecc_eddsa_sign(&s_handle,
+                                   (lt_ecc_slot_t)(TR01_ECC_SLOT_0 + slot),
+                                   msg, (uint16_t) msg_len,
+                                   sig_buf);
+    if (r != LT_OK) {
+        return -(int) r;
+    }
+    memcpy(sig, sig_buf, 64);
+    return 64;
 }
 
 /* ----- L2 sweep ----- */
@@ -204,9 +328,12 @@ int tropic_l2_sweep(void)
      * work regardless of silicon revision (chip identification + FW
      * version tags). */
     int critical_errors = 0;
-    if (read_chip_id()   != 0) critical_errors++; tud_task();
-    if (read_riscv_fw()  != 0) critical_errors++; tud_task();
-    if (read_spect_fw()  != 0) critical_errors++; tud_task();
+    if (read_chip_id()  != 0) { critical_errors++; }
+    tud_task();
+    if (read_riscv_fw() != 0) { critical_errors++; }
+    tud_task();
+    if (read_spect_fw() != 0) { critical_errors++; }
+    tud_task();
 
     /* Informational L2 commands — failures here are NOT a Phase 1 fail.
      * On ACAB silicon (the user's TR01-C2P-T101 chip) FW banks are
@@ -220,10 +347,14 @@ int tropic_l2_sweep(void)
      * Phase 1 is "validate libtropic L1+L2 round-trip on STM32U5", not
      * "exercise every L2 command". */
     int fw_bank_warnings = 0;
-    if (read_fw_bank(TR01_FW_BANK_FW1,    "FW1")    != 0) fw_bank_warnings++; tud_task();
-    if (read_fw_bank(TR01_FW_BANK_FW2,    "FW2")    != 0) fw_bank_warnings++; tud_task();
-    if (read_fw_bank(TR01_FW_BANK_SPECT1, "SPECT1") != 0) fw_bank_warnings++; tud_task();
-    if (read_fw_bank(TR01_FW_BANK_SPECT2, "SPECT2") != 0) fw_bank_warnings++; tud_task();
+    if (read_fw_bank(TR01_FW_BANK_FW1,    "FW1")    != 0) { fw_bank_warnings++; }
+    tud_task();
+    if (read_fw_bank(TR01_FW_BANK_FW2,    "FW2")    != 0) { fw_bank_warnings++; }
+    tud_task();
+    if (read_fw_bank(TR01_FW_BANK_SPECT1, "SPECT1") != 0) { fw_bank_warnings++; }
+    tud_task();
+    if (read_fw_bank(TR01_FW_BANK_SPECT2, "SPECT2") != 0) { fw_bank_warnings++; }
+    tud_task();
 
     if (fw_bank_warnings > 0) {
         printf("[tropic] %d fw_bank query warnings (expected on ACAB silicon — auto-managed banks)\n",
