@@ -64,18 +64,18 @@ static int put_head(cbor_writer_t *w, uint8_t mt, uint64_t v)
         return put_byte(w, (uint8_t) v);
     } else if (v <= 0xFFFFu) {
         if (put_byte(w, (uint8_t)(mt_bits | 25u)) < 0) return -1;
-        uint8_t b[2] = { (uint8_t)(v >> 8), (uint8_t) v };
+        const uint8_t b[2] = { (uint8_t)(v >> 8), (uint8_t) v };
         return put_bytes(w, b, 2);
     } else if (v <= 0xFFFFFFFFu) {
         if (put_byte(w, (uint8_t)(mt_bits | 26u)) < 0) return -1;
-        uint8_t b[4] = {
+        const uint8_t b[4] = {
             (uint8_t)(v >> 24), (uint8_t)(v >> 16),
             (uint8_t)(v >> 8),  (uint8_t) v,
         };
         return put_bytes(w, b, 4);
     } else {
         if (put_byte(w, (uint8_t)(mt_bits | 27u)) < 0) return -1;
-        uint8_t b[8] = {
+        const uint8_t b[8] = {
             (uint8_t)(v >> 56), (uint8_t)(v >> 48),
             (uint8_t)(v >> 40), (uint8_t)(v >> 32),
             (uint8_t)(v >> 24), (uint8_t)(v >> 16),

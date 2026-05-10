@@ -230,7 +230,7 @@ static void handle_msg(uint32_t cid, const uint8_t *payload, size_t len)
      * libfido2 falls back to CTAP2 when MSG fails this way. */
     (void) payload;
     (void) len;
-    uint8_t sw[2] = { 0x6Eu, 0x00u };
+    const uint8_t sw[2] = { 0x6Eu, 0x00u };
     queue_response(cid, FIDO_HID_CMD_INIT_FLAG | FIDO_HID_CMD_MSG, sw, 2);
 }
 

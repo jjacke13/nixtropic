@@ -32,6 +32,7 @@
 #include "hid_rpc/rpc.h"
 #include "fido_hid/ctaphid.h"
 #include "fido_hid/credstore.h"
+#include "fido_hid/slots.h"
 #include "tropic/tropic.h"  /* re-enabled in Phase 3 M3 for libtropic on chip */
 
 #include "tusb.h"
@@ -191,6 +192,21 @@ int main(void)
      * but don't halt — HID CHIP_ID command will return an error to the
      * host if lt_init didn't succeed. */
     tropic_init();
+
+    /* Stage 8.6 — Phase 5 M1: TROPIC01 slot manager.
+     * Opens L3 session lazily on first use; reads R-mem slot 0 to detect
+     * first-boot vs returning state; orphan-scrubs the bitmap. We log on
+     * failure but don't halt — Phase 4 stub credstore is still functional
+     * if slots_init fails (Phase 5 paths return errors to the host). */
+    {
+        int rc = slots_init();
+        if (rc != 0) {
+            printf("[slots] init failed: %d (Phase 5 paths will return errors)\n", rc);
+        } else {
+            printf("[slots] init OK; bitmap=0x%08lx used=%d/32\n",
+                   (unsigned long) slots_bitmap(), slots_count_used());
+        }
+    }
 
     blink_set_heartbeat();
 

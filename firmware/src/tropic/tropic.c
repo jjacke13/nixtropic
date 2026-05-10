@@ -233,6 +233,48 @@ int tropic_ecc_eddsa_sign(uint8_t slot, const uint8_t *msg, size_t msg_len,
     return 64;
 }
 
+/* ----- R-mem helpers (Phase 5 M1) -----
+ *
+ * libtropic's R-mem API is L3-only — the L3 session must be open. We
+ * ensure that lazily on first use. */
+
+int tropic_rmem_write(uint16_t slot, const uint8_t *data, size_t len)
+{
+    if (data == NULL || len == 0u || len > UINT16_MAX) return -1;
+    if (tropic_l3_session_ensure() != 0) return -1;
+    lt_ret_t r = lt_r_mem_data_write(&s_handle, slot, data, (uint16_t) len);
+    return (r == LT_OK) ? 0 : -(int) r;
+}
+
+int tropic_rmem_read(uint16_t slot, uint8_t *out, size_t max, size_t *actual)
+{
+    if (out == NULL || max == 0u || max > UINT16_MAX) return -1;
+    if (tropic_l3_session_ensure() != 0) return -1;
+    uint16_t got = 0;
+    lt_ret_t r = lt_r_mem_data_read(&s_handle, slot, out, (uint16_t) max, &got);
+    if (r != LT_OK) return -(int) r;
+    if (actual) *actual = (size_t) got;
+    return 0;
+}
+
+int tropic_rmem_erase(uint16_t slot)
+{
+    if (tropic_l3_session_ensure() != 0) return -1;
+    lt_ret_t r = lt_r_mem_data_erase(&s_handle, slot);
+    /* Already-empty slot returns an error per libtropic; caller's intent
+     * is "make this slot empty", so coerce both outcomes to success. */
+    (void) r;
+    return 0;
+}
+
+int tropic_random(uint8_t *out, size_t len)
+{
+    if (out == NULL || len == 0u || len > 255u) return -1;
+    if (tropic_l3_session_ensure() != 0) return -1;
+    lt_ret_t r = lt_random_value_get(&s_handle, out, (uint16_t) len);
+    return (r == LT_OK) ? 0 : -(int) r;
+}
+
 /* ----- L2 sweep ----- */
 
 static int read_chip_id(void)

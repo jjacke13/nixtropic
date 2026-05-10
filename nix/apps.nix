@@ -344,6 +344,20 @@ let
     '';
   };
 
+  # Phase 5 M1 — validate-phase5-m1: exercises the TROPIC01-backed slot
+  # manager (slots.{h,c}) end-to-end via the LT_RPC_CMD_SLOTS_* debug
+  # commands. This is the HW-in-the-loop checkpoint between M1 and M2
+  # per docs/PHASE-5-PLAN.md §5.
+  validate-phase5-m1 = writeShellApplication {
+    name = "nixtropic-validate-phase5-m1";
+    runtimeInputs = [ py usbutils coreutils gnugrep ];
+    text = ''
+      set -uo pipefail
+      export LT_RPC_PY="${../tools/lt_rpc.py}"
+      exec ${../tools/validate-phase5-m1.sh} "$@"
+    '';
+  };
+
   # Phase 1 — flash-and-validate: orchestrates DFU flash + immediate validate.
   # Solves the "boot markers emit only once" gotcha: after flash, the
   # firmware re-boots fresh and emits its boot block; the validator captures
@@ -600,6 +614,76 @@ let
         '';
       };
 
+  # Phase 5 M1 — flash-and-validate-phase5-m1: DFU flash + immediate M1
+  # checkpoint. Same shape as flash-and-validate-phase4.
+  flash-and-validate-phase5-m1 =
+    if firmware == null then
+      writeShellApplication {
+        name = "nixtropic-flash-and-validate-phase5-m1-placeholder";
+        text = ''
+          echo "Custom firmware not available in this flake."
+          exit 1
+        '';
+      }
+    else
+      writeShellApplication {
+        name = "nixtropic-flash-and-validate-phase5-m1";
+        runtimeInputs = [ dfu-util usbutils coreutils gnugrep py ];
+        text = ''
+          set -euo pipefail
+
+          FW_BIN="${firmware}/firmware.bin"
+
+          echo "═══════════════════════════════════════════════════════════════"
+          echo "  Phase 5 M1: flash-and-validate (TROPIC01 slot manager)"
+          echo "═══════════════════════════════════════════════════════════════"
+          echo ""
+
+          if ! lsusb | grep -q "0483:df11"; then
+            echo "ERROR: dongle not in DFU mode (0483:df11)." >&2
+            echo "Hold SW1 + replug, then re-run." >&2
+            exit 1
+          fi
+
+          echo "Step 1/2: DFU flash..."
+          DFU_LOG=$(mktemp)
+          trap 'rm -f "$DFU_LOG"' EXIT
+
+          dfu-util -a 0 -s 0x08000000:leave -D "$FW_BIN" 2>&1 | tee "$DFU_LOG" >/dev/null || true
+          DFU_EXIT="''${PIPESTATUS[0]}"
+
+          if [ "$DFU_EXIT" -ne 0 ] && ! grep -q "File downloaded successfully" "$DFU_LOG"; then
+            echo "✗ DFU flash FAILED."
+            exit 1
+          fi
+
+          echo "✓ Flash complete. Waiting up to 12 s for USB re-enumeration..."
+
+          for _ in $(seq 1 24); do
+            sleep 0.5
+            if lsusb | grep -q "cafe:4001"; then
+              break
+            fi
+          done
+
+          if ! lsusb | grep -q "cafe:4001"; then
+            echo "✗ nixtropic open firmware (cafe:4001) not enumerated after 12 s." >&2
+            lsusb | grep -E "0483:|cafe:" >&2 || echo "    (no TS1302 VID seen)" >&2
+            exit 1
+          fi
+
+          echo "✓ nixtropic firmware enumerated."
+          echo ""
+          echo "Settling for 3 s..."
+          sleep 3
+          echo ""
+          echo "Step 2/2: Phase 5 M1 slot manager validation..."
+          echo ""
+          export LT_RPC_PY="${../tools/lt_rpc.py}"
+          exec ${../tools/validate-phase5-m1.sh}
+        '';
+      };
+
   # Phase 4 — flash-and-validate-phase4: DFU flash + immediate Phase 4 validate.
   flash-and-validate-phase4 =
     if firmware == null then
@@ -710,6 +794,7 @@ let
         -I "$FIRMWARE_SRC/platform" \
         -I "$FIRMWARE_SRC/usb" \
         "$FIRMWARE_SRC/hid_rpc/" \
+        "$FIRMWARE_SRC/fido_hid/" \
         "$FIRMWARE_SRC/tropic/" \
         "$FIRMWARE_SRC/cdc_protocol/" \
         "$FIRMWARE_SRC/usb/usb_descriptors.c" \
@@ -863,6 +948,22 @@ in
       else
         "${flash-and-validate-phase4}/bin/nixtropic-flash-and-validate-phase4";
     meta.description = "DFU-flash open firmware + immediately run Phase 4 FIDO2 stub validation";
+  };
+
+  validate-phase5-m1 = {
+    type = "app";
+    program = "${validate-phase5-m1}/bin/nixtropic-validate-phase5-m1";
+    meta.description = "Phase 5 M1 — TROPIC01 slot manager validation (alloc/erase/meta round-trip)";
+  };
+
+  flash-and-validate-phase5-m1 = {
+    type = "app";
+    program =
+      if firmware == null then
+        "${flash-and-validate-phase5-m1}/bin/nixtropic-flash-and-validate-phase5-m1-placeholder"
+      else
+        "${flash-and-validate-phase5-m1}/bin/nixtropic-flash-and-validate-phase5-m1";
+    meta.description = "DFU-flash open firmware + Phase 5 M1 slot manager validation";
   };
 
   identify = {

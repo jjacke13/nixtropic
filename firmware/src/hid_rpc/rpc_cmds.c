@@ -26,6 +26,7 @@
 
 #include "platform/rng.h"
 #include "tropic/tropic.h"
+#include "fido_hid/slots.h"
 
 #include "stm32u5xx_hal.h"
 
@@ -137,6 +138,68 @@ static int handle_ecc_erase(const uint8_t *req, size_t req_len,
     return (tropic_ecc_erase(req[0]) == 0) ? 0 : -1;
 }
 
+/* ===== Phase 5 M1 debug handlers — slot-manager visibility ===== */
+
+static int handle_slots_bitmap(const uint8_t *req, size_t req_len,
+                               uint8_t *resp, size_t resp_max)
+{
+    (void) req; (void) req_len;
+    if (resp_max < 5u) return -1;
+    uint32_t bm = slots_bitmap();
+    resp[0] = (uint8_t)(bm >> 24);
+    resp[1] = (uint8_t)(bm >> 16);
+    resp[2] = (uint8_t)(bm >>  8);
+    resp[3] = (uint8_t) bm;
+    resp[4] = (uint8_t) slots_count_used();
+    return 5;
+}
+
+static int handle_slots_alloc(const uint8_t *req, size_t req_len,
+                              uint8_t *resp, size_t resp_max)
+{
+    if (req_len < 32u) return -1;
+    if (resp_max < 1u + 18u) return -1;
+    uint8_t cred_id[18];
+    int idx = -1;
+    if (slots_alloc(req, 8u /* SLOTS_ALG_ED25519 */, cred_id, &idx) != 0) {
+        return -1;
+    }
+    resp[0] = (uint8_t) idx;
+    memcpy(&resp[1], cred_id, sizeof cred_id);
+    return 1 + (int) sizeof cred_id;
+}
+
+static int handle_slots_erase(const uint8_t *req, size_t req_len,
+                              uint8_t *resp, size_t resp_max)
+{
+    (void) resp; (void) resp_max;
+    if (req_len < 1u) return -1;
+    if (slots_erase((int) req[0]) != 0) return -1;
+    return 0;
+}
+
+static int handle_slots_meta(const uint8_t *req, size_t req_len,
+                             uint8_t *resp, size_t resp_max)
+{
+    if (req_len < 1u) return -1;
+    if (resp_max < 50u) return -1;
+    slot_meta_t m;
+    if (slots_read_meta((int) req[0], &m) != 0) return -1;
+    resp[0] = m.alg;
+    resp[1] = m.flags;
+    memcpy(&resp[2],  m.rp_id_hash,    32);
+    memcpy(&resp[34], m.cred_id_nonce, 16);
+    return 50;
+}
+
+static int handle_slots_reset(const uint8_t *req, size_t req_len,
+                              uint8_t *resp, size_t resp_max)
+{
+    (void) req; (void) req_len; (void) resp; (void) resp_max;
+    if (slots_factory_reset() != 0) return -1;
+    return 0;
+}
+
 /* ===== Table + lookup ===== */
 
 typedef struct {
@@ -152,6 +215,11 @@ static const rpc_entry_t HANDLERS[] = {
     { LT_RPC_CMD_ECC_SIGN,     handle_ecc_sign },
     { LT_RPC_CMD_ECC_PUBKEY,   handle_ecc_pubkey },
     { LT_RPC_CMD_ECC_ERASE,    handle_ecc_erase },
+    { LT_RPC_CMD_SLOTS_BITMAP, handle_slots_bitmap },
+    { LT_RPC_CMD_SLOTS_ALLOC,  handle_slots_alloc },
+    { LT_RPC_CMD_SLOTS_ERASE,  handle_slots_erase },
+    { LT_RPC_CMD_SLOTS_META,   handle_slots_meta },
+    { LT_RPC_CMD_SLOTS_RESET,  handle_slots_reset },
     { 0, NULL },  /* sentinel */
 };
 

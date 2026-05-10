@@ -55,6 +55,12 @@ CMD_ECC_GENERATE  = 0x04
 CMD_ECC_SIGN      = 0x05
 CMD_ECC_PUBKEY    = 0x06
 CMD_ECC_ERASE     = 0x07
+# Phase 5 M1 — slot manager debug commands (firmware: lt_rpc_proto.h 0x10-0x14)
+CMD_SLOTS_BITMAP  = 0x10
+CMD_SLOTS_ALLOC   = 0x11
+CMD_SLOTS_ERASE   = 0x12
+CMD_SLOTS_META    = 0x13
+CMD_SLOTS_RESET   = 0x14
 CMD_ERROR         = 0x3F
 
 ERR_NAMES = {
@@ -173,6 +179,46 @@ class LtRpc:
 
     def ecc_erase(self, slot: int) -> bytes:
         return self.transact(CMD_ECC_ERASE, bytes([slot & 0xFF]))
+
+    # ----- Phase 5 M1 slot manager -----
+
+    def slots_bitmap(self) -> tuple[int, int]:
+        """Return (bitmap, used_count)."""
+        resp = self.transact(CMD_SLOTS_BITMAP, b"")
+        if len(resp) < 5:
+            raise LtRpcError(f"slots_bitmap: short response {len(resp)}")
+        bitmap = int.from_bytes(resp[0:4], "big")
+        count = resp[4]
+        return bitmap, count
+
+    def slots_alloc(self, rp_id_hash: bytes) -> tuple[int, bytes]:
+        """Return (slot_idx, cred_id_18)."""
+        if len(rp_id_hash) != 32:
+            raise LtRpcError(f"rp_id_hash must be 32 B, got {len(rp_id_hash)}")
+        resp = self.transact(CMD_SLOTS_ALLOC, rp_id_hash)
+        if len(resp) < 19:
+            raise LtRpcError(f"slots_alloc: short response {len(resp)}")
+        slot_idx = resp[0]
+        cred_id = resp[1:19]
+        return slot_idx, cred_id
+
+    def slots_erase_slot(self, slot_idx: int) -> None:
+        self.transact(CMD_SLOTS_ERASE, bytes([slot_idx & 0xFF]))
+
+    def slots_meta(self, slot_idx: int) -> dict:
+        """Return {alg, flags, rp_id_hash, cred_id_nonce}."""
+        resp = self.transact(CMD_SLOTS_META, bytes([slot_idx & 0xFF]))
+        if len(resp) < 50:
+            raise LtRpcError(f"slots_meta: short response {len(resp)}")
+        return {
+            "alg":           resp[0],
+            "flags":         resp[1],
+            "rp_id_hash":    bytes(resp[2:34]),
+            "cred_id_nonce": bytes(resp[34:50]),
+        }
+
+    def slots_reset(self) -> None:
+        self.transact(CMD_SLOTS_RESET, b"")
 
 
 # ============================================================================
@@ -350,6 +396,147 @@ def cmd_validate(args: argparse.Namespace) -> int:
     return 1
 
 
+def cmd_slots_bitmap(args: argparse.Namespace) -> int:
+    rpc = LtRpc()
+    try:
+        bm, cnt = rpc.slots_bitmap()
+    finally:
+        rpc.close()
+    print(f"bitmap=0x{bm:08x}  used={cnt}/32")
+    for i in range(32):
+        if bm & (1 << i):
+            print(f"  slot {i:2d}: allocated")
+    return 0
+
+
+def cmd_slots_reset(args: argparse.Namespace) -> int:
+    rpc = LtRpc()
+    try:
+        rpc.slots_reset()
+        bm, cnt = rpc.slots_bitmap()
+    finally:
+        rpc.close()
+    print(f"RESET → bitmap=0x{bm:08x} used={cnt}/32")
+    return 0 if (bm == 0 and cnt == 0) else 1
+
+
+def cmd_validate_m1(args: argparse.Namespace) -> int:
+    """Phase 5 M1 HW validation — exercises slot manager round-trip.
+
+    Test scenario:
+      1. Factory-reset → bitmap == 0, used == 0
+      2. Alloc 3 distinct credentials with 3 distinct rpIdHashes
+      3. Verify bitmap == 0b111, used == 3, slot indices 0/1/2
+      4. Read meta for each → rpIdHashes round-trip byte-exact
+      5. Erase slot 1 → bitmap == 0b101, used == 2
+      6. Alloc a 4th credential → MUST land in slot 1 (first-free)
+      7. Final state: bitmap == 0b111, used == 3
+    """
+    import hashlib
+
+    print("═══════════════════════════════════════════════════════════════")
+    print("  Phase 5 M1: slot manager validation (TROPIC01 R-mem)")
+    print("═══════════════════════════════════════════════════════════════")
+
+    rpc = LtRpc()
+    failures: list[str] = []
+    try:
+        # 1. Reset
+        rpc.slots_reset()
+        bm, cnt = rpc.slots_bitmap()
+        ok = (bm == 0 and cnt == 0)
+        print(f"[1/7] factory_reset      → bitmap=0x{bm:08x} used={cnt}   {'PASS' if ok else 'FAIL'}")
+        if not ok:
+            failures.append("reset did not clear bitmap")
+
+        # 2-3. Alloc 3 credentials
+        rp_hashes = [
+            hashlib.sha256(f"webauthn.io/{i}".encode()).digest()
+            for i in range(3)
+        ]
+        creds: list[tuple[int, bytes]] = []
+        for rph in rp_hashes:
+            idx, credid = rpc.slots_alloc(rph)
+            creds.append((idx, credid))
+        bm, cnt = rpc.slots_bitmap()
+        idx_set = {c[0] for c in creds}
+        ok = (idx_set == {0, 1, 2} and bm == 0b111 and cnt == 3)
+        print(f"[2/7] alloc 3 creds      → slots={sorted(idx_set)} bitmap=0x{bm:08x}   {'PASS' if ok else 'FAIL'}")
+        if not ok:
+            failures.append(f"expected slots 0,1,2 bitmap 0b111 got {sorted(idx_set)} bitmap 0b{bm:b}")
+
+        # cred IDs should be 18 B, version 0x01, slot matches, nonce non-zero
+        ok_credid = all(
+            len(c[1]) == 18 and c[1][0] == 0x01 and c[1][1] == c[0] and c[1][2:] != b"\x00" * 16
+            for c in creds
+        )
+        print(f"[3/7] cred IDs well-formed                                  {'PASS' if ok_credid else 'FAIL'}")
+        if not ok_credid:
+            failures.append("cred ID structure malformed")
+            for c in creds:
+                print(f"      slot {c[0]}: {c[1].hex()}")
+
+        # 4. Read meta back; rpIdHashes round-trip
+        round_trip_ok = True
+        for (slot_idx, _), expected_rph in zip(creds, rp_hashes):
+            meta = rpc.slots_meta(slot_idx)
+            if meta["rp_id_hash"] != expected_rph:
+                round_trip_ok = False
+                print(f"      slot {slot_idx}: rpIdHash mismatch")
+                print(f"        expected {expected_rph.hex()}")
+                print(f"        got      {meta['rp_id_hash'].hex()}")
+            # Nonce in meta must match nonce in credID bytes 2..17
+            credid_nonce = creds[slot_idx][1][2:]
+            if meta["cred_id_nonce"] != credid_nonce:
+                round_trip_ok = False
+                print(f"      slot {slot_idx}: nonce mismatch (meta vs credID bytes 2..17)")
+        print(f"[4/7] read meta back     → 3 rpIdHashes + 3 nonces match    {'PASS' if round_trip_ok else 'FAIL'}")
+        if not round_trip_ok:
+            failures.append("meta round-trip mismatch")
+
+        # 5. Erase slot 1
+        rpc.slots_erase_slot(1)
+        bm, cnt = rpc.slots_bitmap()
+        ok = (bm == 0b101 and cnt == 2)
+        print(f"[5/7] erase slot 1       → bitmap=0x{bm:08x} used={cnt}        {'PASS' if ok else 'FAIL'}")
+        if not ok:
+            failures.append(f"after erase expected bitmap 0b101 got 0b{bm:b}")
+
+        # 6. Alloc 4th → must land in slot 1
+        rph4 = hashlib.sha256(b"webauthn.io/reused").digest()
+        idx4, credid4 = rpc.slots_alloc(rph4)
+        bm, cnt = rpc.slots_bitmap()
+        ok = (idx4 == 1 and bm == 0b111 and cnt == 3)
+        print(f"[6/7] alloc 4th cred     → slot={idx4} (first-free)   {'PASS' if ok else 'FAIL'}")
+        if not ok:
+            failures.append(f"first-free alloc didn't pick slot 1 (got {idx4})")
+
+        # 7. Cleanup → reset
+        rpc.slots_reset()
+        bm, cnt = rpc.slots_bitmap()
+        ok = (bm == 0 and cnt == 0)
+        print(f"[7/7] final reset        → bitmap=0x{bm:08x} used={cnt}   {'PASS' if ok else 'FAIL'}")
+        if not ok:
+            failures.append("final reset did not clear")
+    finally:
+        rpc.close()
+
+    print()
+    if failures:
+        print(f"✗ {len(failures)} failure(s):")
+        for f in failures:
+            print(f"    - {f}")
+        return 1
+    print("7/7 PASS — Phase 5 M1 slot manager validated.")
+    print()
+    print("NEXT (manual): unplug + replug dongle, then run:")
+    print("   sudo nix develop --command python3 tools/lt_rpc.py slots-bitmap")
+    print("Expected: bitmap=0x00000000 used=0 (state persisted as 'empty after reset').")
+    print("If you alloc 3 NEW credentials, unplug + replug, then `slots-bitmap` should")
+    print("show those 3 still allocated. That confirms R-mem persistence across reboots.")
+    return 0
+
+
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -371,6 +558,15 @@ def main() -> int:
 
     p_val = sub.add_parser("validate", help="run the full Phase 3 test suite")
     p_val.set_defaults(fn=cmd_validate)
+
+    p_sb = sub.add_parser("slots-bitmap", help="(Phase 5 M1) dump slot allocation bitmap")
+    p_sb.set_defaults(fn=cmd_slots_bitmap)
+
+    p_sr = sub.add_parser("slots-reset", help="(Phase 5 M1) WIPE all credentials")
+    p_sr.set_defaults(fn=cmd_slots_reset)
+
+    p_vm1 = sub.add_parser("validate-m1", help="(Phase 5 M1) run slot manager validation")
+    p_vm1.set_defaults(fn=cmd_validate_m1)
 
     args = p.parse_args()
     try:

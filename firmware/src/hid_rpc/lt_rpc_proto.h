@@ -41,6 +41,16 @@
 #define LT_RPC_CMD_ECC_PUBKEY   0x06u
 #define LT_RPC_CMD_ECC_ERASE    0x07u
 
+/* Phase 5 M1 debug commands (slot manager visibility for host-side
+ * validate-phase5-m1.sh). Kept under 0x10..0x1F. Will be gated under
+ * NIXTROPIC_DEBUG ifdef post-Phase-8 — for now they always compile in
+ * because we're actively developing on this surface. */
+#define LT_RPC_CMD_SLOTS_BITMAP   0x10u  /* req: empty;  resp: 4 B bitmap BE + 1 B used count */
+#define LT_RPC_CMD_SLOTS_ALLOC    0x11u  /* req: 32 B rpIdHash; resp: 1 B slot_idx + 18 B credId */
+#define LT_RPC_CMD_SLOTS_ERASE    0x12u  /* req: 1 B slot_idx; resp: empty */
+#define LT_RPC_CMD_SLOTS_META     0x13u  /* req: 1 B slot_idx; resp: 50 B (1 alg + 1 flags + 32 rpHash + 16 nonce) */
+#define LT_RPC_CMD_SLOTS_RESET    0x14u  /* req: empty;  resp: empty.  WIPES EVERYTHING. */
+
 /* Reserved: device-emitted error response */
 #define LT_RPC_CMD_ERROR        0x3Fu
 

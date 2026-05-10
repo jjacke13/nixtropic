@@ -94,4 +94,39 @@ int tropic_ecc_eddsa_sign(uint8_t slot, const uint8_t *msg, size_t msg_len,
  */
 int tropic_ecc_erase(uint8_t slot);
 
+/**
+ * @brief Write `len` bytes to TROPIC01 R-mem slot. Requires open L3 session.
+ *
+ * Slot range: 0..511. Caller is responsible for ensuring the slot was
+ * erased before writing (R-mem is write-once-until-erased per TROPIC01
+ * spec). For atomic overwrite semantics, callers prefer the
+ * `tropic_rmem_erase + tropic_rmem_write` sequence.
+ *
+ * @return 0 on success; negative libtropic error code otherwise.
+ */
+int tropic_rmem_write(uint16_t slot, const uint8_t *data, size_t len);
+
+/**
+ * @brief Read up to `max` bytes from R-mem slot into `out`. Sets *actual
+ *        to the number of bytes written. Returns 0 on success.
+ *
+ * @return 0 on success; negative libtropic error code otherwise.
+ */
+int tropic_rmem_read(uint16_t slot, uint8_t *out, size_t max, size_t *actual);
+
+/**
+ * @brief Erase a single R-mem slot. Returns OK whether or not the slot
+ *        was previously populated.
+ */
+int tropic_rmem_erase(uint16_t slot);
+
+/**
+ * @brief Get `len` random bytes from TROPIC01's TRNG. Requires open L3
+ *        session. For < 256 B at a time (libtropic random is L3-only,
+ *        single-call).
+ *
+ * @return 0 on success; negative libtropic error code otherwise.
+ */
+int tropic_random(uint8_t *out, size_t len);
+
 #endif /* NIXTROPIC_TROPIC_H */

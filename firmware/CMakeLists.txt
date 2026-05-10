@@ -213,6 +213,7 @@ set(APP_SOURCES
     src/fido_hid/ctap2.c
     src/fido_hid/ctap2_creds.c
     src/fido_hid/credstore.c
+    src/fido_hid/slots.c
     src/tropic/tropic.c
     # src/tropic/lt_crypto_stubs.c  — M4: replaced by trezor_crypto CAL below
     ${CMSIS_STARTUP}
