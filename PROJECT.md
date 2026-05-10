@@ -2,7 +2,7 @@
 
 > **Audience:** AI coding agents (Claude, Codex, etc.) working on this project across sessions.
 > **Status:** Living document. Update as decisions and facts evolve.
-> **Last updated:** 2026-05-10
+> **Last updated:** 2026-05-10 (Phase 2 complete)
 > **Read order:** This document first. Reference `research/` files for technical depth as needed (don't preload them — fetch by section when relevant).
 
 ---
@@ -193,8 +193,10 @@ Each phase is **independently shippable**. Stop anywhere = useful artifact. Hard
 
 **Code: Nix only.** No C yet.
 
-### Phase 1 — TROPIC01 round-trip on STM32 (no USB)
+### Phase 1 — TROPIC01 round-trip on STM32 (no USB) — ✅ COMPLETE 2026-05-10 (commit `4b30bf0`)
 **Goal:** Prove libtropic on STM32U535 talks to TROPIC01 via SPI on actual TS1302 hardware.
+
+**Outcome:** USB CDC chosen instead of UART (Path Y), L2-only scope (Path A+C, no L3 secure session). 11/11 PASS via `nix run .#validate-phase1`. firmware.bin ≈ 35 KB. Chip ID byte-exact match to Phase 0 baseline.
 
 **Deliverables:**
 - `firmware/` directory with custom STM32 firmware
@@ -210,8 +212,10 @@ Each phase is **independently shippable**. Stop anywhere = useful artifact. Hard
 
 **Risks:** SPI pin config wrong, TROPIC01 power-switch (PA0) handling missing, libtropic-stm32u5xx HAL doesn't quite match TS1302 pinout. Address by close reading of `research/stm32u535-inventory.md` SPI table and `libtropic/hal/stm32/stm32u5xx/`.
 
-### Phase 2 — USB CDC-ACM passthrough (replicate stock)
+### Phase 2 — USB CDC-ACM passthrough (replicate stock) — ✅ COMPLETE 2026-05-10 (commits `c0edfb1` + `70eaa00`)
 **Goal:** Add USB stack, replicate stock firmware behavior. Black-box equivalence with stock.
+
+**Outcome:** Package renamed `firmware` → `open-firmware`. App `flash-firmware` → `flash-open`. New `validate-phase2` (5/5 PASS) + `flash-and-validate-phase2`. Open firmware is byte-faithful drop-in for stock TS1302; lt-util reads chip ID identically. lt-util's bundled libtropic v1.0.0 had an off-by-one bug (`count < 2 * tx_data_length`) patched in `flake.nix` postPatch — fixed in libtropic ≥ v3.x. firmware.bin ≈ 35 KB.
 
 **Deliverables:**
 - TinyUSB integrated, U545 BSP adapted for U535
