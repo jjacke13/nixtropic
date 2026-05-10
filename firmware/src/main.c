@@ -1,19 +1,20 @@
 /*
- * Phase 1 firmware main — Group C iteration (USB CDC bring-up).
+ * Phase 2 firmware main — USB CDC ↔ SPI passthrough (stock-protocol-compatible).
  *
- * Boot sequence (and LED diagnostic codes per P1.20):
+ * Boot sequence (LED diagnostic codes mirror Phase 1):
  *   Stage 0  — raw GPIO 4 quick blinks (proves CPU runs our code)
  *   Stage 1  — HAL_Init                          on fail: 6-blink pattern
  *   Stage 2  — clock_init (48 MHz)               on fail: 1-blink pattern
  *   Stage 3  — gpio_init
- *   Stage 4  — usb_clock_init (HSI48 + CRS)      on fail: 3-blink pattern
- *   Stage 5  — rng_init                          on fail: 2-blink pattern
- *   Stage 6  — usb_init (tusb_init)              on fail: 3-blink pattern
- *   Stage 7  — heartbeat + tud_task in main loop
+ *   Stage 4  — spi_init                          on fail: 4-blink pattern
+ *   Stage 5  — usb_clock_init (HSI48 + CRS)      on fail: 3-blink pattern
+ *   Stage 6  — rng_init                          on fail: 2-blink pattern
+ *   Stage 7  — usb_init (tusb_init)              on fail: 3-blink pattern
+ *   Stage 8  — boot banner ('#'-prefixed; libtropic clients silently skip)
+ *   Stage 9  — main loop: tud_task + cdc_protocol_task
  *
- * After USB CDC enumerates (~1-2 s), `[boot]` line + RNG sample print
- * to /dev/ttyACM*. From then on heartbeat continues; in Group D we'll
- * add the libtropic L2 sweep before going steady.
+ * Phase 1 work (libtropic L1+L2 round-trip on chip) preserved in tropic/
+ * but excluded from build — re-enable in Phase 3 for HID lt-rpc.
  */
 
 #include <stdio.h>
@@ -25,8 +26,12 @@
 #include "platform/clock.h"
 #include "platform/gpio.h"
 #include "platform/rng.h"
-#include "tropic/tropic.h"
+#include "platform/spi.h"
 #include "usb/usb.h"
+#include "cdc_protocol/protocol.h"
+/* Phase 1 — re-enable in Phase 3 for HID lt-rpc on chip
+ * #include "tropic/tropic.h"
+ */
 
 #include "tusb.h"
 
@@ -79,34 +84,43 @@ static __attribute__((noreturn)) void raw_blink_code(uint8_t count)
     }
 }
 
-/* ===== Boot ===== */
+/* ===== Boot banner =====
+ *
+ * Lines starting with '#' are silently skipped by stock-protocol parsers
+ * (verified against stock fw cmd.c:400 and against libtropic's
+ * libtropic_port_posix_usb_dongle adapter). Humans connecting via `screen`
+ * see the banner; libtropic clients ignore it.
+ *
+ * NIXTROPIC_GIT_REV is injected by Nix at compile time when available;
+ * default placeholder when not set so the build still succeeds outside Nix.
+ */
+#ifndef NIXTROPIC_GIT_REV
+#define NIXTROPIC_GIT_REV "unknown"
+#endif
 
-static void boot_print(void)
+#ifndef NIXTROPIC_BUILD_TAG
+#define NIXTROPIC_BUILD_TAG "nix-reproducible"
+#endif
+
+static void boot_banner(void)
 {
-    /* Run tud_task for ~1 sec to let the USB peripheral get past
-     * enumeration. We don't wait for tud_cdc_connected — picocom may
-     * open the port at any later time, and our _write pushes to FIFO
-     * regardless of connection state. */
-    uint32_t deadline = HAL_GetTick() + 1000u;
+    /* Emit banner FIRST so it sits in TinyUSB's TX FIFO while USB is still
+     * enumerating. Once enumeration completes the banner drains to the host
+     * kernel buffer. lt-util's tcflush(TCIOFLUSH) at open() then wipes the
+     * banner before sending its first L2 command, avoiding response pollution.
+     *
+     * If we pumped tud_task FIRST and emitted the banner second, the banner
+     * could land in the host buffer AFTER lt-util's tcflush — polluting
+     * lt_get_info_chip_id's response stream and yielding LT_L1_SPI_ERROR.
+     * (Verified failure mode 2026-05-10.) */
+    printf("# nixtropic phase 2\r\n");
+    printf("# build: %s\r\n", NIXTROPIC_BUILD_TAG);
+    printf("# git: %s\r\n",   NIXTROPIC_GIT_REV);
+
+    /* Now pump tud_task so the banner has time to drain through USB. */
+    uint32_t deadline = HAL_GetTick() + 1500u;
     while ((int32_t)(HAL_GetTick() - deadline) < 0) {
         tud_task();
-    }
-
-    printf("\n[boot] nixtropic phase 1 — USB CDC up\n");
-    printf("[boot] vid=0xCAFE pid=0x4001\n");
-
-    /* RNG sanity dump per decision P1.22 — proves STM32 host RNG fresh
-     * on every cold-boot. (TROPIC01 RNG via lt_random_value_get needs
-     * L3 session, deferred to Phase 5.) */
-    uint8_t rng[32];
-    if (rng_read(rng, sizeof rng) == 0) {
-        printf("[hal_rng]");
-        for (size_t i = 0; i < sizeof rng; ++i) {
-            printf(" %02x", rng[i]);
-        }
-        printf("\n");
-    } else {
-        printf("[hal_rng] FAILED\n");
     }
 }
 
@@ -130,84 +144,48 @@ int main(void)
         raw_blink_code(1);
     }
 
-    /* Stage 3 — GPIO */
+    /* Stage 3 — GPIO (LED, TROPIC01 power switch, TROPIC01 GPO input) */
     gpio_init();
 
-    /* Stage 4 — HSI48 + CRS for USB */
+    /* Stage 4 — SPI1 peripheral + AF mux on PA5/6/7 + CS pin on PA4 */
+    if (spi_init() != 0) {
+        raw_blink_code(4);
+    }
+
+    /* Stage 4.5 — Power-cycle TROPIC01: explicit OFF → 20 ms → ON, then
+     * 300 ms settle. Mirrors Phase 1 tropic.c:73-83 (which mirrors stock
+     * app/main.c:51-54 OFF→ON pattern). gpio_init() left PA0 LOW; spi_init
+     * may have taken ~ms more so VCC is fully discharged. Re-assert the
+     * power-off explicitly to make the pulse-shape unambiguous. */
+    board_tropic_power_off();
+    HAL_Delay(20);
+    board_tropic_power_on();
+    HAL_Delay(300);  /* Maintenance → Application boot transition (TROPIC01 datasheet) */
+
+    /* Stage 5 — HSI48 + CRS for USB */
     if (usb_clock_init() != 0) {
         raw_blink_code(3);
     }
 
-    /* Stage 5 — RNG */
+    /* Stage 6 — RNG (kept from Phase 1 for future use; harmless if unused) */
     if (rng_init() != 0) {
         raw_blink_code(2);
     }
 
-    /* Stage 6 — USB peripheral + TinyUSB */
+    /* Stage 7 — USB peripheral + TinyUSB */
     if (usb_init() != 0) {
         raw_blink_code(3);
     }
 
-    /* Stage 7 — print boot info. */
-    boot_print();
+    /* Stage 8 — boot banner + protocol init */
+    boot_banner();
+    cdc_protocol_init();
     blink_set_heartbeat();
 
-    /* Stage 8 — TROPIC01 work is DEFERRED to the main loop.
-     *
-     * Reason: lt_init + L2 sweep can block the CPU for several seconds
-     * if SPI calls hit timeouts. During that time tud_task can't run,
-     * which starves USB CDC processing — host enumerates the EP but
-     * stops getting CDC class responses, eventually drops the device.
-     * picocom then can't get past "Terminal ready".
-     *
-     * Solution: let the main loop pump tud_task for ~1.5 s post-boot
-     * (host fully opens /dev/ttyACM*), THEN do TROPIC01 work with
-     * tud_task interleaved between each L2 call. */
-    bool tropic_work_done = false;
-    uint32_t tropic_start_deadline = HAL_GetTick() + 1500u;
-
-    /* Periodic tick line so picocom-after-flash sees activity even if it
-     * missed the boot block. */
-    uint32_t next_tick_ms = HAL_GetTick() + 2000u;
-    uint32_t tick_n = 0;
-
+    /* Stage 9 — main loop */
     for (;;) {
         tud_task();
+        cdc_protocol_task();
         blink_tick();
-
-        /* Once: do TROPIC01 init + L2 sweep, with tud_task between
-         * each major step so CDC keeps draining. */
-        if (!tropic_work_done && (int32_t)(HAL_GetTick() - tropic_start_deadline) >= 0) {
-            tropic_work_done = true;
-
-            tud_task();
-            int trc = tropic_init();
-            tud_task();
-
-            if (trc != 0) {
-                printf("[boot] tropic_init failed (%d)\n", trc);
-                blink_set_pattern((uint8_t)(trc == 1 ? 5 : 6));
-            } else {
-                int sweep_errors = tropic_l2_sweep();
-                tud_task();
-
-                if (sweep_errors != 0) {
-                    printf("[boot] L2 sweep had %d errors\n", sweep_errors);
-                    blink_set_pattern(7);
-                } else {
-                    printf("[boot] PHASE1 OK — Group D HW round-trip passed\n");
-                    /* heartbeat already running */
-                }
-            }
-            tud_cdc_write_flush();
-        }
-
-        if ((int32_t)(HAL_GetTick() - next_tick_ms) >= 0) {
-            uint8_t r = 0;
-            (void) rng_read(&r, 1);
-            printf("[tick %lu rng %02x]\n", (unsigned long) tick_n, r);
-            tick_n++;
-            next_tick_ms += 2000u;
-        }
     }
 }

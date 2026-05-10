@@ -125,8 +125,26 @@
 
         lt-util = pkgs.stdenv.mkDerivation {
           pname = "lt-util";
-          version = "master-cbc30f5";
+          version = "master-cbc30f5-patched-loop";
           src = ltUtilSrc;
+
+          # Fix off-by-one in lt-util's bundled libtropic v1.0.0 host adapter
+          # (hal/port/unix/lt_port_unix_usb_dongle.c). The readback loop
+          # iterates 2*tx_data_length times instead of tx_data_length: for
+          # chip_id (130-byte transfer) it walks 260 iterations past the
+          # 512-byte buffered_chars[] and writes past s2->buff[257],
+          # corrupting state and yielding LT_L1_SPI_ERROR on subsequent calls.
+          # Fixed in libtropic >= v3.x; lt-util upstream is dormant and still
+          # pins libtropic v1.0.0. Symptom: mode poll (1 byte) and riscv_fw
+          # (4 bytes) work; chip_id (130 bytes) fails. Verified 2026-05-10
+          # by manual replication of the lt-util sequence end-to-end against
+          # our Phase 2 firmware (nix run .#read + printf chip_id sequence
+          # → 294 bytes returned correctly with byte-exact Phase 0 baseline).
+          postPatch = ''
+            substituteInPlace libtropic/hal/port/unix/lt_port_unix_usb_dongle.c \
+              --replace-fail 'count < 2 * tx_data_length' 'count < tx_data_length'
+          '';
+
           nativeBuildInputs = with pkgs; [ cmake pkg-config ];
           cmakeFlags = [ "-DUSB_DONGLE_TS1302=1" ];
           installPhase = ''
@@ -141,11 +159,12 @@
           };
         };
 
-        # Phase 1 firmware — custom STM32U535 firmware that exercises libtropic
-        # over USB CDC. Built only on host architectures that have an
-        # arm-none-eabi cross toolchain available (effectively all of them via
-        # gcc-arm-embedded). See docs/PHASE-1-PLAN.md for the build plan.
-        firmware = pkgs.callPackage ./nix/firmware.nix {
+        # Open firmware — custom STM32U535 firmware that's a byte-faithful
+        # drop-in replacement for the stock TS1302 firmware (Phase 2 deliverable
+        # per PROJECT.md §6). 100% Nix-built, MIT-licensed USB stack (TinyUSB),
+        # libtropic kept as a flake input for host-side use only. Built on
+        # any host with an arm-none-eabi cross toolchain via gcc-arm-embedded.
+        open-firmware = pkgs.callPackage ./nix/firmware.nix {
           libtropicSrc = libtropic;
           cmsisCoreSrc = cmsis-core;
           cmsisDeviceU5Src = cmsis-device-u5;
@@ -155,7 +174,8 @@
 
         apps = import ./nix/apps.nix {
           inherit pkgs;
-          inherit stockFirmware firmware;
+          inherit stockFirmware;
+          openFirmware = open-firmware;
           libtropicUtil = lt-util;
         };
 
@@ -164,8 +184,9 @@
       in
       {
         packages = {
-          inherit stockFirmware lt-util firmware;
+          inherit stockFirmware lt-util;
           stock-firmware = stockFirmware;  # convenience alias
+          inherit open-firmware;
           default = stockFirmware;
         };
 

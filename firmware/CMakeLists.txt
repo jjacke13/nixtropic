@@ -1,4 +1,4 @@
-# Phase 1 firmware top-level CMakeLists.
+# Firmware top-level CMakeLists.
 #
 # Build flow:
 #   nix build .#firmware
@@ -7,15 +7,21 @@
 #     → ninja builds firmware.elf
 #     → POST_BUILD generates firmware.bin and firmware.hex
 #
-# Source roots come from Nix via cache variables. Group B brings in HAL
-# selectively (RCC, GPIO, FLASH, PWR, CORTEX, RNG, SPI, DMA, EXTI) to
-# match firmware/src/platform/stm32u5xx_hal_conf.h.
+# Phase 1 used libtropic on the MCU for an L1+L2 round-trip with TROPIC01.
+# Phase 2 is byte-passthrough (host runs libtropic over USB CDC), so the
+# libtropic source list + tropic/ application code are excluded from the
+# build via comment markers. They stay on disk — re-enabling for Phase 3+
+# is uncomment-only.
 
 cmake_minimum_required(VERSION 3.21)
 
 project(nixtropic-firmware C ASM)
 
 # ----- Required source roots (passed by Nix; fail fast if missing) -----
+# LIBTROPIC_SRC stays required because flake.nix still pins libtropic for the
+# host-side `lt-util` package and may want to re-enable on-MCU libtropic in
+# Phase 3 (HID lt-rpc). The path always exists from Nix; we just don't compile
+# from it during Phase 2.
 foreach(var
     LIBTROPIC_SRC
     CMSIS_CORE_SRC
@@ -71,31 +77,32 @@ foreach(src ${HAL_SOURCES})
   endif()
 endforeach()
 
-# ----- libtropic core (Group D — L1/L2 only; L3 .c files skipped) -----
-# Skipping libtropic_l3.c, lt_l3_process.c, lt_hkdf.c, and
-# libtropic_default_sh0_keys.c — Phase 1 has no L3 secure session
-# (per P1.11). lt_crypto_stubs.c provides linker-satisfaction stubs for
-# the crypto provider symbols.
-set(LIBTROPIC_SOURCES
-    ${LIBTROPIC_SRC}/src/libtropic.c
-    ${LIBTROPIC_SRC}/src/lt_crc16.c
-    ${LIBTROPIC_SRC}/src/lt_port_wrap.c
-    ${LIBTROPIC_SRC}/src/lt_l1.c
-    ${LIBTROPIC_SRC}/src/libtropic_l2.c
-    ${LIBTROPIC_SRC}/src/lt_l2_frame_check.c
-    ${LIBTROPIC_SRC}/src/lt_asn1_der.c
-    ${LIBTROPIC_SRC}/src/lt_tr01_attrs.c
-    ${LIBTROPIC_SRC}/src/libtropic_secure_memzero.c
-    ${LIBTROPIC_SRC}/hal/stm32/stm32u5xx/libtropic_port_stm32u5xx.c
-)
+# ----- libtropic core: Phase 1 — re-enable in Phase 3 for HID lt-rpc on chip -----
+# Phase 2 is pure byte passthrough (host runs libtropic). The L1+L2 round-trip
+# work proven in Phase 1 (commit 4b30bf0) lives in firmware/src/tropic/ and
+# stays on disk per user no-delete rule. Re-activation = uncomment this block
+# and the LIBTROPIC_SOURCES reference in APP_SOURCES below.
+#
+# set(LIBTROPIC_SOURCES
+#     ${LIBTROPIC_SRC}/src/libtropic.c
+#     ${LIBTROPIC_SRC}/src/lt_crc16.c
+#     ${LIBTROPIC_SRC}/src/lt_port_wrap.c
+#     ${LIBTROPIC_SRC}/src/lt_l1.c
+#     ${LIBTROPIC_SRC}/src/libtropic_l2.c
+#     ${LIBTROPIC_SRC}/src/lt_l2_frame_check.c
+#     ${LIBTROPIC_SRC}/src/lt_asn1_der.c
+#     ${LIBTROPIC_SRC}/src/lt_tr01_attrs.c
+#     ${LIBTROPIC_SRC}/src/libtropic_secure_memzero.c
+#     ${LIBTROPIC_SRC}/hal/stm32/stm32u5xx/libtropic_port_stm32u5xx.c
+# )
+#
+# foreach(src ${LIBTROPIC_SOURCES})
+#   if(NOT EXISTS "${src}")
+#     message(FATAL_ERROR "libtropic source missing: ${src}")
+#   endif()
+# endforeach()
 
-foreach(src ${LIBTROPIC_SOURCES})
-  if(NOT EXISTS "${src}")
-    message(FATAL_ERROR "libtropic source missing: ${src}")
-  endif()
-endforeach()
-
-# ----- TinyUSB sources (Group C — minimal CDC subset) -----
+# ----- TinyUSB sources (CDC subset) -----
 # Only the files we actually use:
 #   tusb.c            — top-level dispatcher
 #   tusb_fifo.c       — common FIFO util (used by CDC class for tx/rx buffers)
@@ -125,16 +132,23 @@ set(APP_SOURCES
     src/platform/gpio.c
     src/platform/blink.c
     src/platform/rng.c
+    src/platform/spi.c
     src/usb/usb.c
     src/usb/usb_descriptors.c
     src/usb/cdc_io.c
-    src/tropic/tropic.c
-    src/tropic/lt_crypto_stubs.c
+    src/cdc_protocol/protocol.c
+    src/cdc_protocol/parser.c
+    src/cdc_protocol/hex.c
+    src/cdc_protocol/cmd.c
+    # Phase 1 — re-enable in Phase 3 for HID lt-rpc on chip
+    # src/tropic/tropic.c
+    # src/tropic/lt_crypto_stubs.c
     ${CMSIS_STARTUP}
     ${CMSIS_SYSTEM}
     ${HAL_SOURCES}
     ${TINYUSB_SOURCES}
-    ${LIBTROPIC_SOURCES}
+    # Phase 1 — re-enable in Phase 3 for HID lt-rpc on chip
+    # ${LIBTROPIC_SOURCES}
 )
 
 add_executable(${FIRMWARE_ELF} ${APP_SOURCES})
@@ -142,11 +156,12 @@ add_executable(${FIRMWARE_ELF} ${APP_SOURCES})
 target_compile_definitions(${FIRMWARE_ELF} PRIVATE
     USE_HAL_DRIVER
     CFG_TUSB_MCU=OPT_MCU_STM32U5
-    ACAB                        # libtropic: TROPIC01 silicon revision (user's chip per STATUS baseline)
-    LT_LOG_ENABLE_ERROR=1       # libtropic: keep error-level logs on (printf to USB CDC)
-    LT_LOG_ENABLE_WARN=0
-    LT_LOG_ENABLE_INFO=0
-    LT_LOG_ENABLE_DEBUG=0
+    # Phase 1 — re-enable in Phase 3 for HID lt-rpc on chip
+    # ACAB                        # libtropic: TROPIC01 silicon revision
+    # LT_LOG_ENABLE_ERROR=1
+    # LT_LOG_ENABLE_WARN=0
+    # LT_LOG_ENABLE_INFO=0
+    # LT_LOG_ENABLE_DEBUG=0
 )
 
 target_include_directories(${FIRMWARE_ELF} PRIVATE
@@ -157,9 +172,10 @@ target_include_directories(${FIRMWARE_ELF} PRIVATE
     ${CMSIS_DEVICE_U5_SRC}/Include
     ${STM32U5XX_HAL_DRIVER_SRC}/Inc
     ${TINYUSB_SRC}/src          # TinyUSB public headers (tusb.h, etc.)
-    ${LIBTROPIC_SRC}/include
-    ${LIBTROPIC_SRC}/src        # libtropic private headers (lt_l1.h etc.)
-    ${LIBTROPIC_SRC}/hal/stm32/stm32u5xx
+    # Phase 1 — re-enable in Phase 3 for HID lt-rpc on chip
+    # ${LIBTROPIC_SRC}/include
+    # ${LIBTROPIC_SRC}/src        # libtropic private headers (lt_l1.h etc.)
+    # ${LIBTROPIC_SRC}/hal/stm32/stm32u5xx
 )
 
 # Suppress warnings on ST HAL sources only. Application code stays strict.
@@ -175,11 +191,11 @@ foreach(tu_src ${TINYUSB_SOURCES})
     COMPILE_FLAGS "-Wno-strict-prototypes -Wno-unused-parameter -Wno-undef -Wno-maybe-uninitialized -Wno-cast-align -Wno-conversion")
 endforeach()
 
-# Same for libtropic sources (we don't own; warning-noise isn't actionable).
-foreach(lt_src ${LIBTROPIC_SOURCES})
-  set_source_files_properties(${lt_src} PROPERTIES
-    COMPILE_FLAGS "-Wno-strict-prototypes -Wno-unused-parameter -Wno-undef -Wno-maybe-uninitialized -Wno-cast-align -Wno-conversion -Wno-shadow")
-endforeach()
+# Phase 1 — re-enable in Phase 3 for HID lt-rpc on chip
+# foreach(lt_src ${LIBTROPIC_SOURCES})
+#   set_source_files_properties(${lt_src} PROPERTIES
+#     COMPILE_FLAGS "-Wno-strict-prototypes -Wno-unused-parameter -Wno-undef -Wno-maybe-uninitialized -Wno-cast-align -Wno-conversion -Wno-shadow")
+# endforeach()
 
 target_link_options(${FIRMWARE_ELF} PRIVATE
     -T${LINKER_SCRIPT}

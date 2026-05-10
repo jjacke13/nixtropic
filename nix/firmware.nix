@@ -26,7 +26,7 @@
 
 stdenvNoCC.mkDerivation {
   pname = "nixtropic-firmware";
-  version = "0.1.0-phase1-C-usb-cdc";
+  version = "0.2.0-phase2-cdc-passthrough";
 
   src = ../firmware;
 

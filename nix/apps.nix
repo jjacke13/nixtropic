@@ -1,4 +1,7 @@
-{ pkgs, stockFirmware, firmware ? null, libtropicUtil ? null }:
+{ pkgs, stockFirmware, openFirmware ? null, libtropicUtil ? null }:
+
+# Backwards-compat alias — many internal references still use `firmware`.
+let firmware = openFirmware; in
 
 # Flake apps for `nix run .#<app>`.
 #
@@ -116,14 +119,16 @@ let
         text = ''
           set -euo pipefail
 
-          echo "Checking for TS1302 in app mode (USB ID 0483:5740)..."
-          if ! lsusb | grep -q "0483:5740"; then
+          echo "Checking for TS1302 in app mode..."
+          echo "  Acceptable VID/PID: 0483:5740 (stock) OR cafe:4001 (nixtropic open)"
+          if ! lsusb | grep -qE "0483:5740|cafe:4001"; then
             echo ""
             echo "ERROR: Dongle is not in app mode."
             echo ""
             if lsusb | grep -q "0483:df11"; then
               echo "Dongle is in DFU mode — flash firmware first:"
-              echo "  nix run .#flash-stock"
+              echo "  sudo nix run .#flash-stock           # restore stock"
+              echo "  sudo nix run .#flash-firmware        # load nixtropic open"
             else
               echo "Dongle not detected. Check the USB cable and lsusb output."
             fi
@@ -131,7 +136,11 @@ let
           fi
 
           DEV="''${TROPIC_DEV:-/dev/ttyACM0}"
-          echo "✓ App mode detected"
+          if lsusb | grep -q "cafe:4001"; then
+            echo "✓ App mode detected — nixtropic open firmware (cafe:4001)"
+          else
+            echo "✓ App mode detected — stock firmware (0483:5740)"
+          fi
           echo ""
           echo "Querying chip on $DEV..."
           echo ""
@@ -282,6 +291,28 @@ let
     '';
   };
 
+  # Phase 2 — validate-phase2: runs lt-util against our open firmware and
+  # matches its chip-info output against the Phase 0 baseline. 5/5 PASS
+  # confirms byte-faithful drop-in stock-fw replacement.
+  validate-phase2 =
+    if libtropicUtil == null then
+      writeShellApplication {
+        name = "nixtropic-validate-phase2-placeholder";
+        text = ''
+          echo "lt-util not yet packaged in this flake; cannot run Phase 2 validation."
+          exit 1
+        '';
+      }
+    else
+      writeShellApplication {
+        name = "nixtropic-validate-phase2";
+        runtimeInputs = [ libtropicUtil usbutils coreutils gnugrep ];
+        text = ''
+          set -uo pipefail
+          exec ${../tools/validate-phase2.sh} "$@"
+        '';
+      };
+
   # Phase 1 — flash-and-validate: orchestrates DFU flash + immediate validate.
   # Solves the "boot markers emit only once" gotcha: after flash, the
   # firmware re-boots fresh and emits its boot block; the validator captures
@@ -343,7 +374,7 @@ let
           # retries 2-3 times (kernel error -71 then success), totaling
           # ~3-4 seconds. Plus cdc_acm attach + udev rule processing.
           DETECTED_DEV=""
-          for i in $(seq 1 24); do
+          for _ in $(seq 1 24); do
             sleep 0.5
             for candidate in /dev/ttyACM0 /dev/ttyACM1 /dev/ttyACM2 /dev/ttyACM3; do
               if [ -e "$candidate" ]; then
@@ -373,6 +404,81 @@ let
           export TROPIC_DEV="$DETECTED_DEV"
           export TROPIC_VALIDATE_TIMEOUT=10
           exec ${../tools/validate-phase1.sh}
+        '';
+      };
+
+  # Phase 2 — flash-and-validate-phase2: DFU flash + lt-util chip-info check.
+  # Single-shot regression test for the open firmware: flashes Phase 2,
+  # waits for /dev/ttyACM*, runs validate-phase2.sh which exercises the
+  # full host→firmware→TROPIC01 path via lt-util.
+  flash-and-validate-phase2 =
+    if firmware == null || libtropicUtil == null then
+      writeShellApplication {
+        name = "nixtropic-flash-and-validate-phase2-placeholder";
+        text = ''
+          echo "Custom firmware or lt-util not available in this flake."
+          exit 1
+        '';
+      }
+    else
+      writeShellApplication {
+        name = "nixtropic-flash-and-validate-phase2";
+        runtimeInputs = [ dfu-util usbutils coreutils gnugrep libtropicUtil ];
+        text = ''
+          set -euo pipefail
+
+          FW_BIN="${firmware}/firmware.bin"
+
+          echo "═══════════════════════════════════════════════════════════════"
+          echo "  Phase 2: flash-and-validate (one-shot regression test)"
+          echo "═══════════════════════════════════════════════════════════════"
+          echo ""
+
+          if ! lsusb | grep -q "0483:df11"; then
+            echo "ERROR: dongle not in DFU mode (0483:df11)." >&2
+            echo "Hold SW1 + replug, then re-run." >&2
+            exit 1
+          fi
+
+          echo "Step 1/2: DFU flash..."
+          DFU_LOG=$(mktemp)
+          trap 'rm -f "$DFU_LOG"' EXIT
+
+          dfu-util -a 0 -s 0x08000000:leave -D "$FW_BIN" 2>&1 | tee "$DFU_LOG" >/dev/null || true
+          DFU_EXIT="''${PIPESTATUS[0]}"
+
+          if [ "$DFU_EXIT" -ne 0 ] && ! grep -q "File downloaded successfully" "$DFU_LOG"; then
+            echo "✗ DFU flash FAILED."
+            exit 1
+          fi
+
+          echo "✓ Flash complete. Waiting up to 12 s for USB re-enumeration..."
+
+          DETECTED_DEV=""
+          for _ in $(seq 1 24); do
+            sleep 0.5
+            for candidate in /dev/ttyACM0 /dev/ttyACM1 /dev/ttyACM2 /dev/ttyACM3; do
+              if [ -e "$candidate" ]; then
+                DETECTED_DEV="$candidate"
+                break 2
+              fi
+            done
+          done
+
+          if [ -z "$DETECTED_DEV" ]; then
+            echo "✗ No /dev/ttyACM* appeared after 12 s." >&2
+            lsusb | grep -E "0483:|cafe:" >&2 || echo "    (no TS1302 VID seen)" >&2
+            exit 1
+          fi
+
+          echo "✓ Detected at $DETECTED_DEV"
+          echo ""
+          echo "Step 2/2: lt-util chip-info validation..."
+          echo ""
+
+          export TROPIC_DEV="$DETECTED_DEV"
+          export TROPIC_VALIDATE_TIMEOUT=15
+          exec ${../tools/validate-phase2.sh}
         '';
       };
 
@@ -424,14 +530,14 @@ in
     meta.description = "DFU-flash the stock TS1302 firmware (recovery)";
   };
 
-  flash-firmware = {
+  flash-open = {
     type = "app";
     program =
       if firmware == null then
         "${flash-firmware}/bin/nixtropic-flash-firmware-placeholder"
       else
         "${flash-firmware}/bin/nixtropic-flash-firmware";
-    meta.description = "DFU-flash nixtropic Phase 1 firmware";
+    meta.description = "DFU-flash nixtropic open firmware (Phase 2)";
   };
 
   read = {
@@ -446,14 +552,34 @@ in
     meta.description = "Automated Phase 1 PASS check (chip ID + L2 sweep) — run RIGHT AFTER flash";
   };
 
-  flash-and-validate = {
+  validate-phase2 = {
+    type = "app";
+    program =
+      if libtropicUtil == null then
+        "${validate-phase2}/bin/nixtropic-validate-phase2-placeholder"
+      else
+        "${validate-phase2}/bin/nixtropic-validate-phase2";
+    meta.description = "Automated Phase 2 PASS check via lt-util chip-info";
+  };
+
+  flash-and-validate-phase1 = {
     type = "app";
     program =
       if firmware == null then
         "${flash-and-validate}/bin/nixtropic-flash-and-validate-placeholder"
       else
         "${flash-and-validate}/bin/nixtropic-flash-and-validate";
-    meta.description = "DFU-flash Phase 1 firmware + immediately validate";
+    meta.description = "DFU-flash open firmware + Phase 1 validate (chip_id + L2 sweep)";
+  };
+
+  flash-and-validate-phase2 = {
+    type = "app";
+    program =
+      if firmware == null || libtropicUtil == null then
+        "${flash-and-validate-phase2}/bin/nixtropic-flash-and-validate-phase2-placeholder"
+      else
+        "${flash-and-validate-phase2}/bin/nixtropic-flash-and-validate-phase2";
+    meta.description = "DFU-flash open firmware + immediately validate via lt-util";
   };
 
   identify = {
