@@ -175,6 +175,24 @@ static int read_fw_bank(lt_bank_id_t bank, const char *name)
     return 0;
 }
 
+int tropic_chip_id_read(uint8_t *out, size_t out_size)
+{
+    if (out == NULL || out_size < sizeof(struct lt_chip_id_t)) {
+        return -1;
+    }
+
+    struct lt_chip_id_t chip_id;
+    memset(&chip_id, 0, sizeof chip_id);
+
+    lt_ret_t r = lt_get_info_chip_id(&s_handle, &chip_id);
+    if (r != LT_OK) {
+        return -(int) r;
+    }
+
+    memcpy(out, &chip_id, sizeof chip_id);
+    return (int) sizeof chip_id;
+}
+
 int tropic_l2_sweep(void)
 {
     /* tud_task between each step keeps USB CDC alive during the sweep

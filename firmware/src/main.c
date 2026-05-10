@@ -30,9 +30,7 @@
 #include "usb/usb.h"
 #include "cdc_protocol/protocol.h"
 #include "hid_rpc/rpc.h"
-/* Phase 1 — re-enable in Phase 3 M3 for libtropic on chip
- * #include "tropic/tropic.h"
- */
+#include "tropic/tropic.h"  /* re-enabled in Phase 3 M3 for libtropic on chip */
 
 #include "tusb.h"
 
@@ -182,6 +180,14 @@ int main(void)
     boot_banner();
     cdc_protocol_init();
     hid_rpc_init();
+
+    /* Stage 8.5 — libtropic on chip (M3). Runs power-cycle again + lt_init.
+     * If lt_init fails the chip is still powered (power-cycle ran first),
+     * so Phase 2 CDC ASCII passthrough still works for lt-util. We log
+     * but don't halt — HID CHIP_ID command will return an error to the
+     * host if lt_init didn't succeed. */
+    tropic_init();
+
     blink_set_heartbeat();
 
     /* Stage 9 — main loop */

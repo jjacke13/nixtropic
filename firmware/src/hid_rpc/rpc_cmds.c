@@ -25,6 +25,7 @@
 #include <string.h>
 
 #include "platform/rng.h"
+#include "tropic/tropic.h"
 
 #include "stm32u5xx_hal.h"
 
@@ -74,6 +75,19 @@ static int handle_get_random(const uint8_t *req, size_t req_len,
     return (int) n;
 }
 
+static int handle_chip_id(const uint8_t *req, size_t req_len,
+                          uint8_t *resp, size_t resp_max)
+{
+    (void) req;
+    (void) req_len;
+    /* lt_chip_id_t is 128 bytes. The HID RPC fragmenter will split this
+     * across 3 packets (INIT 57 + CONT 59 + CONT 12). */
+    if (resp_max < 128u) {
+        return -1;
+    }
+    return tropic_chip_id_read(resp, resp_max);
+}
+
 /* ===== Table + lookup ===== */
 
 typedef struct {
@@ -84,7 +98,7 @@ typedef struct {
 static const rpc_entry_t HANDLERS[] = {
     { LT_RPC_CMD_PING,       handle_ping },
     { LT_RPC_CMD_GET_RANDOM, handle_get_random },
-    /* M3: { LT_RPC_CMD_CHIP_ID, handle_chip_id } */
+    { LT_RPC_CMD_CHIP_ID,    handle_chip_id },
     /* M4: ECC_GENERATE, ECC_SIGN, ECC_PUBKEY */
     { 0, NULL },  /* sentinel */
 };

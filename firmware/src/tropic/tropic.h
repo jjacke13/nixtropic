@@ -1,18 +1,21 @@
 /*
- * TROPIC01 power-up + libtropic L1/L2 round-trip.
+ * TROPIC01 power-up + libtropic L1/L2 (and L3 in M4) round-trips.
  *
- * Phase 1 D-group public API:
- *   tropic_init()          — power up chip, configure SPI AF mux, lt_init
- *   tropic_l2_sweep()      — print chip ID + RISC-V FW + SPECT FW + bank headers
+ * Public API:
+ *   tropic_init()           — power up chip, configure SPI AF, run lt_init
+ *   tropic_l2_sweep()       — Phase 1 printf-based sweep (CDC console)
+ *   tropic_chip_id_read()   — structured read of chip_id (128 B) for HID RPC
  *
- * Both routines write progress / errors to USB CDC via printf.
- * Returns 0 on success, non-zero error code on failure.
+ * Phase 3 M3 adds the structured tropic_chip_id_read. Phase 1's
+ * tropic_l2_sweep is kept for the CDC console path (Phase 1 validate-phase1.sh
+ * still calls it). Both share the same global lt_handle_t.
  */
 
 #ifndef NIXTROPIC_TROPIC_H
 #define NIXTROPIC_TROPIC_H
 
 #include <stdint.h>
+#include <stddef.h>
 
 /**
  * @brief Power up TROPIC01, configure SPI1 GPIO AF mux, run lt_init.
@@ -42,5 +45,18 @@ int tropic_init(void);
  * @return 0 on success; non-zero if any L2 call failed.
  */
 int tropic_l2_sweep(void);
+
+/**
+ * @brief Read TROPIC01 chip ID into the caller's buffer (no printf).
+ *
+ * Calls lt_get_info_chip_id. Output is 128 bytes — the same layout the
+ * stock TS1302 firmware returns, the same bytes lt-util prints when
+ * given `-i`. Used by the HID RPC LT_RPC_CMD_CHIP_ID handler.
+ *
+ * @param  out       Destination buffer (must be at least 128 bytes)
+ * @param  out_size  Size of `out`; must be >= 128
+ * @return 128 on success; negative on failure (e.g., libtropic err).
+ */
+int tropic_chip_id_read(uint8_t *out, size_t out_size);
 
 #endif /* NIXTROPIC_TROPIC_H */

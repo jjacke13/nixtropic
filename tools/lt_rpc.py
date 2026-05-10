@@ -206,8 +206,16 @@ def cmd_random(args: argparse.Namespace) -> int:
 
 
 def cmd_chip_id(args: argparse.Namespace) -> int:
-    print("Not implemented yet — wait for M3.")
-    return 2
+    rpc = LtRpc()
+    try:
+        data = rpc.chip_id()
+    finally:
+        rpc.close()
+    print(f"CHIP_ID ({len(data)} B): {data.hex()}")
+    if len(data) != 128:
+        print(f"  WARN: expected 128 B, got {len(data)}")
+        return 1
+    return 0
 
 
 def cmd_sign_test(args: argparse.Namespace) -> int:
@@ -227,8 +235,10 @@ def cmd_validate(args: argparse.Namespace) -> int:
          lambda r: len(r.ping(os.urandom(256))) == 256),
         ("GET_RANDOM (32 B entropy)",
          lambda r: len(r.get_random(32)) == 32),
+        ("CHIP_ID (128 B)",
+         lambda r: len(r.chip_id()) == 128),
     ]
-    # M3+ tests are added here as milestones land.
+    # M4+ tests are added here as milestones land.
 
     rpc = LtRpc()
     failures = 0
