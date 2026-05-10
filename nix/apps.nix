@@ -29,6 +29,9 @@ let firmware = openFirmware; in
 let
   inherit (pkgs) writeShellApplication dfu-util usbutils screen coreutils gnugrep;
 
+  # Python with hidapi + cryptography for Phase 3 HID lt-rpc client.
+  py = pkgs.python3.withPackages (p: [ p.hid p.cryptography ]);
+
   flash-stock = writeShellApplication {
     name = "nixtropic-flash-stock";
     runtimeInputs = [ dfu-util usbutils ];
@@ -313,6 +316,21 @@ let
         '';
       };
 
+  # Phase 3 — validate-phase3: runs lt-rpc-over-HID test suite (PING, RANDOM,
+  # CHIP_ID, ECC sign+verify) against the currently-running firmware.
+  # validate-phase3.sh is a thin wrapper that calls lt_rpc.py.
+  validate-phase3 = writeShellApplication {
+    name = "nixtropic-validate-phase3";
+    runtimeInputs = [ py usbutils coreutils gnugrep ];
+    text = ''
+      set -uo pipefail
+      # Both scripts are copied into the Nix store individually; pass the
+      # python client's path explicitly so the shell wrapper can find it.
+      export LT_RPC_PY="${../tools/lt_rpc.py}"
+      exec ${../tools/validate-phase3.sh} "$@"
+    '';
+  };
+
   # Phase 1 — flash-and-validate: orchestrates DFU flash + immediate validate.
   # Solves the "boot markers emit only once" gotcha: after flash, the
   # firmware re-boots fresh and emits its boot block; the validator captures
@@ -493,6 +511,82 @@ let
         '';
       };
 
+  # Phase 3 — flash-and-validate-phase3: DFU flash + immediate Phase 3 validate.
+  # Same shape as flash-and-validate-phase2; the validation step exercises the
+  # HID lt-rpc transport rather than the CDC ASCII protocol.
+  flash-and-validate-phase3 =
+    if firmware == null then
+      writeShellApplication {
+        name = "nixtropic-flash-and-validate-phase3-placeholder";
+        text = ''
+          echo "Custom firmware not available in this flake."
+          exit 1
+        '';
+      }
+    else
+      writeShellApplication {
+        name = "nixtropic-flash-and-validate-phase3";
+        runtimeInputs = [ dfu-util usbutils coreutils gnugrep py ];
+        text = ''
+          set -euo pipefail
+
+          FW_BIN="${firmware}/firmware.bin"
+
+          echo "═══════════════════════════════════════════════════════════════"
+          echo "  Phase 3: flash-and-validate (one-shot regression test)"
+          echo "═══════════════════════════════════════════════════════════════"
+          echo ""
+
+          if ! lsusb | grep -q "0483:df11"; then
+            echo "ERROR: dongle not in DFU mode (0483:df11)." >&2
+            echo "Hold SW1 + replug, then re-run." >&2
+            exit 1
+          fi
+
+          echo "Step 1/2: DFU flash..."
+          DFU_LOG=$(mktemp)
+          trap 'rm -f "$DFU_LOG"' EXIT
+
+          dfu-util -a 0 -s 0x08000000:leave -D "$FW_BIN" 2>&1 | tee "$DFU_LOG" >/dev/null || true
+          DFU_EXIT="''${PIPESTATUS[0]}"
+
+          if [ "$DFU_EXIT" -ne 0 ] && ! grep -q "File downloaded successfully" "$DFU_LOG"; then
+            echo "✗ DFU flash FAILED."
+            exit 1
+          fi
+
+          echo "✓ Flash complete. Waiting up to 12 s for USB re-enumeration..."
+
+          # Phase 3 device exposes /dev/hidraw* (interface 2). Wait for both
+          # the CDC node (/dev/ttyACM*) and the HID node — the latter takes
+          # slightly longer to appear because cdc_acm probes first.
+          for _ in $(seq 1 24); do
+            sleep 0.5
+            if lsusb | grep -q "cafe:4001"; then
+              break
+            fi
+          done
+
+          if ! lsusb | grep -q "cafe:4001"; then
+            echo "✗ nixtropic open firmware (cafe:4001) not enumerated after 12 s." >&2
+            lsusb | grep -E "0483:|cafe:" >&2 || echo "    (no TS1302 VID seen)" >&2
+            exit 1
+          fi
+
+          echo "✓ nixtropic firmware enumerated."
+          echo ""
+          # Same 3 s settle as flash-and-validate-phase2 — gives the L3
+          # session setup time to complete before host-side queries hit it.
+          echo "Settling for 3 s..."
+          sleep 3
+          echo ""
+          echo "Step 2/2: HID lt-rpc validation..."
+          echo ""
+          export LT_RPC_PY="${../tools/lt_rpc.py}"
+          exec ${../tools/validate-phase3.sh}
+        '';
+      };
+
   check-dongle = writeShellApplication {
     name = "nixtropic-check-dongle";
     runtimeInputs = [ usbutils ];
@@ -591,6 +685,22 @@ in
       else
         "${flash-and-validate-phase2}/bin/nixtropic-flash-and-validate-phase2";
     meta.description = "DFU-flash open firmware + immediately validate via lt-util";
+  };
+
+  validate-phase3 = {
+    type = "app";
+    program = "${validate-phase3}/bin/nixtropic-validate-phase3";
+    meta.description = "Phase 3 lt-rpc-over-HID validation (PING + RANDOM + CHIP_ID + Ed25519 sign+verify)";
+  };
+
+  flash-and-validate-phase3 = {
+    type = "app";
+    program =
+      if firmware == null then
+        "${flash-and-validate-phase3}/bin/nixtropic-flash-and-validate-phase3-placeholder"
+      else
+        "${flash-and-validate-phase3}/bin/nixtropic-flash-and-validate-phase3";
+    meta.description = "DFU-flash open firmware + immediately run Phase 3 HID validation";
   };
 
   identify = {

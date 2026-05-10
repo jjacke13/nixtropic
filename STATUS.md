@@ -4,6 +4,85 @@
 
 ---
 
+## 2026-05-10 — Phase 3 OFFICIALLY PASS ✅✅✅ — composite USB + Ed25519 sign over HID
+
+**Phase:** 3 (composite USB CDC + HID, lt-rpc framing, libtropic L3 on chip, Ed25519 sign+verify) — **COMPLETE**
+
+**Pass criterion met:** TROPIC01 generates an Ed25519 keypair on chip, signs a 32 B challenge over the HID lt-rpc transport, host verifies the signature with python-cryptography. CDC + Phase 2 regression still works in parallel.
+
+**Canonical evidence — `nix run .#validate-phase3` output:**
+
+```
+═══════════════════════════════════════════════════════════════
+  Phase 3 validation — lt-rpc-over-HID (PING / RANDOM / CHIP_ID / SIGN)
+═══════════════════════════════════════════════════════════════
+═══════════════════════════════════════════════════════════════
+  Phase 3: lt-rpc-over-HID validation
+═══════════════════════════════════════════════════════════════
+[1/5] PING (32 B echo)                         PASS
+[2/5] PING (large 256 B multi-packet)          PASS
+[3/5] GET_RANDOM (32 B entropy)                PASS
+[4/5] CHIP_ID (128 B)                          PASS
+[5/5] ECC generate + sign + Ed25519 verify (slot 0) PASS
+
+5/5 PASS — Phase 3 lt-rpc-over-HID validated.
+
+═══════════════════════════════════════════════════════════════
+  ✓ Phase 3 validation PASS
+═══════════════════════════════════════════════════════════════
+```
+
+**Build:** firmware.bin ≈ 144 928 B (~56% of 256 KB flash), 20 608 B RAM (~10% of 192 KB). Trezor_crypto vendor lib + libtropic L3 + cert store buffers + crypto context account for the bulk of the M3→M4 size jump.
+
+**Architecture milestones in this phase:**
+
+| M | Scope | Commit |
+|---|---|---|
+| M1 | Composite USB descriptor (CDC + HID raw 64-byte vendor reports under usage page 0xFF00). HID echo stub. | 675931e |
+| M2 | CTAPHID-style framing layer (single fixed channel 0xCAFE0001, INIT/CONT packetization). PING + GET_RANDOM commands. | 675931e |
+| M3 | Re-enable libtropic on chip (CMakeLists block uncommented, tropic.c re-added). L2 CHIP_ID command over HID. | 13f5cfe |
+| M4 | libtropic CAL (trezor_crypto) + AES-GCM + SHA256 + HMAC + X25519. L3 secure session via lt_session_start with sh0_prod0 default keys. ECC generate/pubkey/sign/erase commands. | 7a81a23 |
+| M5 | `nix run .#validate-phase3` + `flash-and-validate-phase3` apps. STATUS/PROJECT/memory updates. | (this) |
+
+**Key files added/modified:**
+
+- `firmware/src/hid_rpc/` (NEW) — `lt_rpc_proto.h`, `rpc.{h,c}` (framing state machine), `rpc_cmds.c` (command handlers)
+- `firmware/src/tropic/tropic.{h,c}` — extended with `tropic_l3_session_ensure`, `tropic_ecc_{generate,pubkey_read,eddsa_sign,erase}`, `tropic_chip_id_read`
+- `firmware/CMakeLists.txt` — libtropic L3 sources, trezor_crypto CAL, trezor vendor crypto subset wired in; trezor needs `AES_VAR + USE_INSECURE_PRNG + ed25519_verify=trezor_crypto_ed25519_verify` per upstream tests recipe
+- `firmware/src/usb/usb_descriptors.c` — added HID INOUT descriptor, vendor usage page 0xFF00, new `STR_HID_INTERFACE` string
+- `firmware/src/usb/tusb_config.h` — `CFG_TUD_HID = 1`, `CFG_TUD_HID_EP_BUFSIZE = 64`
+- `firmware/src/platform/stm32u5xx_hal_conf.h` — explicit `USE_HAL_*_REGISTER_CALLBACKS=0` to satisfy `-Wundef` on the (now non-suppressed) tropic.c
+- `tools/lt_rpc.py` (NEW) — host-side Python client (hidapi-based) with subcommands: ping / random / chip-id / sign-test / validate
+- `tools/validate-phase3.sh` (NEW) — wrapper invoked by `nix run .#validate-phase3`
+- `nix/apps.nix` — new apps `validate-phase3` and `flash-and-validate-phase3`
+
+**Subtle bugs found in this phase:**
+
+1. **Test ordering caught a missing ECC erase**: validate suite re-ran sign-test against an already-occupied slot 0 and got LT_RPC_ERR_OTHER. Added `tropic_ecc_erase` + `LT_RPC_CMD_ECC_ERASE` and made the host test idempotent.
+2. **HAL register-callback macros undefined**: hal_conf.h didn't have `USE_HAL_*_REGISTER_CALLBACKS` defines; tropic.c (now non-suppressed) blew up on `-Wundef` when including stm32u5xx_hal.h. Added explicit `0U` defines.
+3. **trezor_crypto needs `AES_VAR`**: aesgcm.c calls the variable-key dispatcher `aes_encrypt_key()` (not `aes_encrypt_key256`). Found the canonical defines in libtropic's `tests/functional/src/CMakeLists.txt:134`.
+4. **hasher.c dispatcher pulls 5+ unused hash algos**: blake256, blake2b/s, sha3, groestl, ripemd160 all referenced even when only `HASHER_SHA2` is ever requested. Easier to include them (gc-sections strips unused paths) than to fork hasher.c.
+5. **Pre-existing misleading-indentation warnings in tropic.c**: Phase 1's `if (foo()) bar++; tud_task();` pattern only compiled because the libtropic warning-suppression block included tropic.c. Once tropic.c re-entered APP_SOURCES with strict flags, those warnings became errors. Cleaned up the brace pattern.
+6. **Phase 2 first-call transient**: after tropic_init runs lt_init on boot, the first lt-util chip_info call over CDC occasionally catches the SPI bus in an unexpected state and fails with LT_L1_SPI_ERROR. Self-recovers on retry. Tracked as a future polish item (most likely a CS deassert needed between libtropic's session-init L1 traffic and the first ASCII-passthrough command from lt-util).
+
+**Outstanding follow-ups:**
+
+- Phase 2 first-call transient race (see above) — non-blocking, retry works
+- Migrate to libtropic's identify_chip example which uses the fixed adapter (drops `flake.nix` postPatch) — Phase 8 polish
+- pid.codes VID/PID allocation (currently TinyUSB demo 0xCAFE:0x4001) — Phase 8
+- Phase 4 next: FIDO2 stack port (SoloKeys-derived) with stub backend
+
+**Validation commands:**
+
+- `nix run .#validate-phase3` — Phase 3 lt-rpc-over-HID suite (5/5)
+- `nix run .#flash-and-validate-phase3` — one-shot DFU flash + validate
+- `nix run .#validate-phase2` — Phase 2 regression (CDC + lt-util)
+- `nix run .#identify` — works against stock OR open firmware
+
+**Next phase:** Phase 4 — port SoloKeys-derived FIDO2 stack with stub backend. HID interface advertises FIDO usage page 0xF1D0. `fido2-token -L` should list our device.
+
+---
+
 ## 2026-05-10 — Phase 2 OFFICIALLY PASS ✅✅✅ — open firmware byte-faithful with stock
 
 **Phase:** 2 (USB CDC ↔ SPI passthrough — replicate stock fw protocol) — **COMPLETE**

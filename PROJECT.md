@@ -2,7 +2,7 @@
 
 > **Audience:** AI coding agents (Claude, Codex, etc.) working on this project across sessions.
 > **Status:** Living document. Update as decisions and facts evolve.
-> **Last updated:** 2026-05-10 (Phase 2 complete)
+> **Last updated:** 2026-05-10 (Phase 3 complete)
 > **Read order:** This document first. Reference `research/` files for technical depth as needed (don't preload them — fetch by section when relevant).
 
 ---
@@ -226,17 +226,19 @@ Each phase is **independently shippable**. Stop anywhere = useful artifact. Hard
 
 **Stop-here value:** 100% Nix-built, drop-in replacement for stock TS1302 firmware. Reproducible, auditable.
 
-### Phase 3 — Add HID interface (composite device)
+### Phase 3 — Add HID interface (composite device) — ✅ COMPLETE 2026-05-10 (commits `675931e` + `13f5cfe` + `7a81a23` + M5 follow-ups)
 **Goal:** Validate composite USB descriptors and HID-class enumeration.
 
+**Outcome:** 5-test validation suite via `nix run .#validate-phase3` — PING (single + multi-packet), GET_RANDOM, CHIP_ID, ECC generate+sign+verify (Ed25519). TROPIC01 generates the keypair on chip, signs a 32 B challenge through the HID lt-rpc transport with libtropic's L3 secure session (X25519 KX → AES-256-GCM via trezor_crypto CAL), and python-cryptography verifies the signature host-side. CDC + Phase 2 lt-util chip-info still PASS in parallel. firmware.bin ≈ 145 KB / 256 KB; RAM 21 KB / 192 KB.
+
 **Deliverables:**
-- USB descriptor: CDC + HID composite
-- Custom HID-based "lt-rpc" protocol (libtropic commands as HID reports)
-- Host-side test client (~200 lines of Rust or Python) that opens `/dev/hidraw*` and exercises the chip via HID
+- USB descriptor: CDC + HID composite (HID raw 64 B IN/OUT under vendor usage page 0xFF00)
+- Custom HID-based "lt-rpc" protocol (CTAPHID-style framing, single fixed channel 0xCAFE0001)
+- Host-side test client `tools/lt_rpc.py` (Python + hidapi + cryptography, ~250 LOC)
 
-**Test:** OS sees both `/dev/ttyACM*` AND `/dev/hidraw*`. `lt_ecc_eddsa_sign` round-trips over HID; signature verifies. CDC continues to work in parallel.
+**Test:** Both `/dev/ttyACM*` AND `/dev/hidraw*` enumerate. `lt_ecc_eddsa_sign` round-trips over HID; signature verifies. CDC continues to work in parallel (Phase 2 regression 5/5 PASS).
 
-**Stop-here value:** First TS1302 firmware exposing HID. Niche but proves the path.
+**Stop-here value:** First TS1302 firmware exposing HID + first independently-verified open libtropic stack running L3 secure-session-backed Ed25519 sign end-to-end. Foundation for Phase 4 FIDO2 backend.
 
 ### Phase 4 — FIDO2 stack port (stub backend)
 **Goal:** FIDO2/CTAP2 protocol surface working with stub backend (no real crypto yet).
