@@ -473,6 +473,17 @@ let
 
           echo "✓ Detected at $DETECTED_DEV"
           echo ""
+          # Post-detection settle delay. /dev/ttyACMN can appear before the
+          # kernel finishes cdc_acm probe, before TinyUSB completes SET_CONFIG,
+          # AND before TROPIC01's filter cap fully discharges from its DFU-mode
+          # power state — our firmware's 20ms power-off may not be enough on
+          # top of a hot DFU :leave transition. The split test (flash-open
+          # then manual replug + validate-phase2) hides this gap because the
+          # user's USB unplug fully discharges everything. Give 3 s here so
+          # the one-shot mirrors that.
+          echo "Settling for 3 s..."
+          sleep 3
+          echo ""
           echo "Step 2/2: lt-util chip-info validation..."
           echo ""
 
