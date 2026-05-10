@@ -587,6 +587,70 @@ let
         '';
       };
 
+  # Lint: cppcheck pass over OUR original firmware code (hid_rpc/, tropic/,
+  # cdc_protocol/, our usb/ glue, our platform/ wrappers). Vendor sources
+  # (libtropic, trezor_crypto, TinyUSB, ST HAL, CMSIS) deliberately excluded —
+  # they're already audited upstream and finding issues there is not our job.
+  #
+  # Exit code reflects findings: 0 = clean, non-zero = issues found.
+  # Use as a checkpoint before committing security-relevant changes.
+  lint = writeShellApplication {
+    name = "nixtropic-lint";
+    runtimeInputs = [ pkgs.cppcheck coreutils ];
+    text = ''
+      set -uo pipefail
+      FIRMWARE_SRC="$PWD/firmware/src"
+      if [ ! -d "$FIRMWARE_SRC" ]; then
+        echo "ERROR: run from the nixtropic repo root (firmware/src not found)." >&2
+        exit 2
+      fi
+
+      echo "═══════════════════════════════════════════════════════════════"
+      echo "  cppcheck — static analysis of nixtropic original code"
+      echo "═══════════════════════════════════════════════════════════════"
+      echo ""
+      echo "Scope: hid_rpc/, tropic/, cdc_protocol/, usb/ glue, platform/ wrappers."
+      echo "Vendor code (libtropic, trezor_crypto, TinyUSB, HAL, CMSIS) excluded."
+      echo ""
+
+      cppcheck \
+        --enable=warning,style,performance,portability \
+        --check-level=exhaustive \
+        --std=c11 \
+        --platform=unix32 \
+        --inline-suppr \
+        --suppress=missingIncludeSystem \
+        --suppress=unusedFunction \
+        --suppress=unmatchedSuppression \
+        --suppress=checkersReport \
+        --error-exitcode=1 \
+        -I "$FIRMWARE_SRC" \
+        -I "$FIRMWARE_SRC/platform" \
+        -I "$FIRMWARE_SRC/usb" \
+        "$FIRMWARE_SRC/hid_rpc/" \
+        "$FIRMWARE_SRC/tropic/" \
+        "$FIRMWARE_SRC/cdc_protocol/" \
+        "$FIRMWARE_SRC/usb/usb_descriptors.c" \
+        "$FIRMWARE_SRC/usb/usb.c" \
+        "$FIRMWARE_SRC/usb/cdc_io.c" \
+        "$FIRMWARE_SRC/platform/spi.c" \
+        "$FIRMWARE_SRC/platform/clock.c" \
+        "$FIRMWARE_SRC/platform/gpio.c" \
+        "$FIRMWARE_SRC/platform/blink.c" \
+        "$FIRMWARE_SRC/platform/rng.c" \
+        "$FIRMWARE_SRC/main.c" \
+        2>&1
+      rc=$?
+      echo ""
+      if [ $rc -eq 0 ]; then
+        echo "✓ cppcheck clean — no warnings or errors"
+      else
+        echo "⚠ cppcheck found issues (exit $rc). Review above."
+      fi
+      exit $rc
+    '';
+  };
+
   check-dongle = writeShellApplication {
     name = "nixtropic-check-dongle";
     runtimeInputs = [ usbutils ];
@@ -717,5 +781,11 @@ in
     type = "app";
     program = "${check-dongle}/bin/nixtropic-check-dongle";
     meta.description = "Diagnose TS1302 USB enumeration and permissions";
+  };
+
+  lint = {
+    type = "app";
+    program = "${lint}/bin/nixtropic-lint";
+    meta.description = "Static analysis (cppcheck) over original firmware code";
   };
 }
