@@ -1,5 +1,39 @@
 {
   "nodes": {
+    "cmsis-core": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1773666141,
+        "narHash": "sha256-AegEtFucuPXHT8gYO3ISs8jjrs87nBcRBB+Z515ygZA=",
+        "owner": "STMicroelectronics",
+        "repo": "cmsis-core",
+        "rev": "2327f7224ff212b2436e5a4cadda3288143fd041",
+        "type": "github"
+      },
+      "original": {
+        "owner": "STMicroelectronics",
+        "repo": "cmsis-core",
+        "rev": "2327f7224ff212b2436e5a4cadda3288143fd041",
+        "type": "github"
+      }
+    },
+    "cmsis-device-u5": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1751634194,
+        "narHash": "sha256-s/iitv821SUmkw6O8y5bZiMhZOBM1ZBohjaTmbQicVo=",
+        "owner": "STMicroelectronics",
+        "repo": "cmsis-device-u5",
+        "rev": "6e67187dec98035893692ab2923914cb5f4e0117",
+        "type": "github"
+      },
+      "original": {
+        "owner": "STMicroelectronics",
+        "repo": "cmsis-device-u5",
+        "rev": "6e67187dec98035893692ab2923914cb5f4e0117",
+        "type": "github"
+      }
+    },
     "flake-utils": {
       "inputs": {
         "systems": [
@@ -89,13 +123,34 @@
     },
     "root": {
       "inputs": {
+        "cmsis-core": "cmsis-core",
+        "cmsis-device-u5": "cmsis-device-u5",
         "flake-utils": "flake-utils",
         "libtropic": "libtropic",
         "libtropic-pkcs11": "libtropic-pkcs11",
         "libtropic-util": "libtropic-util",
         "nixpkgs": "nixpkgs",
+        "stm32u5xx-hal-driver": "stm32u5xx-hal-driver",
         "systems": "systems",
+        "tinyusb": "tinyusb",
         "ts1302-stock-fw-src": "ts1302-stock-fw-src"
+      }
+    },
+    "stm32u5xx-hal-driver": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1751635140,
+        "narHash": "sha256-lfTK+UTN1f2L16q8a2THvFCl232AtiNXbglvZKzQ/eM=",
+        "owner": "STMicroelectronics",
+        "repo": "stm32u5xx-hal-driver",
+        "rev": "2c5e2568fbdb1900a13ca3b2901fdd302cac3444",
+        "type": "github"
+      },
+      "original": {
+        "owner": "STMicroelectronics",
+        "repo": "stm32u5xx-hal-driver",
+        "rev": "2c5e2568fbdb1900a13ca3b2901fdd302cac3444",
+        "type": "github"
       }
     },
     "systems": {
@@ -110,6 +165,23 @@
       "original": {
         "owner": "nix-systems",
         "repo": "default-linux",
+        "type": "github"
+      }
+    },
+    "tinyusb": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1763606471,
+        "narHash": "sha256-ullUCVAd2XmEP35cFITyE7NHaV2J8jaXkqY0hUlEOSU=",
+        "owner": "hathach",
+        "repo": "tinyusb",
+        "rev": "3af1bec1a9161ee8dec29487831f7ac7ade9e189",
+        "type": "github"
+      },
+      "original": {
+        "owner": "hathach",
+        "repo": "tinyusb",
+        "rev": "3af1bec1a9161ee8dec29487831f7ac7ade9e189",
         "type": "github"
       }
     },

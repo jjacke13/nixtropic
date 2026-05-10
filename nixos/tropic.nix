@@ -59,28 +59,44 @@ in
     services.udev.extraRules = ''
       # Tropic Square TROPIC01 TS1302 USB devkit — udev rules
       #
-      # Stock firmware: VID 0483 (STMicroelectronics), PID 5740 (CDC-ACM,
-      #   labeled "TropicSquare SPI interface")
-      # DFU mode: VID 0483, PID df11 (STM32 factory bootloader)
+      # Three USB identities the dongle can show up as:
+      #   1. Stock firmware app mode: VID 0483 PID 5740 (ST CDC-ACM,
+      #      labeled "TropicSquare SPI interface")
+      #   2. Custom Phase 1 firmware: VID cafe PID 4001 (TinyUSB demo
+      #      defaults — real allocation deferred to Phase 8 ship-prep)
+      #   3. STM32 DFU bootloader: VID 0483 PID df11
       #
-      # Both modes get the same group + permissions so that Nix-flake apps
-      # like `nix run .#flash-stock` and `nix run .#identify` work without
-      # sudo for users in the `${cfg.groupName}` group.
+      # All three get group/permission + ID_MM_DEVICE_IGNORE so:
+      #   - Nix-flake apps work without sudo for `${cfg.groupName}` members
+      #   - ModemManager (NixOS default) does NOT auto-probe the dongle and
+      #     hold /dev/ttyACM* hostage from picocom
 
-      # TS1302 in app mode (CDC-ACM serial)
+      # ----- Stock firmware in app mode -----
       SUBSYSTEM=="tty", ATTRS{idVendor}=="0483", ATTRS{idProduct}=="5740", \
         GROUP="${cfg.groupName}", MODE="0660", \
         SYMLINK+="tropic01", \
+        ENV{ID_MM_DEVICE_IGNORE}="1", \
         TAG+="uaccess"
-
-      # TS1302 in app mode — also expose the bare USB device for diagnostic tools
       SUBSYSTEM=="usb", ATTRS{idVendor}=="0483", ATTRS{idProduct}=="5740", \
         GROUP="${cfg.groupName}", MODE="0660", \
+        ENV{ID_MM_DEVICE_IGNORE}="1", \
         TAG+="uaccess"
 
-      # TS1302 in DFU mode (STM32 factory bootloader, accessed via dfu-util)
+      # ----- Custom Phase 1 firmware in app mode -----
+      SUBSYSTEM=="tty", ATTRS{idVendor}=="cafe", ATTRS{idProduct}=="4001", \
+        GROUP="${cfg.groupName}", MODE="0660", \
+        SYMLINK+="tropic01-phase1", \
+        ENV{ID_MM_DEVICE_IGNORE}="1", \
+        TAG+="uaccess"
+      SUBSYSTEM=="usb", ATTRS{idVendor}=="cafe", ATTRS{idProduct}=="4001", \
+        GROUP="${cfg.groupName}", MODE="0660", \
+        ENV{ID_MM_DEVICE_IGNORE}="1", \
+        TAG+="uaccess"
+
+      # ----- DFU bootloader (any TS1302 firmware can drop into DFU) -----
       SUBSYSTEM=="usb", ATTRS{idVendor}=="0483", ATTRS{idProduct}=="df11", \
         GROUP="${cfg.groupName}", MODE="0660", \
+        ENV{ID_MM_DEVICE_IGNORE}="1", \
         TAG+="uaccess"
     '';
   };

@@ -53,9 +53,44 @@
       url = "github:tropicsquare/libtropic-pkcs11/37406ec5180fffb56f16e4d720188ef20fdd31b5";
       flake = false;
     };
+
+    # ===== Phase 1 inputs (custom firmware) =====
+    # All four pinned to specific commits for reproducibility. None have
+    # submodules (verified 2026-05-10).
+
+    # CMSIS Core — pinned to master @ Release 6.3.0 (2026-03-16).
+    # ST's tagged release at v5.9.0_20250520 is older; master at this commit
+    # carries the labeled "Release 6.3.0" so we treat it as a stable rev.
+    cmsis-core = {
+      url = "github:STMicroelectronics/cmsis-core/2327f7224ff212b2436e5a4cadda3288143fd041";
+      flake = false;
+    };
+
+    # CMSIS Device U5 — v1.4.2 (latest stable tag as of 2026-05-10).
+    # Ships startup_stm32u535xx.s and system_stm32u5xx.c we reuse directly.
+    cmsis-device-u5 = {
+      url = "github:STMicroelectronics/cmsis-device-u5/6e67187dec98035893692ab2923914cb5f4e0117";
+      flake = false;
+    };
+
+    # STM32U5xx HAL driver — v1.6.2 (latest stable tag as of 2026-05-10).
+    # libtropic's stm32u5xx HAL port is HAL-based, so we pull this in.
+    stm32u5xx-hal-driver = {
+      url = "github:STMicroelectronics/stm32u5xx-hal-driver/2c5e2568fbdb1900a13ca3b2901fdd302cac3444";
+      flake = false;
+    };
+
+    # TinyUSB — 0.20.0 release tag (per Phase 1 plan decision P1.25).
+    # We adapt the U545 BSP to U535 inside firmware/third_party_overlay/.
+    tinyusb = {
+      url = "github:hathach/tinyusb/3af1bec1a9161ee8dec29487831f7ac7ade9e189";
+      flake = false;
+    };
   };
 
-  outputs = { self, nixpkgs, flake-utils, ts1302-stock-fw-src, libtropic, libtropic-util, libtropic-pkcs11, ... }:
+  outputs = { self, nixpkgs, flake-utils, ts1302-stock-fw-src, libtropic, libtropic-util, libtropic-pkcs11
+            , cmsis-core, cmsis-device-u5, stm32u5xx-hal-driver, tinyusb
+            , ... }:
     flake-utils.lib.eachDefaultSystem (system:
       let
         pkgs = nixpkgs.legacyPackages.${system};
@@ -106,9 +141,21 @@
           };
         };
 
+        # Phase 1 firmware — custom STM32U535 firmware that exercises libtropic
+        # over USB CDC. Built only on host architectures that have an
+        # arm-none-eabi cross toolchain available (effectively all of them via
+        # gcc-arm-embedded). See docs/PHASE-1-PLAN.md for the build plan.
+        firmware = pkgs.callPackage ./nix/firmware.nix {
+          libtropicSrc = libtropic;
+          cmsisCoreSrc = cmsis-core;
+          cmsisDeviceU5Src = cmsis-device-u5;
+          stm32u5xxHalDriverSrc = stm32u5xx-hal-driver;
+          tinyusbSrc = tinyusb;
+        };
+
         apps = import ./nix/apps.nix {
           inherit pkgs;
-          inherit stockFirmware;
+          inherit stockFirmware firmware;
           libtropicUtil = lt-util;
         };
 
@@ -117,7 +164,7 @@
       in
       {
         packages = {
-          inherit stockFirmware lt-util;
+          inherit stockFirmware lt-util firmware;
           stock-firmware = stockFirmware;  # convenience alias
           default = stockFirmware;
         };

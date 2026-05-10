@@ -1,22 +1,30 @@
-{ pkgs, stockFirmware, libtropicUtil ? null }:
+{ pkgs, stockFirmware, firmware ? null, libtropicUtil ? null }:
 
 # Flake apps for `nix run .#<app>`.
 #
 # Phase 0 set:
-#   flash-stock  — DFU-flashes the stock firmware to the dongle. Requires the
-#                  dongle to be in DFU mode (hold SW1/BOOT0 at power-on).
-#                  See docs/RECOVERY.md for the physical procedure.
-#   identify     — Runs lt-util chip-info command. Requires the dongle to be
-#                  in normal app mode (stock or custom firmware running).
-#   check-dongle — Diagnostic: lsusb + udev permission check.
+#   flash-stock     — DFU-flashes stock firmware (recovery / factory reset)
+#   identify        — Runs lt-util chip-info command (against stock firmware)
+#   check-dongle    — Diagnostic: lsusb + udev permission check
+# Phase 1 set:
+#   flash-firmware  — DFU-flashes our custom Phase 1 firmware. Same DFU
+#                     mechanic as flash-stock, different binary. Per
+#                     plan decision P1.23 (no rename of flash-stock).
+#   read            — Open USB CDC console (/dev/ttyACM*) via screen.
+#                     Uses screen instead of picocom — picocom's tcsetattr
+#                     races with TinyUSB CDC SET_LINE_CODING and hangs
+#                     intermittently (task #27 follow-up).
+#   validate-phase1 — Captures CDC output for ~8s, greps for the markers
+#                     proving Phase 1 PASS: chip_id matches Phase 0 baseline
+#                     byte-for-byte, L2 sweep PASS, PHASE1 OK marker.
 #
 # These apps are deliberately thin wrappers around dfu-util + lt-util. They
-# do not do anything destructive without user input — except flash-stock,
-# which the user must explicitly invoke and which only writes to the
-# STM32U535's flash (not the TROPIC01 chip — chip is unaffected).
+# do not do anything destructive without user input — flash-stock and
+# flash-firmware only write to the STM32U535's flash (not the TROPIC01
+# chip — chip is unaffected).
 
 let
-  inherit (pkgs) writeShellApplication dfu-util usbutils;
+  inherit (pkgs) writeShellApplication dfu-util usbutils screen coreutils gnugrep;
 
   flash-stock = writeShellApplication {
     name = "nixtropic-flash-stock";
@@ -143,6 +151,231 @@ let
         '';
       };
 
+  # Phase 1 — flash-firmware (decision P1.23): mirror flash-stock with
+  # different binary path. Same DFU dance, same benign-tail-error handling.
+  flash-firmware =
+    if firmware == null then
+      writeShellApplication {
+        name = "nixtropic-flash-firmware-placeholder";
+        text = ''
+          echo "Custom firmware not yet built in this flake."
+          echo "Phase 0 placeholder; will be wired up after firmware pkg added."
+          exit 1
+        '';
+      }
+    else
+      writeShellApplication {
+        name = "nixtropic-flash-firmware";
+        runtimeInputs = [ dfu-util usbutils ];
+        text = ''
+          set -euo pipefail
+
+          FW_BIN="${firmware}/firmware.bin"
+
+          echo "═══════════════════════════════════════════════════════════════"
+          echo "  Flashing nixtropic Phase 1 firmware"
+          echo "═══════════════════════════════════════════════════════════════"
+          echo ""
+          echo "Firmware: $FW_BIN"
+          echo ""
+          echo "Checking for TS1302 in DFU mode (USB ID 0483:df11)..."
+          if ! lsusb | grep -q "0483:df11"; then
+            echo ""
+            echo "ERROR: Dongle is NOT in DFU mode."
+            echo ""
+            echo "To enter DFU mode:"
+            echo "  1. Unplug the TS1302 dongle"
+            echo "  2. Hold the SW1 button (the only button) DOWN"
+            echo "  3. While holding SW1, plug the dongle in"
+            echo "  4. Release SW1 after USB enumeration"
+            echo "  5. Verify: lsusb | grep 0483:df11"
+            echo ""
+            echo "Then re-run this command."
+            echo ""
+            echo "If lsusb shows '0483:5740' instead, the dongle is running"
+            echo "the stock firmware. Recovery from custom-fw is the same DFU"
+            echo "dance — there's no risk."
+            exit 1
+          fi
+
+          echo "✓ DFU mode detected"
+          echo ""
+          echo "Flashing custom firmware... (writes STM32U535 flash at 0x08000000;"
+          echo "TROPIC01 chip is NOT touched by this operation)"
+          echo ""
+
+          # Same benign-tail-error handling as flash-stock — see comment there.
+          DFU_LOG=$(mktemp)
+          trap 'rm -f "$DFU_LOG"' EXIT
+
+          dfu-util -a 0 -s 0x08000000:leave -D "$FW_BIN" 2>&1 | tee "$DFU_LOG" || true
+          DFU_EXIT="''${PIPESTATUS[0]}"
+
+          echo ""
+          if [ "$DFU_EXIT" -eq 0 ]; then
+            echo "✓ Flash complete (clean dfu-util exit)."
+          elif grep -q "File downloaded successfully" "$DFU_LOG"; then
+            echo "✓ Flash complete."
+            echo "  ('Error during download get_status' after the :leave is a benign"
+            echo "  dfu-util quirk — STM32 jumped to user firmware before dfu-util"
+            echo "  could read final status.)"
+          else
+            echo "✗ Flash FAILED — dfu-util exit $DFU_EXIT and no"
+            echo "  'File downloaded successfully' marker. Dongle is likely still"
+            echo "  in DFU mode; safe to retry. If retries fail, fall back to"
+            echo "  flash-stock for known-good recovery (docs/RECOVERY.md)."
+            exit 1
+          fi
+
+          echo ""
+          echo "  Phase 1 firmware should now be running. PA9 LED should pulse"
+          echo "  at ~1 Hz (heartbeat). USB CDC enumeration comes in Group C."
+        '';
+      };
+
+  # Phase 1 — read: open USB CDC console via screen.
+  # Why screen and not picocom: picocom calls tcsetattr at open which
+  # generates a USB CDC SET_LINE_CODING control transfer. TinyUSB's
+  # default response timing races with picocom's expectation, causing
+  # picocom to hang intermittently (verified by user 2026-05-10).
+  # screen takes a different code path that's more tolerant.
+  read = writeShellApplication {
+    name = "nixtropic-read";
+    runtimeInputs = [ screen usbutils ];
+    text = ''
+      set -euo pipefail
+
+      DEV="''${TROPIC_DEV:-/dev/ttyACM0}"
+
+      if [ ! -e "$DEV" ]; then
+        echo "ERROR: $DEV not found." >&2
+        echo "" >&2
+        echo "If the dongle is plugged in:" >&2
+        if lsusb | grep -qi "cafe:4001"; then
+          echo "  USB is enumerated as nixtropic Phase 1 (cafe:4001) but the" >&2
+          echo "  TTY device node is at a different path. Try TROPIC_DEV=/dev/ttyACM1" >&2
+        elif lsusb | grep -q "0483:5740"; then
+          echo "  USB shows stock firmware (0483:5740). Custom Phase 1 firmware" >&2
+          echo "  is not currently flashed. Run: sudo nix run .#flash-firmware" >&2
+        elif lsusb | grep -q "0483:df11"; then
+          echo "  USB shows DFU mode (0483:df11). The dongle is not running" >&2
+          echo "  any application firmware. Run: sudo nix run .#flash-firmware" >&2
+        else
+          echo "  USB doesn't show any TS1302-related VID. Check cable + plug." >&2
+        fi
+        exit 1
+      fi
+
+      echo "Opening $DEV via screen at 115200 baud."
+      echo "  Exit: Ctrl-A k  (then 'y' to confirm)"
+      echo ""
+      exec screen "$DEV" 115200
+    '';
+  };
+
+  validate-phase1 = writeShellApplication {
+    name = "nixtropic-validate-phase1";
+    runtimeInputs = [ coreutils gnugrep ];
+    text = ''
+      set -uo pipefail
+      exec ${../tools/validate-phase1.sh} "$@"
+    '';
+  };
+
+  # Phase 1 — flash-and-validate: orchestrates DFU flash + immediate validate.
+  # Solves the "boot markers emit only once" gotcha: after flash, the
+  # firmware re-boots fresh and emits its boot block; the validator captures
+  # that within the same script run.
+  flash-and-validate =
+    if firmware == null then
+      writeShellApplication {
+        name = "nixtropic-flash-and-validate-placeholder";
+        text = ''
+          echo "Custom firmware not available in this flake."
+          exit 1
+        '';
+      }
+    else
+      writeShellApplication {
+        name = "nixtropic-flash-and-validate";
+        runtimeInputs = [ dfu-util usbutils coreutils gnugrep ];
+        text = ''
+          set -euo pipefail
+
+          FW_BIN="${firmware}/firmware.bin"
+
+          echo "═══════════════════════════════════════════════════════════════"
+          echo "  Phase 1: flash-and-validate (one-shot regression test)"
+          echo "═══════════════════════════════════════════════════════════════"
+          echo ""
+
+          # Step 1: confirm dongle in DFU mode
+          if ! lsusb | grep -q "0483:df11"; then
+            echo "ERROR: dongle is not in DFU mode (0483:df11)." >&2
+            echo "" >&2
+            echo "To enter DFU mode:" >&2
+            echo "  1. Unplug the TS1302 dongle" >&2
+            echo "  2. Hold SW1 (the only button) DOWN" >&2
+            echo "  3. While holding SW1, plug the dongle back in" >&2
+            echo "  4. Release SW1 after USB enumeration" >&2
+            echo "  5. Verify: lsusb | grep 0483:df11" >&2
+            echo "" >&2
+            echo "Then re-run this command." >&2
+            exit 1
+          fi
+
+          # Step 2: flash via DFU (same logic as flash-firmware)
+          echo "Step 1/2: DFU flash..."
+          DFU_LOG=$(mktemp)
+          trap 'rm -f "$DFU_LOG"' EXIT
+
+          dfu-util -a 0 -s 0x08000000:leave -D "$FW_BIN" 2>&1 | tee "$DFU_LOG" >/dev/null || true
+          DFU_EXIT="''${PIPESTATUS[0]}"
+
+          if [ "$DFU_EXIT" -ne 0 ] && ! grep -q "File downloaded successfully" "$DFU_LOG"; then
+            echo "✗ DFU flash FAILED. See $DFU_LOG for full output."
+            exit 1
+          fi
+
+          echo "✓ Flash complete. Waiting up to 12 s for USB re-enumeration..."
+
+          # Poll for /dev/ttyACM* — our dongle's enumeration sometimes
+          # retries 2-3 times (kernel error -71 then success), totaling
+          # ~3-4 seconds. Plus cdc_acm attach + udev rule processing.
+          DETECTED_DEV=""
+          for i in $(seq 1 24); do
+            sleep 0.5
+            for candidate in /dev/ttyACM0 /dev/ttyACM1 /dev/ttyACM2 /dev/ttyACM3; do
+              if [ -e "$candidate" ]; then
+                DETECTED_DEV="$candidate"
+                break 2
+              fi
+            done
+          done
+
+          if [ -z "$DETECTED_DEV" ]; then
+            echo "✗ No /dev/ttyACM* appeared after 12 s. Possible causes:" >&2
+            echo "    - Firmware crashed before USB init (run nix run .#read after manual replug" >&2
+            echo "      to see if device responds at all)" >&2
+            echo "    - Host USB port had a state issue — try unplug + replug (no SW1) and" >&2
+            echo "      run nix run .#validate-phase1 manually within 5 s of replug" >&2
+            echo "" >&2
+            echo "  Current USB state:" >&2
+            lsusb | grep -E "0483:|cafe:" >&2 || echo "    (no TS1302-related VID seen)" >&2
+            exit 1
+          fi
+
+          echo "✓ Detected at $DETECTED_DEV"
+          echo ""
+          echo "Step 2/2: capture + validate boot output..."
+          echo ""
+
+          export TROPIC_DEV="$DETECTED_DEV"
+          export TROPIC_VALIDATE_TIMEOUT=10
+          exec ${../tools/validate-phase1.sh}
+        '';
+      };
+
   check-dongle = writeShellApplication {
     name = "nixtropic-check-dongle";
     runtimeInputs = [ usbutils ];
@@ -189,6 +422,38 @@ in
     type = "app";
     program = "${flash-stock}/bin/nixtropic-flash-stock";
     meta.description = "DFU-flash the stock TS1302 firmware (recovery)";
+  };
+
+  flash-firmware = {
+    type = "app";
+    program =
+      if firmware == null then
+        "${flash-firmware}/bin/nixtropic-flash-firmware-placeholder"
+      else
+        "${flash-firmware}/bin/nixtropic-flash-firmware";
+    meta.description = "DFU-flash nixtropic Phase 1 firmware";
+  };
+
+  read = {
+    type = "app";
+    program = "${read}/bin/nixtropic-read";
+    meta.description = "Open USB CDC console (/dev/ttyACM*) via screen";
+  };
+
+  validate-phase1 = {
+    type = "app";
+    program = "${validate-phase1}/bin/nixtropic-validate-phase1";
+    meta.description = "Automated Phase 1 PASS check (chip ID + L2 sweep) — run RIGHT AFTER flash";
+  };
+
+  flash-and-validate = {
+    type = "app";
+    program =
+      if firmware == null then
+        "${flash-and-validate}/bin/nixtropic-flash-and-validate-placeholder"
+      else
+        "${flash-and-validate}/bin/nixtropic-flash-and-validate";
+    meta.description = "DFU-flash Phase 1 firmware + immediately validate";
   };
 
   identify = {
