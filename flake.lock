@@ -20,18 +20,69 @@
         "type": "github"
       }
     },
+    "libtropic": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1776761462,
+        "narHash": "sha256-Ap+wa05RgDO0UMofBBmhDQ30dLKUmYDlpJ1FvqTgEhU=",
+        "owner": "tropicsquare",
+        "repo": "libtropic",
+        "rev": "6d058a36c7db9e55549a5e79ed4f9a83def80c0a",
+        "type": "github"
+      },
+      "original": {
+        "owner": "tropicsquare",
+        "repo": "libtropic",
+        "rev": "6d058a36c7db9e55549a5e79ed4f9a83def80c0a",
+        "type": "github"
+      }
+    },
+    "libtropic-pkcs11": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1774422296,
+        "narHash": "sha256-vjL9y42cobCPVbJemJybTCeOWmuBBnyiMFOL5D72goc=",
+        "owner": "tropicsquare",
+        "repo": "libtropic-pkcs11",
+        "rev": "37406ec5180fffb56f16e4d720188ef20fdd31b5",
+        "type": "github"
+      },
+      "original": {
+        "owner": "tropicsquare",
+        "repo": "libtropic-pkcs11",
+        "rev": "37406ec5180fffb56f16e4d720188ef20fdd31b5",
+        "type": "github"
+      }
+    },
+    "libtropic-util": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1757682364,
+        "narHash": "sha256-KLWKw26rw5IpRTKvZqMXJAo2oYLLo5ZX/yp1jn9wRHQ=",
+        "owner": "tropicsquare",
+        "repo": "libtropic-util",
+        "rev": "cbc30f5ac37e7d0874df6b989d4b4be7d01d93e8",
+        "type": "github"
+      },
+      "original": {
+        "owner": "tropicsquare",
+        "repo": "libtropic-util",
+        "rev": "cbc30f5ac37e7d0874df6b989d4b4be7d01d93e8",
+        "type": "github"
+      }
+    },
     "nixpkgs": {
       "locked": {
-        "lastModified": 1750605355,
-        "narHash": "sha256-xT8cPLTxlktxI9vSdoBlAVK7dXgd8IK59j7ZwzkkhnI=",
+        "lastModified": 1778003029,
+        "narHash": "sha256-q/nkKLDtHIyLjZpKhWk3cSK5IYsFqtMd6UtXF3ddjgA=",
         "owner": "nixos",
         "repo": "nixpkgs",
-        "rev": "3078b9a9e75f1790e6d6ef9955fdc6a2d1740cc6",
+        "rev": "0c88e1f2bdb93d5999019e99cb0e61e1fe2af4c5",
         "type": "github"
       },
       "original": {
         "owner": "nixos",
-        "ref": "nixpkgs-unstable",
+        "ref": "nixos-25.11",
         "repo": "nixpkgs",
         "type": "github"
       }
@@ -39,8 +90,12 @@
     "root": {
       "inputs": {
         "flake-utils": "flake-utils",
+        "libtropic": "libtropic",
+        "libtropic-pkcs11": "libtropic-pkcs11",
+        "libtropic-util": "libtropic-util",
         "nixpkgs": "nixpkgs",
-        "systems": "systems"
+        "systems": "systems",
+        "ts1302-stock-fw-src": "ts1302-stock-fw-src"
       }
     },
     "systems": {
@@ -55,6 +110,23 @@
       "original": {
         "owner": "nix-systems",
         "repo": "default-linux",
+        "type": "github"
+      }
+    },
+    "ts1302-stock-fw-src": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1756309325,
+        "narHash": "sha256-djWbIlvfM2fB517aSl/f4Kqe8kdFpnMBcht+gkmBcws=",
+        "owner": "tropicsquare",
+        "repo": "tropic01-stm32u5-usb-devkit-fw",
+        "rev": "36a40baa802cf226e07296604afea24780fd09d1",
+        "type": "github"
+      },
+      "original": {
+        "owner": "tropicsquare",
+        "repo": "tropic01-stm32u5-usb-devkit-fw",
+        "rev": "36a40baa802cf226e07296604afea24780fd09d1",
         "type": "github"
       }
     }

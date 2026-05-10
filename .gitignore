@@ -1,0 +1,26 @@
+# Nix build artifacts
+/result
+/result-*
+
+# Claude Code session metadata (per-machine, not source)
+/.claude/
+
+# Firmware build artifacts (Phase 1+)
+/firmware/build/
+/firmware/**/*.o
+/firmware/**/*.elf
+/firmware/**/*.bin
+/firmware/**/*.hex
+/firmware/**/*.lst
+/firmware/**/*.map
+
+# Editor / OS noise
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+
+# Direnv (if used by contributor)
+.direnv/
+.envrc.local
