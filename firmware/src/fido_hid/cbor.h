@@ -45,7 +45,7 @@ int cbor_write_map_header(cbor_writer_t *w, size_t count);
 int cbor_write_bool(cbor_writer_t *w, bool v);
 int cbor_write_null(cbor_writer_t *w);
 
-/* ===== Minimal decoder (M4 will extend) ===== */
+/* ===== Decoder ===== */
 
 typedef struct {
     const uint8_t *buf;
@@ -59,5 +59,35 @@ void cbor_reader_init(cbor_reader_t *r, const uint8_t *buf, size_t len);
 /* Peek the major type at current position without advancing. Returns
  * the major type (0..7) or -1 if past end. */
 int cbor_reader_peek_major(const cbor_reader_t *r);
+
+/* Read the next CBOR head: returns the major type and the embedded
+ * length / value. Advances the position. Returns 0 on success, -1 on
+ * any error (truncated, indefinite-length, etc.) and sets r->err. */
+int cbor_reader_read_head(cbor_reader_t *r, uint8_t *mt, uint64_t *v);
+
+/* Read an unsigned integer (mt 0). Returns 0/-1. */
+int cbor_reader_read_uint(cbor_reader_t *r, uint64_t *v);
+
+/* Read a byte string (mt 2). Sets *ptr to a pointer into the buffer
+ * and *len to the byte count. Returns 0/-1. */
+int cbor_reader_read_bytes(cbor_reader_t *r, const uint8_t **ptr, size_t *len);
+
+/* Read a text string (mt 3). Same pointer-into-buffer return as
+ * read_bytes. Caller treats the bytes as UTF-8 if it cares. */
+int cbor_reader_read_text(cbor_reader_t *r, const uint8_t **ptr, size_t *len);
+
+/* Read an array header (mt 4). Returns the element count via *count. */
+int cbor_reader_read_array_header(cbor_reader_t *r, size_t *count);
+
+/* Read a map header (mt 5). Returns the key/value pair count. */
+int cbor_reader_read_map_header(cbor_reader_t *r, size_t *count);
+
+/* Skip exactly one CBOR data item (recursively, for containers). Used
+ * for ignoring unknown / non-relevant map entries. Returns 0/-1. */
+int cbor_reader_skip(cbor_reader_t *r);
+
+/* Returns the byte position; useful for snapshotting/rewinding. */
+size_t cbor_reader_pos(const cbor_reader_t *r);
+void   cbor_reader_set_pos(cbor_reader_t *r, size_t pos);
 
 #endif /* NIXTROPIC_FIDO_HID_CBOR_H */

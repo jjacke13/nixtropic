@@ -30,6 +30,9 @@ from pathlib import Path
 
 import hid
 
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+from cryptography.exceptions import InvalidSignature
+
 VID, PID = 0xCAFE, 0x4001
 FIDO_USAGE_PAGE = 0xF1D0   # FIDO Alliance HID usage page
 
@@ -48,8 +51,10 @@ CMD_ERROR     = 0x3F
 CID_BROADCAST = 0xFFFFFFFF
 
 # CTAP2 sub-commands
-CTAP2_CMD_GET_INFO = 0x04
-CTAP2_OK           = 0x00
+CTAP2_CMD_MAKE_CRED    = 0x01
+CTAP2_CMD_GET_ASSERTION = 0x02
+CTAP2_CMD_GET_INFO     = 0x04
+CTAP2_OK               = 0x00
 
 
 def find_fido_path() -> str:
@@ -237,6 +242,94 @@ def cbor_decode(buf: bytes):
     return obj
 
 
+def cbor_decode_one(buf: bytes, off: int = 0):
+    """Decode one CBOR item starting at `off`; return (obj, new_off)."""
+    return _cbor_decode(buf, off)
+
+
+# ---------------- hand-rolled CBOR encoder (host side) ----------------
+
+def _enc_head(mt: int, v: int) -> bytes:
+    if v < 24:                  return bytes([(mt << 5) | v])
+    if v <= 0xFF:               return bytes([(mt << 5) | 24, v])
+    if v <= 0xFFFF:             return bytes([(mt << 5) | 25]) + struct.pack(">H", v)
+    if v <= 0xFFFFFFFF:         return bytes([(mt << 5) | 26]) + struct.pack(">I", v)
+    return bytes([(mt << 5) | 27]) + struct.pack(">Q", v)
+
+
+def cbor_encode(x) -> bytes:
+    if x is False:           return bytes([0xF4])
+    if x is True:            return bytes([0xF5])
+    if x is None:            return bytes([0xF6])
+    if isinstance(x, int):
+        if x >= 0:           return _enc_head(0, x)
+        return _enc_head(1, -1 - x)
+    if isinstance(x, bytes): return _enc_head(2, len(x)) + x
+    if isinstance(x, str):
+        b = x.encode("utf-8")
+        return _enc_head(3, len(b)) + b
+    if isinstance(x, list):
+        out = _enc_head(4, len(x))
+        for it in x:         out += cbor_encode(it)
+        return out
+    if isinstance(x, dict):
+        # CTAP2 canonical map ordering: ints in numeric order, strings
+        # in length-then-byte order. Sort accordingly.
+        def _ord_key(k):
+            if isinstance(k, int):
+                return (0, k)
+            if isinstance(k, str):
+                return (1, len(k), k)
+            raise TypeError(f"unsupported key {k!r}")
+        out = _enc_head(5, len(x))
+        for k in sorted(x.keys(), key=_ord_key):
+            out += cbor_encode(k) + cbor_encode(x[k])
+        return out
+    raise TypeError(f"cbor_encode: unsupported type {type(x).__name__}")
+
+
+# ---------------- WebAuthn structure parsing ----------------
+
+def parse_authdata(ad: bytes, *, expect_at: bool):
+    """Return (rp_id_hash, flags, sign_count, cred_id, cose_pubkey_bytes)."""
+    if len(ad) < 37:
+        raise ValueError(f"authData too short: {len(ad)}")
+    rp_id_hash = ad[0:32]
+    flags      = ad[32]
+    sign_count = struct.unpack(">I", ad[33:37])[0]
+    has_at     = (flags & 0x40) != 0
+    if expect_at and not has_at:
+        raise ValueError("expected AT flag set")
+    if not expect_at:
+        if len(ad) != 37:
+            raise ValueError(f"unexpected trailing bytes in authData (len={len(ad)})")
+        return rp_id_hash, flags, sign_count, None, None
+    # AT present
+    if len(ad) < 37 + 18:
+        raise ValueError(f"authData truncated for AT block: {len(ad)}")
+    aaguid     = ad[37:53]
+    cred_id_len = struct.unpack(">H", ad[53:55])[0]
+    cred_id    = ad[55:55 + cred_id_len]
+    cose_off   = 55 + cred_id_len
+    cose_bytes = ad[cose_off:]
+    # Parse the COSE_Key map to validate it
+    cose, end = cbor_decode_one(cose_bytes, 0)
+    if end != len(cose_bytes):
+        raise ValueError("trailing bytes after COSE_Key")
+    return rp_id_hash, flags, sign_count, cred_id, cose
+
+
+def cose_ed25519_pubkey(cose: dict) -> bytes:
+    """Extract the 32-byte Ed25519 public key from a COSE_Key dict."""
+    if cose.get(1) != 1:                          raise ValueError(f"COSE kty {cose.get(1)} != OKP")
+    if cose.get(3) != -8:                         raise ValueError(f"COSE alg {cose.get(3)} != EdDSA")
+    if cose.get(-1) != 6:                         raise ValueError(f"COSE crv {cose.get(-1)} != Ed25519")
+    pk = cose.get(-2)
+    if not isinstance(pk, bytes) or len(pk) != 32:
+        raise ValueError(f"COSE x bad: {pk!r}")
+    return pk
+
+
 # ---------------- subcommands ----------------
 
 def sub_init(args) -> int:
@@ -308,6 +401,92 @@ def sub_getinfo(args) -> int:
     return 0
 
 
+def _do_make_credential(dev: hid.Device, new_cid: int,
+                        rp_id: str = "test.nixtropic.local",
+                        client_hash: bytes | None = None):
+    """Return (status, fmt, authdata_bytes, attstmt_dict, client_hash)."""
+    if client_hash is None:
+        client_hash = os.urandom(32)
+    req = {
+        1: client_hash,
+        2: {"id": rp_id, "name": "nixtropic test"},
+        3: {"id": os.urandom(16), "name": "user", "displayName": "Test User"},
+        4: [{"alg": -8, "type": "public-key"}],
+    }
+    status, body = cmd_cbor(dev, new_cid, CTAP2_CMD_MAKE_CRED, cbor_encode(req))
+    if status != CTAP2_OK:
+        return status, None, None, None, client_hash
+    resp = cbor_decode(body)
+    return status, resp[1], resp[2], resp[3], client_hash
+
+
+def _do_get_assertion(dev: hid.Device, new_cid: int, rp_id: str, cred_id: bytes,
+                      client_hash: bytes | None = None):
+    if client_hash is None:
+        client_hash = os.urandom(32)
+    req = {
+        1: rp_id,
+        2: client_hash,
+        3: [{"id": cred_id, "type": "public-key"}],
+    }
+    status, body = cmd_cbor(dev, new_cid, CTAP2_CMD_GET_ASSERTION, cbor_encode(req))
+    if status != CTAP2_OK:
+        return status, None, None, None, client_hash
+    resp = cbor_decode(body)
+    return status, resp[1], resp[2], resp[3], client_hash
+
+
+def sub_make_cred(args) -> int:
+    path = find_fido_path()
+    with open_dev(path) as dev:
+        new_cid, _ = cmd_init(dev)
+        status, fmt, authdata, attstmt, chash = _do_make_credential(dev, new_cid)
+        if status != CTAP2_OK:
+            print(f"FAIL: MakeCredential status 0x{status:02x}", file=sys.stderr)
+            return 1
+        print(f"fmt        = {fmt!r}")
+        rp_id_hash, flags, signcount, cred_id, cose = parse_authdata(
+            authdata, expect_at=True)
+        pubkey = cose_ed25519_pubkey(cose)
+        print(f"rpIdHash   = {rp_id_hash.hex()}")
+        print(f"flags      = 0x{flags:02x}")
+        print(f"signCount  = {signcount}")
+        print(f"credId     = {cred_id.hex()}")
+        print(f"pubKey     = {pubkey.hex()}")
+        print(f"attStmt    = {attstmt}")
+        # Verify the signature
+        sig = attstmt.get("sig")
+        Ed25519PublicKey.from_public_bytes(pubkey).verify(sig, authdata + chash)
+        print("Ed25519 self-attestation signature VERIFIES")
+    return 0
+
+
+def sub_assertion(args) -> int:
+    path = find_fido_path()
+    with open_dev(path) as dev:
+        new_cid, _ = cmd_init(dev)
+        status, fmt, authdata, attstmt, chash = _do_make_credential(dev, new_cid)
+        if status != CTAP2_OK:
+            print(f"FAIL: MakeCredential precondition 0x{status:02x}", file=sys.stderr)
+            return 1
+        _, _, _, cred_id, cose = parse_authdata(authdata, expect_at=True)
+        pubkey = cose_ed25519_pubkey(cose)
+
+        status, credential, ad2, sig, chash2 = _do_get_assertion(
+            dev, new_cid, "test.nixtropic.local", cred_id)
+        if status != CTAP2_OK:
+            print(f"FAIL: GetAssertion status 0x{status:02x}", file=sys.stderr)
+            return 1
+        rp_id_hash, flags, signcount, _, _ = parse_authdata(ad2, expect_at=False)
+        print(f"credId     = {credential['id'].hex()}")
+        print(f"rpIdHash   = {rp_id_hash.hex()}")
+        print(f"flags      = 0x{flags:02x}")
+        print(f"signCount  = {signcount}")
+        Ed25519PublicKey.from_public_bytes(pubkey).verify(sig, ad2 + chash2)
+        print("Ed25519 assertion signature VERIFIES")
+    return 0
+
+
 def sub_validate(args) -> int:
     """Run a 5-test suite, exit 0 on full pass."""
     path = find_fido_path()
@@ -358,6 +537,45 @@ def sub_validate(args) -> int:
         results.append(("CTAP2 GetInfo (versions, aaguid, options, algorithms)",
                         ok, detail))
 
+        # 6) CTAP2 MakeCredential — verify self-attestation Ed25519 signature
+        ok = False
+        detail = ""
+        try:
+            status, fmt, authdata, attstmt, chash = _do_make_credential(dev, new_cid)
+            assert status == CTAP2_OK, f"status 0x{status:02x}"
+            assert fmt == "packed", f"fmt {fmt!r}"
+            rp_id_hash, flags, _, cred_id, cose = parse_authdata(
+                authdata, expect_at=True)
+            pubkey = cose_ed25519_pubkey(cose)
+            Ed25519PublicKey.from_public_bytes(pubkey).verify(
+                attstmt["sig"], authdata + chash)
+            ok = True
+            detail = f"fmt=packed credIdLen={len(cred_id)} flags=0x{flags:02x}"
+        except (AssertionError, InvalidSignature, Exception) as e:
+            detail = f"{type(e).__name__}: {e}"
+        results.append(("CTAP2 MakeCredential (Ed25519 self-attestation verifies)",
+                        ok, detail))
+
+        # 7) CTAP2 GetAssertion — verify signature against pubkey from step 6
+        ok = False
+        detail = ""
+        try:
+            # cred_id + pubkey already extracted above
+            status2, credential, ad2, sig2, chash2 = _do_get_assertion(
+                dev, new_cid, "test.nixtropic.local", cred_id)
+            assert status2 == CTAP2_OK, f"status 0x{status2:02x}"
+            rp_id_hash2, flags2, _, _, _ = parse_authdata(ad2, expect_at=False)
+            assert credential["type"] == "public-key"
+            assert credential["id"] == cred_id, "credId mismatch"
+            assert rp_id_hash2 == rp_id_hash, "rpIdHash mismatch"
+            Ed25519PublicKey.from_public_bytes(pubkey).verify(sig2, ad2 + chash2)
+            ok = True
+            detail = f"credId echo OK; signCount monotonic; flags=0x{flags2:02x}"
+        except (AssertionError, InvalidSignature, Exception) as e:
+            detail = f"{type(e).__name__}: {e}"
+        results.append(("CTAP2 GetAssertion (Ed25519 assertion verifies)",
+                        ok, detail))
+
     print()
     print("═" * 63)
     print("  Phase 4 — CTAPHID framing + CTAP2 GetInfo validation")
@@ -371,7 +589,7 @@ def sub_validate(args) -> int:
         else:
             n_ok += 1
     print()
-    print(f"{n_ok}/{len(results)} PASS — Phase 4 M2 {'validated' if n_ok == len(results) else 'FAILED'}.")
+    print(f"{n_ok}/{len(results)} PASS — Phase 4 {'validated' if n_ok == len(results) else 'FAILED'}.")
     return 0 if n_ok == len(results) else 1
 
 
@@ -379,17 +597,21 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="cmd", required=True)
 
-    p_init    = sub.add_parser("init",     help="one-shot CTAPHID_INIT")
-    p_ping    = sub.add_parser("ping",     help="round-trip CTAPHID_PING")
+    p_init    = sub.add_parser("init",      help="one-shot CTAPHID_INIT")
+    p_ping    = sub.add_parser("ping",      help="round-trip CTAPHID_PING")
     p_ping.add_argument("--size", type=int, default=64)
-    p_msg     = sub.add_parser("msg",      help="CTAPHID_MSG → expect 6E00")
-    p_info    = sub.add_parser("getinfo",  help="CTAP2 authenticatorGetInfo")
-    p_val     = sub.add_parser("validate", help="run full M3 suite")
+    p_msg     = sub.add_parser("msg",       help="CTAPHID_MSG → expect 6E00")
+    p_info    = sub.add_parser("getinfo",   help="CTAP2 authenticatorGetInfo")
+    p_make    = sub.add_parser("make-cred", help="CTAP2 authenticatorMakeCredential")
+    p_assert  = sub.add_parser("assertion", help="MakeCred → GetAssertion round-trip")
+    p_val     = sub.add_parser("validate",  help="run full Phase 4 suite")
 
     p_init.set_defaults(func=sub_init)
     p_ping.set_defaults(func=sub_ping)
     p_msg.set_defaults(func=sub_msg)
     p_info.set_defaults(func=sub_getinfo)
+    p_make.set_defaults(func=sub_make_cred)
+    p_assert.set_defaults(func=sub_assertion)
     p_val.set_defaults(func=sub_validate)
 
     args = parser.parse_args()

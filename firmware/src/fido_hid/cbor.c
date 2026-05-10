@@ -134,7 +134,7 @@ int cbor_write_null(cbor_writer_t *w)
     return put_byte(w, (uint8_t)(mt_bits | CBOR_SIMPLE_NULL));
 }
 
-/* ===== Decoder helpers ===== */
+/* ===== Decoder ===== */
 
 void cbor_reader_init(cbor_reader_t *r, const uint8_t *buf, size_t len)
 {
@@ -144,8 +144,139 @@ void cbor_reader_init(cbor_reader_t *r, const uint8_t *buf, size_t len)
     r->err = 0;
 }
 
+size_t cbor_reader_pos(const cbor_reader_t *r) { return r->pos; }
+void   cbor_reader_set_pos(cbor_reader_t *r, size_t pos) { r->pos = pos; }
+
 int cbor_reader_peek_major(const cbor_reader_t *r)
 {
     if (r->pos >= r->len) return -1;
     return (int)((r->buf[r->pos] >> 5) & 0x7u);
+}
+
+int cbor_reader_read_head(cbor_reader_t *r, uint8_t *mt, uint64_t *v)
+{
+    if (r->err) return -1;
+    if (r->pos >= r->len) { r->err = 1; return -1; }
+    uint8_t ib = r->buf[r->pos++];
+    uint8_t mt_local = (uint8_t)((ib >> 5) & 0x7u);
+    uint8_t ai       = (uint8_t)(ib & 0x1Fu);
+    uint64_t v_local;
+    if (ai < 24u) {
+        v_local = ai;
+    } else if (ai == 24u) {
+        if (r->pos + 1u > r->len) { r->err = 1; return -1; }
+        v_local = r->buf[r->pos]; r->pos += 1u;
+    } else if (ai == 25u) {
+        if (r->pos + 2u > r->len) { r->err = 1; return -1; }
+        v_local = ((uint64_t) r->buf[r->pos] << 8) | (uint64_t) r->buf[r->pos + 1];
+        r->pos += 2u;
+    } else if (ai == 26u) {
+        if (r->pos + 4u > r->len) { r->err = 1; return -1; }
+        v_local = ((uint64_t) r->buf[r->pos] << 24) |
+                  ((uint64_t) r->buf[r->pos + 1] << 16) |
+                  ((uint64_t) r->buf[r->pos + 2] << 8) |
+                   (uint64_t) r->buf[r->pos + 3];
+        r->pos += 4u;
+    } else if (ai == 27u) {
+        if (r->pos + 8u > r->len) { r->err = 1; return -1; }
+        v_local = 0;
+        for (int i = 0; i < 8; ++i) {
+            v_local = (v_local << 8) | (uint64_t) r->buf[r->pos + (size_t) i];
+        }
+        r->pos += 8u;
+    } else {
+        /* ai 28..30 reserved; 31 = indefinite-length (we don't support). */
+        r->err = 1;
+        return -1;
+    }
+    *mt = mt_local;
+    *v  = v_local;
+    return 0;
+}
+
+int cbor_reader_read_uint(cbor_reader_t *r, uint64_t *v)
+{
+    uint8_t mt;
+    if (cbor_reader_read_head(r, &mt, v) < 0) return -1;
+    if (mt != CBOR_MT_UINT) { r->err = 1; return -1; }
+    return 0;
+}
+
+static int read_byte_run(cbor_reader_t *r, uint8_t want_mt,
+                         const uint8_t **ptr, size_t *len)
+{
+    uint8_t mt;
+    uint64_t v;
+    if (cbor_reader_read_head(r, &mt, &v) < 0) return -1;
+    if (mt != want_mt) { r->err = 1; return -1; }
+    if (v > (uint64_t)(r->len - r->pos)) { r->err = 1; return -1; }
+    *ptr = &r->buf[r->pos];
+    *len = (size_t) v;
+    r->pos += (size_t) v;
+    return 0;
+}
+
+int cbor_reader_read_bytes(cbor_reader_t *r, const uint8_t **ptr, size_t *len)
+{
+    return read_byte_run(r, CBOR_MT_BYTE_STR, ptr, len);
+}
+
+int cbor_reader_read_text(cbor_reader_t *r, const uint8_t **ptr, size_t *len)
+{
+    return read_byte_run(r, CBOR_MT_TEXT_STR, ptr, len);
+}
+
+int cbor_reader_read_array_header(cbor_reader_t *r, size_t *count)
+{
+    uint8_t mt;
+    uint64_t v;
+    if (cbor_reader_read_head(r, &mt, &v) < 0) return -1;
+    if (mt != CBOR_MT_ARRAY) { r->err = 1; return -1; }
+    *count = (size_t) v;
+    return 0;
+}
+
+int cbor_reader_read_map_header(cbor_reader_t *r, size_t *count)
+{
+    uint8_t mt;
+    uint64_t v;
+    if (cbor_reader_read_head(r, &mt, &v) < 0) return -1;
+    if (mt != CBOR_MT_MAP) { r->err = 1; return -1; }
+    *count = (size_t) v;
+    return 0;
+}
+
+int cbor_reader_skip(cbor_reader_t *r)
+{
+    uint8_t mt;
+    uint64_t v;
+    if (cbor_reader_read_head(r, &mt, &v) < 0) return -1;
+    switch (mt) {
+    case CBOR_MT_UINT:
+    case CBOR_MT_NEGINT:
+        return 0;
+    case CBOR_MT_BYTE_STR:
+    case CBOR_MT_TEXT_STR:
+        if (v > (uint64_t)(r->len - r->pos)) { r->err = 1; return -1; }
+        r->pos += (size_t) v;
+        return 0;
+    case CBOR_MT_ARRAY:
+        for (uint64_t i = 0; i < v; ++i) {
+            if (cbor_reader_skip(r) < 0) return -1;
+        }
+        return 0;
+    case CBOR_MT_MAP:
+        for (uint64_t i = 0; i < v; ++i) {
+            if (cbor_reader_skip(r) < 0) return -1;   /* key */
+            if (cbor_reader_skip(r) < 0) return -1;   /* val */
+        }
+        return 0;
+    case CBOR_MT_SIMPLE:
+        /* false/true/null already consumed by read_head (ai < 24). Other
+         * simple values not supported here. */
+        return 0;
+    default:
+        r->err = 1;
+        return -1;
+    }
 }

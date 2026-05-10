@@ -37,4 +37,12 @@
 #define CTAP2_ERR_NOT_ALLOWED             0x30u
 #define CTAP2_ERR_OTHER                   0x7Fu
 
+/* Cred handlers — defined in ctap2_creds.c, called from ctap2.c
+ * dispatcher. They each take the CBOR parameter body (without the
+ * sub-command byte) and write the full response (status byte + CBOR). */
+int ctap2_make_credential(const uint8_t *req, size_t req_len,
+                          uint8_t *resp, size_t resp_max);
+int ctap2_get_assertion(const uint8_t *req, size_t req_len,
+                        uint8_t *resp, size_t resp_max);
+
 #endif /* NIXTROPIC_FIDO_HID_CTAP2_H */

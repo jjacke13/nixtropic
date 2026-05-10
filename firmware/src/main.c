@@ -31,6 +31,7 @@
 #include "cdc_protocol/protocol.h"
 #include "hid_rpc/rpc.h"
 #include "fido_hid/ctaphid.h"
+#include "fido_hid/credstore.h"
 #include "tropic/tropic.h"  /* re-enabled in Phase 3 M3 for libtropic on chip */
 
 #include "tusb.h"
@@ -182,6 +183,7 @@ int main(void)
     cdc_protocol_init();
     hid_rpc_init();
     fido_hid_init();
+    credstore_init();
 
     /* Stage 8.5 — libtropic on chip (M3). Runs power-cycle again + lt_init.
      * If lt_init fails the chip is still powered (power-cycle ran first),

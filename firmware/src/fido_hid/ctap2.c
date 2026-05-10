@@ -28,8 +28,10 @@
  * Authenticators MUST keep their AAGUID stable across instances of the
  * same model. Bump the trailing byte if we ever materially change the
  * authenticator's behavior in a way relying parties would want to
- * distinguish (e.g., Phase 5 enabling real TROPIC01-backed credentials). */
-static const uint8_t NIXTROPIC_AAGUID[16] = {
+ * distinguish (e.g., Phase 5 enabling real TROPIC01-backed credentials).
+ *
+ * Non-static so ctap2_creds.c can reference the same blob. */
+const uint8_t NIXTROPIC_AAGUID[16] = {
     0x6Eu, 0x69u, 0x78u, 0x74u,  /* "nixt" */
     0x72u, 0x6Fu, 0x70u, 0x69u,  /* "ropi" */
     0x63u, 0x00u, 0x00u, 0x00u,  /* "c" + pad */
@@ -144,13 +146,15 @@ int fido_hid_cbor_dispatch(const uint8_t *req, size_t req_len,
         return n + 1;
     }
     case CTAP2_CMD_MAKE_CREDENTIAL:
+        return ctap2_make_credential(&req[1], req_len - 1u, resp, resp_max);
     case CTAP2_CMD_GET_ASSERTION:
+        return ctap2_get_assertion(&req[1], req_len - 1u, resp, resp_max);
     case CTAP2_CMD_GET_NEXT_ASSERTION:
     case CTAP2_CMD_CLIENT_PIN:
     case CTAP2_CMD_RESET:
-        /* Land in M4 (MakeCred/GetAssertion) and Phase 5 (ClientPIN/Reset).
-         * Until then return NOT_ALLOWED — distinguishable from invalid
-         * command so fido2-token tells "feature absent" apart from "junk". */
+        /* Phase 5 territory (ClientPIN/Reset; persistent credential
+         * iteration). Return NOT_ALLOWED so fido2-token tells "feature
+         * absent" apart from "unknown command". */
         resp[0] = CTAP2_ERR_NOT_ALLOWED;
         return 1;
     default:
