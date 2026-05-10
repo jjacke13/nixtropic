@@ -13,6 +13,7 @@
 
 #include "rpc.h"
 #include "lt_rpc_proto.h"
+#include "fido_hid/ctaphid.h"
 
 #include <stdint.h>
 #include <stdbool.h>
@@ -319,11 +320,8 @@ void tud_hid_set_report_cb(uint8_t instance,
     if (instance == 0u) {
         handle_packet(buffer, bufsize);
     } else {
-        /* M1 placeholder — fido_hid_handle_packet() lands in M2.
-         * Silently drop for now so HW checkpoint can verify the descriptor
-         * and enumeration pieces independently. */
-        (void) buffer;
-        (void) bufsize;
+        /* Instance 1 = FIDO HID. Hand off to the CTAPHID framing layer. */
+        fido_hid_handle_packet(buffer, bufsize);
     }
 }
 

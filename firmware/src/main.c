@@ -30,6 +30,7 @@
 #include "usb/usb.h"
 #include "cdc_protocol/protocol.h"
 #include "hid_rpc/rpc.h"
+#include "fido_hid/ctaphid.h"
 #include "tropic/tropic.h"  /* re-enabled in Phase 3 M3 for libtropic on chip */
 
 #include "tusb.h"
@@ -180,6 +181,7 @@ int main(void)
     boot_banner();
     cdc_protocol_init();
     hid_rpc_init();
+    fido_hid_init();
 
     /* Stage 8.5 — libtropic on chip (M3). Runs power-cycle again + lt_init.
      * If lt_init fails the chip is still powered (power-cycle ran first),
@@ -195,6 +197,7 @@ int main(void)
         tud_task();
         cdc_protocol_task();
         hid_rpc_task();
+        fido_hid_task();
         blink_tick();
     }
 }
