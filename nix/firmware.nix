@@ -26,7 +26,7 @@
 
 stdenvNoCC.mkDerivation {
   pname = "nixtropic-firmware";
-  version = "0.2.0-phase2-cdc-passthrough";
+  version = "0.3.0-phase3-hid-composite";
 
   src = ../firmware;
 

@@ -36,7 +36,7 @@ extern "C" {
 /* Class enable flags */
 #define CFG_TUD_CDC                 1
 #define CFG_TUD_MSC                 0
-#define CFG_TUD_HID                 0
+#define CFG_TUD_HID                 1   /* Phase 3: vendor-defined raw 64-byte reports */
 #define CFG_TUD_MIDI                0
 #define CFG_TUD_VENDOR              0
 #define CFG_TUD_VIDEO               0
@@ -62,6 +62,11 @@ extern "C" {
 #define CFG_TUD_CDC_RX_BUFSIZE      256
 #define CFG_TUD_CDC_TX_BUFSIZE      2048
 #define CFG_TUD_CDC_EP_BUFSIZE      64
+
+/* HID-specific (Phase 3). 64-byte raw vendor reports — same shape as
+ * CTAPHID. EP buffer size set to one report; full lt-rpc messages are
+ * reassembled in software in hid_rpc/rpc.c. */
+#define CFG_TUD_HID_EP_BUFSIZE      64
 
 #ifdef __cplusplus
 }

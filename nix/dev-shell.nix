@@ -40,6 +40,10 @@ pkgs.mkShell {
     jq
     bash
 
+    # Phase 3: Python with hidapi for lt-rpc client tests (tools/hid_echo_test.py
+    # and tools/lt_rpc.py in M2). cryptography is needed in M4 for Ed25519 verify.
+    (python3.withPackages (p: [ p.hid p.cryptography ]))
+
     # libtropic host tooling (built from our flake — see packages output)
     # NOTE: these get added at the flake.nix level, not here, because they
     # depend on the calling system's package set wiring.

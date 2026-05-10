@@ -116,6 +116,7 @@ set(TINYUSB_SOURCES
     ${TINYUSB_SRC}/src/device/usbd.c
     ${TINYUSB_SRC}/src/device/usbd_control.c
     ${TINYUSB_SRC}/src/class/cdc/cdc_device.c
+    ${TINYUSB_SRC}/src/class/hid/hid_device.c
     ${TINYUSB_SRC}/src/portable/st/stm32_fsdev/dcd_stm32_fsdev.c
 )
 
@@ -140,7 +141,9 @@ set(APP_SOURCES
     src/cdc_protocol/parser.c
     src/cdc_protocol/hex.c
     src/cdc_protocol/cmd.c
-    # Phase 1 — re-enable in Phase 3 for HID lt-rpc on chip
+    src/hid_rpc/rpc.c
+    src/hid_rpc/rpc_cmds.c
+    # Phase 1 — re-enable in Phase 3 M3 for libtropic on chip
     # src/tropic/tropic.c
     # src/tropic/lt_crypto_stubs.c
     ${CMSIS_STARTUP}

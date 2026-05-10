@@ -29,8 +29,8 @@
 #define NIXTROPIC_GIT_REV "unknown"
 #endif
 
-#define ID_STRING  "nixtropic-phase2"
-#define SN_STRING  "nixtropic-phase2-ts0001"
+#define ID_STRING  "nixtropic-phase3"
+#define SN_STRING  "nixtropic-phase3-ts0001"
 #define VER_STRING "FW " NIXTROPIC_GIT_REV ", HW TS1302, https://github.com/jjacke13/nixtropic"
 
 /* ---- Stock-byte-exact error strings (terminal newline included) ---- */
@@ -157,7 +157,7 @@ static const cmd_entry_t CMDS[];
 
 static bool cmd_help(void)
 {
-    out_str("Tropicsquare-compatible USB/SPI interface (nixtropic phase 2)\r\n");
+    out_str("Tropicsquare-compatible USB/SPI interface (nixtropic phase 3)\r\n");
     out_str("Type HEX characters to make SPI transfer (i.e. \"1122aabb\")\r\n");
     out_str("Supported commands:\r\n");
     for (int i = 0; CMDS[i].text != NULL; ++i) {
