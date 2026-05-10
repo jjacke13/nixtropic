@@ -2,7 +2,7 @@
 
 > **Audience:** AI coding agents (Claude, Codex, etc.) working on this project across sessions.
 > **Status:** Living document. Update as decisions and facts evolve.
-> **Last updated:** 2026-05-10 (Phase 3 complete)
+> **Last updated:** 2026-05-11 (Phase 4 complete)
 > **Read order:** This document first. Reference `research/` files for technical depth as needed (don't preload them — fetch by section when relevant).
 
 ---
@@ -240,17 +240,21 @@ Each phase is **independently shippable**. Stop anywhere = useful artifact. Hard
 
 **Stop-here value:** First TS1302 firmware exposing HID + first independently-verified open libtropic stack running L3 secure-session-backed Ed25519 sign end-to-end. Foundation for Phase 4 FIDO2 backend.
 
-### Phase 4 — FIDO2 stack port (stub backend)
+### Phase 4 — FIDO2 stack port (stub backend) — ✅ COMPLETE 2026-05-11 (commits `9f9c1a2` + `3b03d5b` + `b2abe82` + `bb3ba3a` + M5 follow-up)
 **Goal:** FIDO2/CTAP2 protocol surface working with stub backend (no real crypto yet).
 
+**Outcome:** Composite USB now has TWO HID interfaces — instance 0 = Phase 3 lt-rpc (vendor 0xFF00), instance 1 = FIDO2 (usage page 0xF1D0 with U2F usages). New `firmware/src/fido_hid/` module: CTAPHID framing with multi-CID allocation, hand-rolled CBOR encoder + decoder, CTAP2 dispatcher implementing `authenticatorGetInfo` (algorithms = Ed25519 + ES256), `authenticatorMakeCredential` and `authenticatorGetAssertion`. Stub backend uses a fixed Ed25519 keypair derived from a compiled-in seed (NOT secure — Phase 5 swaps to TROPIC01-backed ECC slots). 7/7 PASS via `nix run .#validate-phase4` — including host-side python-cryptography verifying real Ed25519 signatures over `authData || clientDataHash`. CDC + Phase 3 lt-rpc still pass in parallel. firmware.bin ≈ 162 KB / 256 KB; RAM 25 KB / 192 KB.
+
 **Deliverables:**
-- SoloKeys-derived FIDO2 stack ported to STM32U535
+- SoloKeys-style FIDO2 stub (derived patterns, not vendored code — ~1 200 LOC of original C across fido_hid/)
 - HID interface advertises FIDO usage page (`0xF1D0`)
-- `MakeCredential` / `GetAssertion` return cryptographically dummy responses
+- `MakeCredential` returns "packed" self-attestation with a verifiable Ed25519 signature
+- `GetAssertion` returns a verifiable Ed25519 assertion signature
+- `tools/fido2_test.py` host client (CBOR codec, authData parser, COSE_Key reader, cryptography-based verification)
 
-**Test:** `fido2-token -L` lists our device. `fido2-token -I` returns plausible info. `libfido2` `MakeCredential` succeeds with stub.
+**Test:** 7/7 PASS in `nix run .#validate-phase4`. `MakeCredential` and `GetAssertion` signatures verify with python-cryptography Ed25519.
 
-**Stop-here value:** Protocol layer validated. Big chunk of risk down.
+**Stop-here value:** First TS1302 firmware exposing FIDO2 (HID 0xF1D0) end-to-end with a verifiable signature flow. Protocol layer fully validated — Phase 5 only needs to swap the crypto backend.
 
 ### Phase 5 — Wire FIDO2 to TROPIC01 (THE MIC-DROP)
 **Goal:** Real FIDO2 backed by real TROPIC01 keys. End-to-end working WebAuthn.

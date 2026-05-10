@@ -4,6 +4,96 @@
 
 ---
 
+## 2026-05-11 — Phase 4 PASS ✅ — FIDO2 stack (stub backend) running end-to-end
+
+**Phase:** 4 (CTAPHID + CTAP2 GetInfo/MakeCredential/GetAssertion, stub Ed25519 backend) — **COMPLETE**
+
+**Pass criterion met:** Dongle enumerates a second HID interface with the FIDO Alliance usage page (0xF1D0); a real CTAP2 transaction (`MakeCredential` → `GetAssertion`) round-trips over CTAPHID and the host-side python-cryptography verifies the Ed25519 signatures on `authData || clientDataHash`. CDC + Phase 3 lt-rpc still PASS in parallel.
+
+**Canonical evidence — `nix run .#validate-phase4` output:**
+
+```
+═══════════════════════════════════════════════════════════════
+  Phase 4 validation — CTAPHID + CTAP2 stubs over HID
+═══════════════════════════════════════════════════════════════
+FIDO HID @ /dev/hidraw5
+
+═══════════════════════════════════════════════════════════════
+  Phase 4 — CTAPHID framing + CTAP2 GetInfo validation
+═══════════════════════════════════════════════════════════════
+[1/7] INIT (broadcast → new CID + caps)                                PASS
+[2/7] PING 32 B (single packet)                                        PASS
+[3/7] PING 512 B (multi-packet INIT+CONT)                              PASS
+[4/7] MSG → SW=0x6E00 (CLA not supported)                              PASS
+[5/7] CTAP2 GetInfo (versions, aaguid, options, algorithms)            PASS
+[6/7] CTAP2 MakeCredential (Ed25519 self-attestation verifies)         PASS
+[7/7] CTAP2 GetAssertion (Ed25519 assertion verifies)                  PASS
+
+7/7 PASS — Phase 4 validated.
+
+═══════════════════════════════════════════════════════════════
+  ✓ Phase 4 validation PASS
+═══════════════════════════════════════════════════════════════
+```
+
+**Build:** firmware.bin ≈ 161 792 B (~63% of 256 KB flash), 24 848 B RAM (~13% of 192 KB). +16 KB over Phase 3, largely from ed25519-donna's basepoint table being pulled in for the host-side stub signing, plus the new fido_hid/ module (CTAPHID framing + CBOR encoder/decoder + CTAP2 dispatcher).
+
+**Architecture milestones in this phase:**
+
+| M | Scope | Commit |
+|---|---|---|
+| M1 | Composite descriptor extended to 2 HID interfaces (instance 0 = lt-rpc 0xFF00, instance 1 = FIDO 0xF1D0 with U2F usages 0x20/0x21). EP4 OUT/IN added. lt-rpc gated on instance==0. | 9f9c1a2 |
+| M2 | `firmware/src/fido_hid/`: CTAPHID framing (INIT/CONT, CID allocator, BUSY semantics), commands INIT/PING/MSG/CANCEL/CBOR. Stub `fido_hid_cbor_dispatch` weak-symbol returns CTAP2_ERR_INVALID_COMMAND. | 3b03d5b |
+| M3 | CBOR encoder (~150 LOC), CTAP2 dispatcher, `authenticatorGetInfo` returning the locked map (versions/aaguid/options/maxMsgSize/transports/algorithms — Ed25519+ES256). | b2abe82 |
+| M4 | CBOR decoder extension, `credstore.{h,c}` (fixed Ed25519 keypair from embedded seed), `ctap2_creds.c` (MakeCredential + GetAssertion), authData builder, COSE_Key Ed25519 encoder. Phase 4 stub signs with trezor_crypto's ed25519-donna (the same lib used for Phase 3 L3 verification, now used locally). | bb3ba3a |
+| M5 | `tools/validate-phase4.sh` + `nix run .#validate-phase4` + `flash-and-validate-phase4` apps. STATUS/PROJECT/memory updates. | (this) |
+
+**Key files added/modified:**
+
+- `firmware/src/fido_hid/` (NEW) — `proto.h` (wire-format), `ctaphid.{h,c}` (framing), `cbor.{h,c}` (encoder + decoder), `ctap2.{h,c}` (dispatcher + GetInfo), `ctap2_creds.c` (MakeCred + GetAssertion stubs), `credstore.{h,c}` (fixed Ed25519 keypair)
+- `firmware/src/usb/usb_descriptors.c` — second HID interface with FIDO usage page 0xF1D0, U2F input/output usages, EP4 endpoint pair
+- `firmware/src/usb/tusb_config.h` — `CFG_TUD_HID = 2`
+- `firmware/src/hid_rpc/rpc.c` — `tud_hid_set_report_cb` dispatches by instance (0 → lt-rpc, 1 → fido_hid)
+- `firmware/src/main.c` — boots `fido_hid_init` + `credstore_init`; main loop pumps `fido_hid_task`
+- `firmware/CMakeLists.txt` — adds the 5 new `fido_hid/` sources
+- `tools/fido2_test.py` — host-side CTAPHID + CTAP2 test client (~600 LOC) with CBOR encoder/decoder, authData parser, COSE_Key reader, Ed25519 signature verification via python-cryptography
+- `tools/validate-phase4.sh` — wrapper called by the new nix apps
+- `nix/apps.nix` — `validate-phase4` + `flash-and-validate-phase4`
+- `docs/PHASE-4-PLAN.md` — locked decisions, milestones, risk register
+
+**Locked decisions executed:**
+
+- **Two separate HID interfaces** rather than dual-collection — each enumerates as its own `/dev/hidrawN` and libfido2 cleanly identifies the FIDO one by usage page
+- **Stub keypair embedded in firmware** — recognizable bytes ("nixtropic stub seed v1\0..." for the secret, "nixtropic-cred-v1\0...\x01" for the credential id). Insecure by design; Phase 5 swaps to TROPIC01 ECC slots
+- **Ed25519-only** for Phase 4 stub — ES256 advertised in GetInfo so libfido2 can negotiate, but firmware refuses with CTAP2_ERR_UNSUPPORTED_ALGORITHM on MakeCredential
+- **AAGUID** `6e697874726f70696300000000000001` — "nixtropic" + 6 zero bytes + version byte; stable across Phase 4 builds, bumps on Phase 5
+
+**Subtle bugs found:**
+
+1. `tud_hid_set_report_cb` had to be made instance-aware — without it, packets on the FIDO interface fed straight into the lt-rpc state machine (which would reject them with CID_MISMATCH, but the M2 architecture would have been clean-broken).
+2. Stale-buffer info-disclosure invariant from Phase 3 carried over: `fido_hid/ctaphid.c` zeros `s_req_buf` at every INIT and on `reset_assembly` exactly like `hid_rpc/rpc.c` does. The audit pattern wasn't re-run but the structural rule was kept.
+3. Python `hid.enumerate(vid, pid)` doesn't always populate `usage_page` (depends on backend); `find_fido_path()` falls back to picking the higher hidraw index since the FIDO interface enumerates second by descriptor order. Worked first try on Linux + hidapi-libusb.
+
+**Outstanding follow-ups (Phase 8 polish bucket or carryover):**
+
+- Phase 2 first-call CDC transient (race between boot-time `lt_init` and lt-util's first call) — carried over from Phase 3
+- pid.codes VID/PID allocation (currently TinyUSB demo 0xCAFE:0x4001) — carried over
+- `fido2-token -I` direct exercise from libfido2 not yet wired into validate-phase4 (currently uses hand-rolled Python). Worth adding `pkgs.libfido2` to the validate-phase4 runtimeInputs for a smoke test that exercises libfido2's parser as well.
+- ES256 (P-256) support — defer to Phase 5 where TROPIC01 can do P-256 natively
+- Static-analysis pass over `fido_hid/` (mirror Phase 3 cpp-reviewer audit) — schedule before Phase 5 wires real keys
+
+**Validation commands:**
+
+- `nix run .#validate-phase4` — Phase 4 CTAPHID + CTAP2 suite (7/7)
+- `nix run .#flash-and-validate-phase4` — DFU flash + Phase 4 validate one-shot
+- `python3 tools/fido2_test.py make-cred` — standalone MakeCredential + Ed25519 verify
+- `python3 tools/fido2_test.py assertion` — standalone MakeCred → GetAssertion round-trip
+- `nix run .#validate-phase3` — Phase 3 lt-rpc regression (5/5)
+
+**Next phase:** Phase 5 — wire FIDO2 to TROPIC01. `MakeCredential` allocates a fresh ECC slot on the chip, returns the chip-generated pubkey; `GetAssertion` calls `lt_ecc_eddsa_sign` for the chip-resident slot. Credential metadata (rpId hash, slot index, sign counter) persisted in TROPIC01 R-mem. ClientPIN wired through `lt_mac_and_destroy` for hardware-enforced rate limiting. Pass criterion: register on `webauthn.io` from Firefox/Chrome and log in successfully.
+
+---
+
 ## 2026-05-10 — Phase 3 OFFICIALLY PASS ✅✅✅ — composite USB + Ed25519 sign over HID
 
 **Phase:** 3 (composite USB CDC + HID, lt-rpc framing, libtropic L3 on chip, Ed25519 sign+verify) — **COMPLETE**

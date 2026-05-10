@@ -331,6 +331,19 @@ let
     '';
   };
 
+  # Phase 4 — validate-phase4: runs CTAPHID + CTAP2 test suite (INIT, PING,
+  # MSG, GetInfo, MakeCredential, GetAssertion) with host-side Ed25519
+  # signature verification. Same Nix-store path indirection as phase 3.
+  validate-phase4 = writeShellApplication {
+    name = "nixtropic-validate-phase4";
+    runtimeInputs = [ py usbutils coreutils gnugrep ];
+    text = ''
+      set -uo pipefail
+      export FIDO2_PY="${../tools/fido2_test.py}"
+      exec ${../tools/validate-phase4.sh} "$@"
+    '';
+  };
+
   # Phase 1 — flash-and-validate: orchestrates DFU flash + immediate validate.
   # Solves the "boot markers emit only once" gotcha: after flash, the
   # firmware re-boots fresh and emits its boot block; the validator captures
@@ -587,6 +600,75 @@ let
         '';
       };
 
+  # Phase 4 — flash-and-validate-phase4: DFU flash + immediate Phase 4 validate.
+  flash-and-validate-phase4 =
+    if firmware == null then
+      writeShellApplication {
+        name = "nixtropic-flash-and-validate-phase4-placeholder";
+        text = ''
+          echo "Custom firmware not available in this flake."
+          exit 1
+        '';
+      }
+    else
+      writeShellApplication {
+        name = "nixtropic-flash-and-validate-phase4";
+        runtimeInputs = [ dfu-util usbutils coreutils gnugrep py ];
+        text = ''
+          set -euo pipefail
+
+          FW_BIN="${firmware}/firmware.bin"
+
+          echo "═══════════════════════════════════════════════════════════════"
+          echo "  Phase 4: flash-and-validate (one-shot regression test)"
+          echo "═══════════════════════════════════════════════════════════════"
+          echo ""
+
+          if ! lsusb | grep -q "0483:df11"; then
+            echo "ERROR: dongle not in DFU mode (0483:df11)." >&2
+            echo "Hold SW1 + replug, then re-run." >&2
+            exit 1
+          fi
+
+          echo "Step 1/2: DFU flash..."
+          DFU_LOG=$(mktemp)
+          trap 'rm -f "$DFU_LOG"' EXIT
+
+          dfu-util -a 0 -s 0x08000000:leave -D "$FW_BIN" 2>&1 | tee "$DFU_LOG" >/dev/null || true
+          DFU_EXIT="''${PIPESTATUS[0]}"
+
+          if [ "$DFU_EXIT" -ne 0 ] && ! grep -q "File downloaded successfully" "$DFU_LOG"; then
+            echo "✗ DFU flash FAILED."
+            exit 1
+          fi
+
+          echo "✓ Flash complete. Waiting up to 12 s for USB re-enumeration..."
+
+          for _ in $(seq 1 24); do
+            sleep 0.5
+            if lsusb | grep -q "cafe:4001"; then
+              break
+            fi
+          done
+
+          if ! lsusb | grep -q "cafe:4001"; then
+            echo "✗ nixtropic open firmware (cafe:4001) not enumerated after 12 s." >&2
+            lsusb | grep -E "0483:|cafe:" >&2 || echo "    (no TS1302 VID seen)" >&2
+            exit 1
+          fi
+
+          echo "✓ nixtropic firmware enumerated."
+          echo ""
+          echo "Settling for 3 s..."
+          sleep 3
+          echo ""
+          echo "Step 2/2: CTAPHID + CTAP2 validation..."
+          echo ""
+          export FIDO2_PY="${../tools/fido2_test.py}"
+          exec ${../tools/validate-phase4.sh}
+        '';
+      };
+
   # Lint: cppcheck pass over OUR original firmware code (hid_rpc/, tropic/,
   # cdc_protocol/, our usb/ glue, our platform/ wrappers). Vendor sources
   # (libtropic, trezor_crypto, TinyUSB, ST HAL, CMSIS) deliberately excluded —
@@ -765,6 +847,22 @@ in
       else
         "${flash-and-validate-phase3}/bin/nixtropic-flash-and-validate-phase3";
     meta.description = "DFU-flash open firmware + immediately run Phase 3 HID validation";
+  };
+
+  validate-phase4 = {
+    type = "app";
+    program = "${validate-phase4}/bin/nixtropic-validate-phase4";
+    meta.description = "Phase 4 CTAPHID + CTAP2 validation (INIT/PING/MSG/GetInfo/MakeCred/GetAssertion + Ed25519 verify)";
+  };
+
+  flash-and-validate-phase4 = {
+    type = "app";
+    program =
+      if firmware == null then
+        "${flash-and-validate-phase4}/bin/nixtropic-flash-and-validate-phase4-placeholder"
+      else
+        "${flash-and-validate-phase4}/bin/nixtropic-flash-and-validate-phase4";
+    meta.description = "DFU-flash open firmware + immediately run Phase 4 FIDO2 stub validation";
   };
 
   identify = {
