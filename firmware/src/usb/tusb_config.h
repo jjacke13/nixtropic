@@ -36,7 +36,7 @@ extern "C" {
 /* Class enable flags */
 #define CFG_TUD_CDC                 1
 #define CFG_TUD_MSC                 0
-#define CFG_TUD_HID                 1   /* Phase 3: vendor-defined raw 64-byte reports */
+#define CFG_TUD_HID                 2   /* Phase 4: instance 0 = lt-rpc, instance 1 = FIDO2 */
 #define CFG_TUD_MIDI                0
 #define CFG_TUD_VENDOR              0
 #define CFG_TUD_VIDEO               0

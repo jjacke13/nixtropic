@@ -299,7 +299,14 @@ void hid_rpc_task(void)
     }
 }
 
-/* ===== TinyUSB HID class callbacks ===== */
+/* ===== TinyUSB HID class callbacks =====
+ *
+ * Phase 4 added a second HID interface (instance 1) for FIDO2. lt-rpc
+ * stays on instance 0 — packets arriving on instance 1 are forwarded to
+ * fido_hid/ctaphid.c via fido_hid_handle_packet(). The TinyUSB HID
+ * callbacks dispatch by instance here to keep the two protocols cleanly
+ * separated.
+ */
 
 void tud_hid_set_report_cb(uint8_t instance,
                            uint8_t report_id,
@@ -307,10 +314,17 @@ void tud_hid_set_report_cb(uint8_t instance,
                            uint8_t const *buffer,
                            uint16_t bufsize)
 {
-    (void) instance;
     (void) report_id;
     (void) report_type;
-    handle_packet(buffer, bufsize);
+    if (instance == 0u) {
+        handle_packet(buffer, bufsize);
+    } else {
+        /* M1 placeholder — fido_hid_handle_packet() lands in M2.
+         * Silently drop for now so HW checkpoint can verify the descriptor
+         * and enumeration pieces independently. */
+        (void) buffer;
+        (void) bufsize;
+    }
 }
 
 uint16_t tud_hid_get_report_cb(uint8_t instance,

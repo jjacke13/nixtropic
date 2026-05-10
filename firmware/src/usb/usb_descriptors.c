@@ -1,19 +1,20 @@
 /*
- * USB descriptors for nixtropic — Phase 3 composite (CDC + HID).
+ * USB descriptors for nixtropic — Phase 4 composite (CDC + HID×2).
  *
  * Layout:
  *   Interface 0   CDC control (notification EP IN)
  *   Interface 1   CDC data    (bulk EP OUT/IN)
- *   Interface 2   HID         (raw 64-byte vendor reports, IN/OUT)
+ *   Interface 2   HID #0      lt-rpc — vendor usage page 0xFF00, 64 B IN/OUT
+ *   Interface 3   HID #1      FIDO2  — usage page 0xF1D0, 64 B IN/OUT
  *
  * VID/PID stays `0xCAFE:0x4001` from Phase 2 (TinyUSB demo range, also
  * accepted by `nix run .#identify`). Real pid.codes allocation is a
  * Phase 8 task.
  *
- * HID report descriptor is the minimal raw-bytes pattern: a single 64-byte
- * Input report and a single 64-byte Output report, both under a custom
- * Usage Page (0xFF00, vendor-defined). Linux exposes this as /dev/hidraw*
- * without trying to bind a HID input-subsystem driver.
+ * Two separate HID interfaces (rather than dual-collection) so each
+ * surfaces as its own /dev/hidraw* and so libfido2's enumeration sees
+ * exactly one FIDO interface (matching usage page 0xF1D0). lt-rpc stays
+ * exactly as Phase 3 emitted it on instance 0.
  */
 
 #include "tusb.h"
@@ -53,14 +54,18 @@ uint8_t const *tud_descriptor_device_cb(void)
     return (uint8_t const *) &desc_device;
 }
 
-/* ===== HID Report Descriptor =====
+/* ===== HID Report Descriptors =====
  *
- * Vendor-defined 64-byte IN + OUT raw transfers. No usage page semantics
- * — host treats reports as opaque byte arrays. This is the standard
- * pattern for U2F/CTAP-HID and any vendor RPC over HID.
+ * Two instances:
+ *   #0  lt-rpc       usage page 0xFF00 (vendor), 64 B IN/OUT
+ *   #1  FIDO2 (CTAP) usage page 0xF1D0 (FIDO Alliance), 64 B IN/OUT
+ *
+ * Both are vendor-style raw report descriptors — host treats payloads as
+ * opaque byte arrays. The FIDO usage page is what libfido2 / browsers /
+ * fido2-token grep for during enumeration.
  */
 
-uint8_t const desc_hid_report[] = {
+uint8_t const desc_hid_report_ltrpc[] = {
     0x06, 0x00, 0xFF,        /* Usage Page (Vendor Defined 0xFF00) */
     0x09, 0x01,              /* Usage (Vendor Usage 1) */
     0xA1, 0x01,              /* Collection (Application) */
@@ -82,10 +87,36 @@ uint8_t const desc_hid_report[] = {
     0xC0                     /* End Collection */
 };
 
+/* FIDO Alliance — U2F HID Protocol Specification, §3.3 ("HID Report
+ * Descriptor"). The exact descriptor every YubiKey / SoloKey / Nitrokey
+ * ships, copied verbatim. usage page 0xF1D0 + usage 0x01 (U2F HID) is
+ * what libfido2's hid_linux.c matches when enumerating /dev/hidraw*. */
+uint8_t const desc_hid_report_fido[] = {
+    0x06, 0xD0, 0xF1,        /* Usage Page (FIDO Alliance 0xF1D0) */
+    0x09, 0x01,              /* Usage (U2F Authenticator Device) */
+    0xA1, 0x01,              /* Collection (Application) */
+
+    0x09, 0x20,              /*   Usage (Input Report Data 0x20) */
+    0x15, 0x00,              /*   Logical Minimum (0)   */
+    0x26, 0xFF, 0x00,        /*   Logical Maximum (255) */
+    0x75, 0x08,              /*   Report Size (8 bits) */
+    0x95, 0x40,              /*   Report Count (64)    */
+    0x81, 0x02,              /*   Input (Data, Var, Abs) */
+
+    0x09, 0x21,              /*   Usage (Output Report Data 0x21) */
+    0x15, 0x00,              /*   Logical Minimum (0)   */
+    0x26, 0xFF, 0x00,        /*   Logical Maximum (255) */
+    0x75, 0x08,              /*   Report Size (8 bits) */
+    0x95, 0x40,              /*   Report Count (64)    */
+    0x91, 0x02,              /*   Output (Data, Var, Abs) */
+
+    0xC0                     /* End Collection */
+};
+
 uint8_t const *tud_hid_descriptor_report_cb(uint8_t instance)
 {
-    (void) instance;
-    return desc_hid_report;
+    if (instance == 0) return desc_hid_report_ltrpc;
+    return desc_hid_report_fido;
 }
 
 /* ===== Configuration Descriptor ===== */
@@ -93,17 +124,20 @@ uint8_t const *tud_hid_descriptor_report_cb(uint8_t instance)
 enum {
     ITF_NUM_CDC_NOTIF = 0,
     ITF_NUM_CDC_DATA,
-    ITF_NUM_HID,
+    ITF_NUM_HID_LTRPC,
+    ITF_NUM_HID_FIDO,
     ITF_NUM_TOTAL
 };
 
-#define EPNUM_CDC_NOTIF   0x81  /* IN  EP1 — CDC notification */
-#define EPNUM_CDC_OUT     0x02  /* OUT EP2 — host → device CDC bulk */
-#define EPNUM_CDC_IN      0x82  /* IN  EP2 — device → host CDC bulk */
-#define EPNUM_HID_OUT     0x03  /* OUT EP3 — host → device HID */
-#define EPNUM_HID_IN      0x83  /* IN  EP3 — device → host HID */
+#define EPNUM_CDC_NOTIF      0x81  /* IN  EP1 — CDC notification */
+#define EPNUM_CDC_OUT        0x02  /* OUT EP2 — host → device CDC bulk */
+#define EPNUM_CDC_IN         0x82  /* IN  EP2 — device → host CDC bulk */
+#define EPNUM_HID_LTRPC_OUT  0x03  /* OUT EP3 — host → device HID lt-rpc */
+#define EPNUM_HID_LTRPC_IN   0x83  /* IN  EP3 — device → host HID lt-rpc */
+#define EPNUM_HID_FIDO_OUT   0x04  /* OUT EP4 — host → device HID FIDO */
+#define EPNUM_HID_FIDO_IN    0x84  /* IN  EP4 — device → host HID FIDO */
 
-#define CONFIG_TOTAL_LEN  (TUD_CONFIG_DESC_LEN + TUD_CDC_DESC_LEN + TUD_HID_INOUT_DESC_LEN)
+#define CONFIG_TOTAL_LEN  (TUD_CONFIG_DESC_LEN + TUD_CDC_DESC_LEN + 2 * TUD_HID_INOUT_DESC_LEN)
 
 uint8_t const desc_fs_configuration[] = {
     /* Config descriptor: 1 config, ITF_NUM_TOTAL interfaces, 100 mA bus-powered */
@@ -113,10 +147,16 @@ uint8_t const desc_fs_configuration[] = {
     TUD_CDC_DESCRIPTOR(ITF_NUM_CDC_NOTIF, 4, EPNUM_CDC_NOTIF, 8,
                        EPNUM_CDC_OUT, EPNUM_CDC_IN, 64),
 
-    /* HID: raw 64-byte IN + OUT, 1 ms polling */
-    TUD_HID_INOUT_DESCRIPTOR(ITF_NUM_HID, 5, HID_ITF_PROTOCOL_NONE,
-                             sizeof(desc_hid_report),
-                             EPNUM_HID_OUT, EPNUM_HID_IN, 64, 1),
+    /* HID #0 lt-rpc: raw 64-byte IN + OUT, 1 ms polling */
+    TUD_HID_INOUT_DESCRIPTOR(ITF_NUM_HID_LTRPC, 5, HID_ITF_PROTOCOL_NONE,
+                             sizeof(desc_hid_report_ltrpc),
+                             EPNUM_HID_LTRPC_OUT, EPNUM_HID_LTRPC_IN, 64, 1),
+
+    /* HID #1 FIDO2: raw 64-byte IN + OUT, 5 ms polling
+     * (5 ms matches FIDO U2F spec recommended bInterval; 1 ms also legal) */
+    TUD_HID_INOUT_DESCRIPTOR(ITF_NUM_HID_FIDO, 6, HID_ITF_PROTOCOL_NONE,
+                             sizeof(desc_hid_report_fido),
+                             EPNUM_HID_FIDO_OUT, EPNUM_HID_FIDO_IN, 64, 5),
 };
 
 uint8_t const *tud_descriptor_configuration_cb(uint8_t index)
@@ -133,16 +173,18 @@ enum {
     STR_PRODUCT,
     STR_SERIAL,
     STR_CDC_INTERFACE,
-    STR_HID_INTERFACE,
+    STR_HID_LTRPC_INTERFACE,
+    STR_HID_FIDO_INTERFACE,
 };
 
 static char const *string_desc_arr[] = {
-    [STR_LANGID]        = (const char[]){0x09, 0x04},  /* en-US: 0x0409 LE */
-    [STR_MANUFACTURER]  = "nixtropic",
-    [STR_PRODUCT]       = "nixtropic Phase 3",
-    [STR_SERIAL]        = "0001",
-    [STR_CDC_INTERFACE] = "nixtropic CDC console",
-    [STR_HID_INTERFACE] = "nixtropic HID lt-rpc",
+    [STR_LANGID]              = (const char[]){0x09, 0x04},  /* en-US: 0x0409 LE */
+    [STR_MANUFACTURER]        = "nixtropic",
+    [STR_PRODUCT]             = "nixtropic Phase 4",
+    [STR_SERIAL]              = "0001",
+    [STR_CDC_INTERFACE]       = "nixtropic CDC console",
+    [STR_HID_LTRPC_INTERFACE] = "nixtropic HID lt-rpc",
+    [STR_HID_FIDO_INTERFACE]  = "nixtropic FIDO2",
 };
 
 static uint16_t _desc_str[32 + 1];  /* +1 for header word */

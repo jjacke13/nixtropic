@@ -112,7 +112,7 @@ static void boot_banner(void)
      * could land in the host buffer AFTER lt-util's tcflush — polluting
      * lt_get_info_chip_id's response stream and yielding LT_L1_SPI_ERROR.
      * (Verified failure mode 2026-05-10.) */
-    printf("# nixtropic phase 3\r\n");
+    printf("# nixtropic phase 4\r\n");
     printf("# build: %s\r\n", NIXTROPIC_BUILD_TAG);
     printf("# git: %s\r\n",   NIXTROPIC_GIT_REV);
 
