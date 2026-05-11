@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 # Phase 6 FULL validation — M1 + M2 + M3 chain.
 #
+# Inlines the python sub-commands directly rather than chaining to the
+# per-milestone .sh wrappers (those live in separate /nix/store paths
+# under `nix run` so $SCRIPT_DIR-based discovery doesn't reach them).
+#
 # Ordering (per feedback_validation_temporal_constraints.md):
 #   M1 first  — interactive: 1 SW1 press + 1 30 s timeout (~60 s)
 #   M2 second — auto: Force-UV / alwaysUv / Reset-with-SW1 (~5 s)
@@ -10,8 +14,6 @@
 #
 # All steps require sudo (lt-rpc HID is root-only per nixos/tropic.nix udev).
 # Each step does its own slots-reset for state isolation between phases.
-#
-# Phase 5 regression NOT exercised here — that chain is `validate-phase5`.
 
 set -uo pipefail
 
@@ -32,17 +34,19 @@ overall_rc=0
 
 echo ""
 echo "Step 1/3: M1 — SW1 user-presence + LED (interactive)..."
-echo "(One SW1 press, then one 30 s timeout — ~60 s total.)"
+echo "(Pre-step: slots-reset for clean state)"
+python3 "$LT_RPC" slots-reset 2>&1 | tail -5 || true
 echo ""
-"${SCRIPT_DIR}/validate-phase6-m1.sh" || overall_rc=$?
+echo "(One SW1 press, then one 30 s timeout — ~60 s total.)"
+python3 "$FIDO2" validate-phase6-m1 || overall_rc=$?
 
 echo ""
 echo "Step 2/3: M2 — Force-UV + alwaysUv + auto-enable..."
-"${SCRIPT_DIR}/validate-phase6-m2.sh" || overall_rc=$?
+python3 "$FIDO2" validate-phase6-m2 || overall_rc=$?
 
 echo ""
 echo "Step 3/3: M3 — authenticatorCredentialManagement (1 SW1 press)..."
-"${SCRIPT_DIR}/validate-phase6-m3.sh" || overall_rc=$?
+python3 "$FIDO2" validate-phase6-m3 || overall_rc=$?
 
 echo ""
 if [ $overall_rc -eq 0 ]; then
