@@ -78,14 +78,14 @@ fi
 echo ""
 echo "4/5  ATR check..."
 ATR_OUT=$(timeout 5 opensc-tool --atr 2>&1 | tail -3 || true)
-# Match either case — opensc prints lowercase, our spec'd value is uppercase.
-if echo "$ATR_OUT" | grep -qiE "3b:80:81:31:30"; then
-  echo "  ✓ ATR = 3B:80:81:31:30"
+# Minimal valid T=1 ATR (4 bytes).  TS T0 TD1 TCK.
+if echo "$ATR_OUT" | grep -qiE "3b:80:01:81"; then
+  echo "  ✓ ATR = 3B:80:01:81"
 else
   echo "  ✗ ATR mismatch (or no card detected)."
   echo "    opensc-tool output:"
   echo "$ATR_OUT" | sed 's/^/      /'
-  echo "    Expected: 3B:80:81:31:30"
+  echo "    Expected: 3B:80:01:81"
   overall_rc=6
 fi
 

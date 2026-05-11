@@ -91,8 +91,8 @@ typedef struct __attribute__((packed)) {
  * Defined as static const inside usb_ccid.c (only one user — no need
  * to publish via extern).  M2 OpenPGP applet may grow the ATR with
  * historical bytes when we want host tools to identify the applet
- * before SELECT; for M1, pcsc-lite + opensc enumerate fine on a
- * minimal 5-byte T=1 ATR. */
+ * before SELECT.  For M1 we use the minimal valid 4-byte T=1 form;
+ * see comment in usb_ccid.c for the breakdown. */
 
 /* ---- Standard ISO 7816 status words (SW1 SW2) ---- */
 #define SW_OK                           0x9000

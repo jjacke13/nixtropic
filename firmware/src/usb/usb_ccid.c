@@ -48,10 +48,21 @@
  * rejected at the apdu_dispatch layer with SW=0x6700 (Wrong length). */
 #define CCID_MAX_MSG_LEN  4112u
 
-/* ATR returned on PC_to_RDR_IccPowerOn.  Minimal valid T=1 form:
- *   TS=3B, T0=80, TD1=81, TD2=31, TCK=30
- * (XOR(T0..TD2) = 0x30, so TCK=0x30 makes the full XOR zero.) */
-static const uint8_t s_atr[] = { 0x3B, 0x80, 0x81, 0x31, 0x30 };
+/* ATR returned on PC_to_RDR_IccPowerOn.  Minimal valid T=1 form (4 B):
+ *
+ *   TS  = 0x3B  direct convention
+ *   T0  = 0x80  Y1=8 (TD1 present), K=0 (no historical bytes)
+ *   TD1 = 0x01  Y2=0 (NO more interface bytes), T=1 (protocol indicator)
+ *   TCK = 0x81  XOR(T0,TD1) = 0x80^0x01 = 0x81
+ *
+ * Earlier draft (Phase 7 M1 first HW test) used 5 bytes `3B 80 81 31 30`,
+ * which was MALFORMED — TD2=0x31 advertised TC3+TD3 that didn't exist.
+ * libccid silently passed it through on IccPowerOn (--atr worked) but
+ * failed at protocol negotiation when sending XfrBlock ("Unresponsive
+ * card"), because the parse for PPS/SetParameters read past the
+ * declared TC3/TD3 bytes.  Lesson captured in
+ * feedback_atr_must_match_declared_interface_bytes.md. */
+static const uint8_t s_atr[] = { 0x3B, 0x80, 0x01, 0x81 };
 static const uint8_t s_atr_len = sizeof s_atr;
 
 /* T=1 parameters returned on Get/Reset/SetParameters.  Spec §6.2.3 (T=1).
