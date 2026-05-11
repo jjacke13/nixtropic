@@ -12,23 +12,82 @@
 #
 # What it does:
 #   - Creates a `tropic` group
-#   - Adds udev rules for TS1302 in app mode (0483:5740) and DFU mode
-#     (0483:df11), giving the `tropic` group read+write access without sudo
+#   - Adds udev rules for TS1302 in app mode (0483:5740 stock fw, cafe:4001
+#     custom fw) and DFU mode (0483:df11), giving the `tropic` group r/w
+#     access without sudo
+#   - (Phase 7) Configures pcsc-lite to recognise our CCID interface by
+#     patching libccid's Info.plist to include VID 0xCAFE PID 0x4001.
+#     Without this patch, libccid silently refuses to drive cafe:4001
+#     even though our device correctly advertises USB class 0x0B.
 #   - Optionally adds specified users to the `tropic` group
 #
 # What it does NOT do (yet — Phase 8):
 #   - Run any service
 #   - Configure system-wide PKCS#11 module path
 #   - Set up firmware auto-update
-#
-# These follow when the firmware project gets to Phase 8.
 
 let
   cfg = config.services.tropic;
+
+  # libccid (the pcsc-lite USB CCID driver) ships with a hardcoded
+  # Info.plist listing 607 supported VID:PID pairs.  Our TinyUSB demo
+  # VID:PID `0xCAFE:0x4001` is NOT in that list — libccid silently
+  # refuses to drive any device whose ID isn't in the list, even when
+  # the device correctly advertises USB class 0x0B (Smart Card).
+  #
+  # The override below appends a single nixtropic entry to each of the
+  # three parallel arrays (ifdVendorID, ifdProductID, ifdFriendlyName)
+  # in Info.plist via awk.  Existing 607 readers are untouched.
+  #
+  # Real fix (Phase 8): pid.codes-allocated VID:PID + upstream PR to
+  # libccid.  For now this patch keeps the test surface clean.
+  ccidWithNixtropic = pkgs.ccid.overrideAttrs (old: {
+    postFixup = (old.postFixup or "") + ''
+      INFO="$out/pcsc/drivers/ifd-ccid.bundle/Contents/Info.plist"
+      if [ ! -f "$INFO" ]; then
+        echo "ERROR: ccid Info.plist not found at $INFO"
+        exit 1
+      fi
+
+      ${pkgs.gawk}/bin/awk '
+        /<key>ifdVendorID<\/key>/      { stage="vid";  print; next }
+        /<key>ifdProductID<\/key>/     { stage="pid";  print; next }
+        /<key>ifdFriendlyName<\/key>/  { stage="name"; print; next }
+        /<\/array>/ {
+          if (stage == "vid")  { print "\t\t<string>0xCAFE</string>" }
+          if (stage == "pid")  { print "\t\t<string>0x4001</string>" }
+          if (stage == "name") { print "\t\t<string>nixtropic CCID Reader</string>" }
+          stage = ""
+          print
+          next
+        }
+        { print }
+      ' "$INFO" > "$INFO.new"
+      mv "$INFO.new" "$INFO"
+
+      # Sanity-check the patch landed.
+      if ! grep -q "0xCAFE" "$INFO"; then
+        echo "ERROR: 0xCAFE not present in patched Info.plist"
+        exit 1
+      fi
+    '';
+  });
 in
 {
   options.services.tropic = {
     enable = lib.mkEnableOption "Tropic Square TROPIC01 dongle (TS1302) udev support";
+
+    enableCcid = lib.mkOption {
+      type = lib.types.bool;
+      default = true;
+      description = ''
+        Enable pcsc-lite with a libccid override that recognises the
+        nixtropic CCID interface (VID 0xCAFE PID 0x4001).  Required
+        for Phase 7 OpenPGP card functionality (`gpg --card-status`,
+        `git commit -S`, SSH via gpg-agent).  Set to false if you only
+        use the dongle as a FIDO2 key (HID transport).
+      '';
+    };
 
     users = lib.mkOption {
       type = lib.types.listOf lib.types.str;
@@ -49,57 +108,67 @@ in
     };
   };
 
-  config = lib.mkIf cfg.enable {
-    users.groups.${cfg.groupName} = { };
+  config = lib.mkIf cfg.enable (lib.mkMerge [
+    {
+      users.groups.${cfg.groupName} = { };
 
-    users.users = lib.genAttrs cfg.users (user: {
-      extraGroups = [ cfg.groupName ];
-    });
+      users.users = lib.genAttrs cfg.users (user: {
+        extraGroups = [ cfg.groupName ];
+      });
 
-    services.udev.extraRules = ''
-      # Tropic Square TROPIC01 TS1302 USB devkit — udev rules
-      #
-      # Three USB identities the dongle can show up as:
-      #   1. Stock firmware app mode: VID 0483 PID 5740 (ST CDC-ACM,
-      #      labeled "TropicSquare SPI interface")
-      #   2. Custom Phase 1 firmware: VID cafe PID 4001 (TinyUSB demo
-      #      defaults — real allocation deferred to Phase 8 ship-prep)
-      #   3. STM32 DFU bootloader: VID 0483 PID df11
-      #
-      # All three get group/permission + ID_MM_DEVICE_IGNORE so:
-      #   - Nix-flake apps work without sudo for `${cfg.groupName}` members
-      #   - ModemManager (NixOS default) does NOT auto-probe the dongle and
-      #     hold /dev/ttyACM* hostage from picocom
+      services.udev.extraRules = ''
+        # Tropic Square TROPIC01 TS1302 USB devkit — udev rules
+        #
+        # Three USB identities the dongle can show up as:
+        #   1. Stock firmware app mode: VID 0483 PID 5740 (ST CDC-ACM,
+        #      labeled "TropicSquare SPI interface")
+        #   2. Custom Phase 1+ firmware: VID cafe PID 4001 (TinyUSB demo
+        #      defaults — real allocation deferred to Phase 8 ship-prep)
+        #   3. STM32 DFU bootloader: VID 0483 PID df11
+        #
+        # All three get group/permission + ID_MM_DEVICE_IGNORE so:
+        #   - Nix-flake apps work without sudo for `${cfg.groupName}` members
+        #   - ModemManager (NixOS default) does NOT auto-probe the dongle and
+        #     hold /dev/ttyACM* hostage from picocom
 
-      # ----- Stock firmware in app mode -----
-      SUBSYSTEM=="tty", ATTRS{idVendor}=="0483", ATTRS{idProduct}=="5740", \
-        GROUP="${cfg.groupName}", MODE="0660", \
-        SYMLINK+="tropic01", \
-        ENV{ID_MM_DEVICE_IGNORE}="1", \
-        TAG+="uaccess"
-      SUBSYSTEM=="usb", ATTRS{idVendor}=="0483", ATTRS{idProduct}=="5740", \
-        GROUP="${cfg.groupName}", MODE="0660", \
-        ENV{ID_MM_DEVICE_IGNORE}="1", \
-        TAG+="uaccess"
+        # ----- Stock firmware in app mode -----
+        SUBSYSTEM=="tty", ATTRS{idVendor}=="0483", ATTRS{idProduct}=="5740", \
+          GROUP="${cfg.groupName}", MODE="0660", \
+          SYMLINK+="tropic01", \
+          ENV{ID_MM_DEVICE_IGNORE}="1", \
+          TAG+="uaccess"
+        SUBSYSTEM=="usb", ATTRS{idVendor}=="0483", ATTRS{idProduct}=="5740", \
+          GROUP="${cfg.groupName}", MODE="0660", \
+          ENV{ID_MM_DEVICE_IGNORE}="1", \
+          TAG+="uaccess"
 
-      # ----- Custom Phase 1 firmware in app mode -----
-      SUBSYSTEM=="tty", ATTRS{idVendor}=="cafe", ATTRS{idProduct}=="4001", \
-        GROUP="${cfg.groupName}", MODE="0660", \
-        SYMLINK+="tropic01-phase1", \
-        ENV{ID_MM_DEVICE_IGNORE}="1", \
-        TAG+="uaccess"
-      SUBSYSTEM=="usb", ATTRS{idVendor}=="cafe", ATTRS{idProduct}=="4001", \
-        GROUP="${cfg.groupName}", MODE="0660", \
-        ENV{ID_MM_DEVICE_IGNORE}="1", \
-        TAG+="uaccess"
+        # ----- Custom Phase 1 firmware in app mode -----
+        SUBSYSTEM=="tty", ATTRS{idVendor}=="cafe", ATTRS{idProduct}=="4001", \
+          GROUP="${cfg.groupName}", MODE="0660", \
+          SYMLINK+="tropic01-phase1", \
+          ENV{ID_MM_DEVICE_IGNORE}="1", \
+          TAG+="uaccess"
+        SUBSYSTEM=="usb", ATTRS{idVendor}=="cafe", ATTRS{idProduct}=="4001", \
+          GROUP="${cfg.groupName}", MODE="0660", \
+          ENV{ID_MM_DEVICE_IGNORE}="1", \
+          TAG+="uaccess"
 
-      # ----- DFU bootloader (any TS1302 firmware can drop into DFU) -----
-      SUBSYSTEM=="usb", ATTRS{idVendor}=="0483", ATTRS{idProduct}=="df11", \
-        GROUP="${cfg.groupName}", MODE="0660", \
-        ENV{ID_MM_DEVICE_IGNORE}="1", \
-        TAG+="uaccess"
-    '';
-  };
+        # ----- DFU bootloader (any TS1302 firmware can drop into DFU) -----
+        SUBSYSTEM=="usb", ATTRS{idVendor}=="0483", ATTRS{idProduct}=="df11", \
+          GROUP="${cfg.groupName}", MODE="0660", \
+          ENV{ID_MM_DEVICE_IGNORE}="1", \
+          TAG+="uaccess"
+      '';
+    }
+
+    # Phase 7 — pcsc-lite + patched libccid for CCID OpenPGP card
+    # transport.  Guarded by enableCcid so FIDO-only users aren't
+    # forced to install pcscd.
+    (lib.mkIf cfg.enableCcid {
+      services.pcscd.enable = true;
+      services.pcscd.plugins = lib.mkForce [ ccidWithNixtropic ];
+    })
+  ]);
 
   meta = {
     maintainers = [ ];

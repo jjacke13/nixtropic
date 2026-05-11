@@ -37,8 +37,8 @@ echo "  ✓ cafe:4001 enumerated"
 echo ""
 echo "2/5  CCID interface descriptor..."
 LSUSB_DETAIL=$(lsusb -v -d cafe:4001 2>&1 || true)
-if ! echo "$LSUSB_DETAIL" | grep -qE "(Smart Card|bInterfaceClass.*0[bB])"; then
-  echo "  ✗ Smart Card class (0x0B) not in interface descriptors."
+if ! echo "$LSUSB_DETAIL" | grep -qE "(SmartCard|Smart Card|bInterfaceClass[[:space:]]+11[[:space:]]|bInterfaceClass.*0[xX]?0[bB])"; then
+  echo "  ✗ Smart Card class (0x0B / 11 decimal) not in interface descriptors."
   echo "    Class bytes found:"
   echo "$LSUSB_DETAIL" | grep -i "InterfaceClass" || echo "    (none)"
   overall_rc=4
