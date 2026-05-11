@@ -177,9 +177,16 @@ def _format_init(payload: bytes) -> str:
             f"caps=0x{payload[16]:02x}")
 
 
-def cmd_cbor(dev: hid.Device, cid: int, sub: int, params: bytes = b"") -> tuple[int, bytes]:
-    """Send a CTAP2 CBOR command. Returns (status, response_body)."""
-    _, _, body = transact(dev, cid, CMD_CBOR, bytes([sub]) + params, timeout_ms=5000)
+def cmd_cbor(dev: hid.Device, cid: int, sub: int, params: bytes = b"",
+             *, timeout_ms: int = 5000) -> tuple[int, bytes]:
+    """Send a CTAP2 CBOR command. Returns (status, response_body).
+
+    Phase 6 M1: timeout_ms parameter exposes the read deadline. UP-gated
+    commands (MakeCred, GetAssertion) can block up to 30 s waiting for
+    the user to press SW1 — callers should pass timeout_ms=35000 (a few
+    extra seconds for USB pipeline latency) for those paths."""
+    _, _, body = transact(dev, cid, CMD_CBOR, bytes([sub]) + params,
+                          timeout_ms=timeout_ms)
     if not body:
         raise RuntimeError("Empty CTAP2 response")
     return body[0], body[1:]
@@ -1106,6 +1113,130 @@ def sub_validate_m3(args) -> int:
     return 0 if all(ok for _, ok, _ in results) else 1
 
 
+def sub_validate_phase6_m1(args) -> int:
+    """Phase 6 M1 validation — real SW1 user-presence (interactive).
+
+    Three checks, two of which require human interaction:
+
+      1) GetInfo regression — `up` advertised true (was Phase 5 stub-true,
+         must remain advertised; the firmware now backs it with a real
+         button read, but the GetInfo response is unchanged).
+      2) Interactive "press SW1" — MakeCredential with a 30 s window;
+         tester presses SW1 → expect CTAP2_OK, FLAG_UP=1 in authData.
+      3) Interactive "do not press" — MakeCredential, tester ignores
+         the prompt for 30 s → expect CTAP2_ERR_OPERATION_DENIED (0x27).
+
+    Total wall-clock cost: ~60 s (one press, one full timeout).
+    """
+    import hashlib
+
+    path = find_fido_path()
+    print(f"FIDO HID @ {path}")
+    results: list[tuple[str, bool, str]] = []
+
+    with open_dev(path) as dev:
+        new_cid, _ = cmd_init(dev)
+
+        # 1) GetInfo regression — up still advertised.
+        ok = False
+        detail = ""
+        try:
+            status, body = cmd_cbor(dev, new_cid, CTAP2_CMD_GET_INFO)
+            assert status == CTAP2_OK, f"status 0x{status:02x}"
+            info = cbor_decode(body)
+            opts = info.get(4, {})
+            up = opts.get("up", False)
+            assert up is True, f"options.up = {up!r} (expected True)"
+            ok = True
+            detail = f"options.up=True, rk={opts.get('rk')}, clientPin={opts.get('clientPin')}"
+        except Exception as e:
+            detail = f"{type(e).__name__}: {e}"
+        results.append(("GetInfo: options.up advertised true", ok, detail))
+
+        # 2) Press SW1 — expect success.
+        print()
+        print("─" * 63)
+        print("  Test 2/3: SW1 PRESS path  (expected: SUCCESS, UP flag set)")
+        print()
+        print("  How it works:")
+        print("    1. Press Enter below.  This sends MakeCredential to the dongle.")
+        print("    2. The LED will start BLINKING at 2 Hz.  This is the firmware")
+        print("       waiting for you to consent to the operation.")
+        print("    3. Press SW1 on the dongle within 30 seconds.")
+        print("    4. The LED goes SOLID for ~500 ms, then off.")
+        print("─" * 63)
+        input("  → Press Enter NOW to send the request... ")
+        ok = False
+        detail = ""
+        try:
+            client_hash = os.urandom(32)
+            req = {
+                1: client_hash,
+                2: {"id": "test.nixtropic.local", "name": "nixtropic test"},
+                3: {"id": os.urandom(16), "name": "user", "displayName": "Test User"},
+                4: [{"alg": -8, "type": "public-key"}],
+            }
+            status, body = cmd_cbor(dev, new_cid, CTAP2_CMD_MAKE_CRED,
+                                    cbor_encode(req), timeout_ms=35000)
+            assert status == CTAP2_OK, f"status 0x{status:02x}"
+            resp = cbor_decode(body)
+            authdata = resp[2]
+            attstmt = resp[3]
+            _, flags, _, _, cose = parse_authdata(authdata, expect_at=True)
+            assert (flags & 0x01) != 0, f"FLAG_UP not set: flags=0x{flags:02x}"
+            pubkey = cose_ed25519_pubkey(cose)
+            Ed25519PublicKey.from_public_bytes(pubkey).verify(
+                attstmt["sig"], authdata + client_hash)
+            ok = True
+            detail = f"flags=0x{flags:02x} (UP set), sig verifies"
+        except Exception as e:
+            detail = f"{type(e).__name__}: {e}"
+        results.append(("MakeCred WITH SW1 press → success, UP flag set", ok, detail))
+
+        # 3) Don't press SW1 — expect OPERATION_DENIED after 30 s.
+        print()
+        print("─" * 63)
+        print("  Test 3/3: SW1 TIMEOUT path  (expected: OPERATION_DENIED)")
+        print()
+        print("  How it works:")
+        print("    1. Press Enter below.  This sends MakeCredential to the dongle.")
+        print("    2. The LED will start BLINKING at 2 Hz.")
+        print("    3. DO NOT press SW1.  Just wait ~30 seconds.")
+        print("    4. After 30 s the LED switches to RAPID blink (5 Hz) for 2 s,")
+        print("       then off.  The test then sees CTAP2_ERR_OPERATION_DENIED.")
+        print("─" * 63)
+        input("  → Press Enter NOW to send the request (then keep your hands off)... ")
+        ok = False
+        detail = ""
+        try:
+            client_hash = os.urandom(32)
+            req = {
+                1: client_hash,
+                2: {"id": "test.nixtropic.local", "name": "nixtropic test"},
+                3: {"id": os.urandom(16), "name": "user", "displayName": "Test User"},
+                4: [{"alg": -8, "type": "public-key"}],
+            }
+            status, body = cmd_cbor(dev, new_cid, CTAP2_CMD_MAKE_CRED,
+                                    cbor_encode(req), timeout_ms=35000)
+            # Expect 0x27 OPERATION_DENIED (Yubikey convention) or
+            # 0x21 USER_ACTION_TIMEOUT (older CTAP2 wording).  Both are
+            # spec-allowed for "user did not consent."
+            assert status in (0x27, 0x21), (
+                f"status 0x{status:02x} (expected 0x27 OPERATION_DENIED "
+                f"or 0x21 USER_ACTION_TIMEOUT)")
+            ok = True
+            detail = f"status=0x{status:02x} as expected (no consent)"
+        except Exception as e:
+            detail = f"{type(e).__name__}: {e}"
+        results.append(("MakeCred WITHOUT SW1 press → OPERATION_DENIED", ok, detail))
+
+    print_summary(
+        results,
+        title="Phase 6 M1 — SW1 user-presence + LED state machine",
+        short_name="Phase 6 M1")
+    return 0 if all(ok for _, ok, _ in results) else 1
+
+
 def print_summary(results,
                   title: str = "Phase 5 M3 — ClientPIN protocol v1 (P-256 + AES-CBC + HMAC)",
                   short_name: str = "Phase 5 M3"):
@@ -1250,6 +1381,8 @@ def main() -> int:
                                help="Phase 5 M3 — ClientPIN protocol v1 (P-256+AES-CBC)")
     p_val_m5  = sub.add_parser("validate-m5",
                                help="Phase 5 M5 — authenticatorReset (CTAP2 0x07)")
+    p_val_p6m1 = sub.add_parser("validate-phase6-m1",
+                                help="Phase 6 M1 — SW1 user-presence + LED (interactive)")
 
     p_init.set_defaults(func=sub_init)
     p_ping.set_defaults(func=sub_ping)
@@ -1261,6 +1394,7 @@ def main() -> int:
     p_val_m2.set_defaults(func=sub_validate_m2)
     p_val_m3.set_defaults(func=sub_validate_m3)
     p_val_m5.set_defaults(func=sub_validate_m5)
+    p_val_p6m1.set_defaults(func=sub_validate_phase6_m1)
 
     args = parser.parse_args()
     return args.func(args)

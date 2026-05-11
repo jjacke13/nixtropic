@@ -25,6 +25,7 @@
 #include "platform/blink.h"
 #include "platform/clock.h"
 #include "platform/gpio.h"
+#include "platform/led.h"
 #include "platform/rng.h"
 #include "platform/spi.h"
 #include "usb/usb.h"
@@ -34,13 +35,19 @@
 #include "fido_hid/credstore.h"
 #include "fido_hid/slots.h"
 #include "fido_hid/pin.h"
+#include "fido_hid/user_presence.h"
 #include "tropic/tropic.h"  /* re-enabled in Phase 3 M3 for libtropic on chip */
 
 #include "tusb.h"
 
+/* Phase 6 M1: SysTick drives the SW1 debouncer + LED state machine at
+ * 1 kHz.  HAL_IncTick must run first (HAL_Delay / HAL_GetTick depend on
+ * it); the additional callbacks are cheap and bounded. */
 void SysTick_Handler(void)
 {
     HAL_IncTick();
+    user_presence_systick_tick();
+    led_systick_tick();
 }
 
 /* ===== Diagnostic raw-GPIO LED for pre-HAL phase ===== */
@@ -224,7 +231,11 @@ int main(void)
         }
     }
 
-    blink_set_heartbeat();
+    /* Phase 6 M1: LED state machine takes over.  Boot phase used
+     * LED_HEARTBEAT (default initial state); switch to LED_IDLE once
+     * everything is up so the off-state advertises "ready, awaiting
+     * host request" — same UX cue Yubikey gives. */
+    led_set_state(LED_IDLE);
 
     /* Stage 9 — main loop */
     for (;;) {
@@ -232,6 +243,6 @@ int main(void)
         cdc_protocol_task();
         hid_rpc_task();
         fido_hid_task();
-        blink_tick();
+        /* LED + SW1 debouncer now driven by SysTick — no main-loop poll. */
     }
 }

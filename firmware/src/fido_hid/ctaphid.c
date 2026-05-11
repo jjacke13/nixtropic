@@ -24,6 +24,7 @@
 
 #include "ctaphid.h"
 #include "proto.h"
+#include "user_presence.h"
 
 #include <stdint.h>
 #include <stdbool.h>
@@ -336,6 +337,18 @@ static void handle_init_packet(uint32_t cid, const uint8_t *pkt)
             reset_assembly();
         }
         handle_init(cid, &pkt[7], (size_t) bcnt);
+        return;
+    }
+
+    /* Phase 6 M1 — M3 reentrancy defense (docs/PHASE-6-PLAN.md §3 row
+     * M3): while user_presence_check is awaiting touch, the CBOR
+     * dispatcher cannot accept any new transaction.  pin.c file-statics
+     * (s_pin_token, s_eph_priv) are not reentrant; ECC keypair gen on
+     * TROPIC01 must run to completion before any new sign request.
+     * Refuse with CHANNEL_BUSY regardless of CID — INIT was already
+     * fast-pathed above so stuck channels can still be reset. */
+    if (user_presence_is_awaiting()) {
+        queue_error(cid, FIDO_HID_ERR_CHANNEL_BUSY);
         return;
     }
 

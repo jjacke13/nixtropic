@@ -46,6 +46,7 @@
 #include "cbor.h"
 #include "proto.h"
 #include "pin.h"
+#include "user_presence.h"
 
 #include <stdint.h>
 #include <stddef.h>
@@ -445,6 +446,16 @@ int ctap2_make_credential(const uint8_t *req, size_t req_len,
         resp[0] = CTAP2_ERR_PIN_REQUIRED; return 1;
     }
 
+    /* Phase 6 M1: real user-presence — replaces Phase 5 stub-true.
+     * Placed BEFORE credstore_make so a refused/timed-out prompt does
+     * not waste an ECC slot.  H5 sign-canary compare — `up != UP_OK`
+     * defends against single-instruction skip of this check. */
+    up_result_t up = user_presence_check(30000u);
+    if (up != UP_OK) {
+        resp[0] = CTAP2_ERR_OPERATION_DENIED;
+        return 1;
+    }
+
     /* rpIdHash = SHA-256(rpId) */
     uint8_t rp_id_hash[32];
     sha256_Raw(rp_id_p, (uint32_t) rp_id_len, rp_id_hash);
@@ -580,11 +591,22 @@ int ctap2_get_assertion(const uint8_t *req, size_t req_len,
         return 1;
     }
 
+    /* Phase 6 M1: real user-presence — replaces Phase 5 stub-true.
+     * Placed AFTER credstore_lookup so we don't prompt for missing
+     * credentials (spec: CTAP2 §6.1.2 step 11 requires lookup first).
+     * Placed BEFORE peek_signcount so a refused prompt doesn't advance
+     * the monotonic counter. */
+    up_result_t up = user_presence_check(30000u);
+    if (up != UP_OK) {
+        resp[0] = CTAP2_ERR_OPERATION_DENIED;
+        return 1;
+    }
+
     uint8_t rp_id_hash[32];
     sha256_Raw(rp_id_p, (uint32_t) rp_id_len, rp_id_hash);
 
-    /* authData WITHOUT attestedCredentialData. UP always set; UV set
-     * iff pinAuth verified. */
+    /* authData WITHOUT attestedCredentialData. UP always set (real now);
+     * UV set iff pinAuth verified. */
     uint32_t sc = credstore_peek_signcount();
     uint8_t auth_data[64];
     int auth_data_len = build_authdata(rp_id_hash, FLAG_UP | uv_flag,

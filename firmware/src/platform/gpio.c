@@ -38,6 +38,18 @@ void gpio_init(void)
     cfg.Pull  = GPIO_PULLDOWN;
     cfg.Speed = GPIO_SPEED_FREQ_LOW;
     HAL_GPIO_Init(BOARD_TROPIC_GPO_PORT, &cfg);
+
+    /* PH3 — SW1 button (BOOT0 strap at reset; runtime input).  Phase 6 M1
+     * requires real user-presence reads.  Topology per
+     * research/stm32u535-inventory.md:327 — SW1 pulls PH3 to VCC,
+     * external 33 kΩ R1 pull-down to GND.  Pressed = HIGH.  Without
+     * this init the pin stays in silicon-default analog mode and
+     * HAL_GPIO_ReadPin returns garbage. */
+    cfg.Pin   = BOARD_BUTTON_PIN;
+    cfg.Mode  = GPIO_MODE_INPUT;
+    cfg.Pull  = GPIO_PULLDOWN;          /* belt-and-suspenders with R1 */
+    cfg.Speed = GPIO_SPEED_FREQ_LOW;
+    HAL_GPIO_Init(BOARD_BUTTON_PORT, &cfg);
 }
 
 void board_led_on(void)

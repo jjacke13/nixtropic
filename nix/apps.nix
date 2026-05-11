@@ -417,6 +417,22 @@ let
     '';
   };
 
+  # Phase 6 M1 — SW1 user-presence button + LED state machine.
+  # Interactive: tester presses SW1 on cue (test 2), then ignores
+  # the prompt for the full 30 s timeout (test 3).  Pre-step wipes
+  # leftover Phase 5 PIN/credstore state via lt-rpc slots-reset.
+  # See docs/PHASE-6-PLAN.md §5 M1 HW checkpoint.
+  validate-phase6-m1 = writeShellApplication {
+    name = "nixtropic-validate-phase6-m1";
+    runtimeInputs = [ py usbutils coreutils gnugrep ];
+    text = ''
+      set -uo pipefail
+      export FIDO2_PY="${../tools/fido2_test.py}"
+      export LT_RPC_PY="${../tools/lt_rpc.py}"
+      exec ${../tools/validate-phase6-m1.sh} "$@"
+    '';
+  };
+
   # Phase 1 — flash-and-validate: orchestrates DFU flash + immediate validate.
   # Solves the "boot markers emit only once" gotcha: after flash, the
   # firmware re-boots fresh and emits its boot block; the validator captures
@@ -723,6 +739,60 @@ let
           export LT_RPC_PY="${../tools/lt_rpc.py}"
           export FIDO2_PY="${../tools/fido2_test.py}"
           exec ${../tools/validate-phase5.sh}
+        '';
+      };
+
+  # Phase 6 M1 — flash-and-validate-phase6-m1: DFU flash + interactive
+  # SW1 + LED validation.  No timing pressure (no 10 s window like
+  # Reset has) so the tester can take their time pressing / not-pressing.
+  flash-and-validate-phase6-m1 =
+    if firmware == null then
+      writeShellApplication {
+        name = "nixtropic-flash-and-validate-phase6-m1-placeholder";
+        text = ''echo "Custom firmware not available in this flake."; exit 1'';
+      }
+    else
+      writeShellApplication {
+        name = "nixtropic-flash-and-validate-phase6-m1";
+        runtimeInputs = [ dfu-util usbutils coreutils gnugrep py ];
+        text = ''
+          set -euo pipefail
+          FW_BIN="${firmware}/firmware.bin"
+
+          echo "═══════════════════════════════════════════════════════════════"
+          echo "  Phase 6 M1: flash-and-validate (SW1 + LED, interactive)"
+          echo "═══════════════════════════════════════════════════════════════"
+
+          if ! lsusb | grep -q "0483:df11"; then
+            echo "ERROR: dongle not in DFU mode (0483:df11)." >&2
+            echo "       Hold SW1 while plugging USB to enter DFU." >&2
+            exit 1
+          fi
+
+          DFU_LOG=$(mktemp); trap 'rm -f "$DFU_LOG"' EXIT
+          echo "Step 1/2: DFU flash..."
+          dfu-util -a 0 -s 0x08000000:leave -D "$FW_BIN" 2>&1 | tee "$DFU_LOG" >/dev/null || true
+          DFU_EXIT="''${PIPESTATUS[0]}"
+          if [ "$DFU_EXIT" -ne 0 ] && ! grep -q "File downloaded successfully" "$DFU_LOG"; then
+            echo "✗ DFU flash FAILED."; exit 1
+          fi
+
+          echo "✓ Flash complete. Waiting for enumeration..."
+          for _ in $(seq 1 24); do
+            sleep 0.5
+            if lsusb | grep -q "cafe:4001"; then break; fi
+          done
+          if ! lsusb | grep -q "cafe:4001"; then
+            echo "✗ Enumeration failed." >&2; exit 1
+          fi
+          echo "✓ Enumerated. Settling 3 s..."
+          sleep 3
+
+          echo ""
+          echo "Step 2/2: M1 validation (interactive)..."
+          export FIDO2_PY="${../tools/fido2_test.py}"
+          export LT_RPC_PY="${../tools/lt_rpc.py}"
+          exec ${../tools/validate-phase6-m1.sh}
         '';
       };
 
@@ -1317,6 +1387,22 @@ in
       else
         "${flash-and-validate-phase5}/bin/nixtropic-flash-and-validate-phase5";
     meta.description = "DFU-flash open firmware + Phase 5 FULL validation";
+  };
+
+  validate-phase6-m1 = {
+    type = "app";
+    program = "${validate-phase6-m1}/bin/nixtropic-validate-phase6-m1";
+    meta.description = "Phase 6 M1 — SW1 user-presence + LED (interactive)";
+  };
+
+  flash-and-validate-phase6-m1 = {
+    type = "app";
+    program =
+      if firmware == null then
+        "${flash-and-validate-phase6-m1}/bin/nixtropic-flash-and-validate-phase6-m1-placeholder"
+      else
+        "${flash-and-validate-phase6-m1}/bin/nixtropic-flash-and-validate-phase6-m1";
+    meta.description = "DFU-flash open firmware + Phase 6 M1 SW1/LED validation";
   };
 
   identify = {
