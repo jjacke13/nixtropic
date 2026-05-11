@@ -505,7 +505,7 @@ let
   # See docs/PHASE-7-PLAN.md §5 M1 HW checkpoint.
   validate-phase7-m1 = writeShellApplication {
     name = "nixtropic-validate-phase7-m1";
-    runtimeInputs = [ usbutils coreutils gnugrep pkgs.opensc pkgs.pcsctools pkgs.pcsclite ];
+    runtimeInputs = [ usbutils coreutils gnugrep pkgs.opensc pkgs.pcsc-tools pkgs.pcsclite ];
     text = ''
       set -uo pipefail
       exec ${../tools/validate-phase7-m1.sh} "$@"
@@ -521,7 +521,7 @@ let
     else
       writeShellApplication {
         name = "nixtropic-flash-and-validate-phase7-m1";
-        runtimeInputs = [ dfu-util usbutils coreutils gnugrep pkgs.opensc pkgs.pcsctools pkgs.pcsclite ];
+        runtimeInputs = [ dfu-util usbutils coreutils gnugrep pkgs.opensc pkgs.pcsc-tools pkgs.pcsclite ];
         text = ''
           set -euo pipefail
           FW_BIN="${firmware}/firmware.bin"
