@@ -68,7 +68,7 @@ Hi jjacke13! You've successfully authenticated...
 
 - `gpg --card-edit` walks all menus: admin, name/lang/sex, url, change PIN, generate keys.
 - `gpg --decrypt` round-trips on a 4 KB ciphertext encrypted to the card's encryption subkey.
-- Per-slot UIF (touch policy) per-spec: DO D6/D7/D8 default = `0x01` (enabled), every PSO requires SW1 press within 30 s. PW3 can toggle to `0x00`.
+- **Global touch policy** (single flag, default ON) — every PSO + INT_AUT requires SW1 press within 30 s. Exposed via DOs D6/D7/D8 (all three back the same global byte for spec / gpg-edit / ykman compatibility) and via vendor lt-rpc command. PW3 can toggle off.
 - `gpg --card-edit` → `factory-reset` (TERMINATE DF + ACTIVATE FILE) clears all PGP DOs and erases chip slots 29/30/31. FIDO surface unaffected.
 - M&D-backed PIN retry counters: 3 wrong PW1 attempts → PW1 blocked; wrong PW3 → blocked; RC unblocks PW1.
 - All Phase 6 validation chains still pass (FIDO regression test green); FIDO capacity drops from 32 to 29 — documented but unlikely to bite any user.
@@ -89,7 +89,7 @@ Numbering continues from Phase 6.
 | # | Severity | Attack | Defense in Phase 7 | Validated at |
 |---|---|---|---|---|
 | H6 | **HIGH** | PIN brute force on PW1 / PW3 / RC — software counter alone is bypassable via firmware reflash (the same threat that drove Phase 5 M4 for FIDO PIN) | M&D-backed retry counter per PIN. 3 chip slots PW1 + 3 PW3 + 3 RC = 9 total (chip slot indices 8..16, on top of Phase 5's slots 0..7 for FIDO PIN; 17/128 used). Reuses Phase 5 `pin_md.c` primitive verbatim. | M3 |
-| H7 | **HIGH** | PSO:CDS / PSO:DEC / INTERNAL AUTHENTICATE without consent — host malware sends APDU without user interaction | Every PSO + INT_AUT requires `user_presence_check(30000) == UP_OK` when the corresponding UIF is enabled (default ON). Reuses Phase 6 C1 fresh-consent gate, H5 sign-canary enum, M3 dispatcher reentrancy lock. | M4 + M5 |
+| H7 | **HIGH** | PSO:CDS / PSO:DEC / INTERNAL AUTHENTICATE without consent — host malware sends APDU without user interaction | Every PSO + INT_AUT requires `user_presence_check(30000) == UP_OK` when the global `touch_required` flag is enabled (default ON). Reuses Phase 6 C1 fresh-consent gate, H5 sign-canary enum, M3 dispatcher reentrancy lock. | M4 + M5 |
 | H8 | **HIGH** | PW3 (admin) compromise → key replacement attack — attacker who learns admin PIN runs GENERATE ASYMMETRIC KEY PAIR and silently replaces the user's keys | (a) GENERATE requires PW3 AND SW1 press (defense-in-depth beyond PIN). (b) Key fingerprints (DO C7/C8/C9) change on regeneration; host gpg-agent will report "different key on card" on next operation — visible signal. (c) Per-slot generation timestamp (DO CE/CF/D0) gives forensic trail. | M4 |
 | H9 | **HIGH** | INTERNAL AUTHENTICATE replay — attacker submits chosen challenge to get signature usable elsewhere | INT_AUT response binds to challenge bytes — no separable "nonce" — but the wider concern is that the host application's chosen challenge format binds the signature to context. Spec-compliant. SSH binds challenge to session_id + hostkey; out-of-scope for firmware to verify. | (spec-compliance) |
 | H10 | **HIGH** | APDU length-field confusion (CLA / Lc / Le parsing) — malformed Lc reads past command buffer | ISO 7816 parser bounds-checks every byte; T=1 chaining reassembled into bounded buffer; extended-length Lc (3-byte form) capped at 4096 B (matches TROPIC01 L3 ciphertext max). Reject any APDU whose declared Lc exceeds remaining buffer. | M1 + M6 audit |
@@ -101,7 +101,7 @@ Numbering continues from Phase 6.
 | M10 | MEDIUM | T=1 EDC (LRC checksum) bypass — malformed checksum accepted | LRC computed per ISO 7816-3 §11.3.2 over every received block; mismatch → R-block with retry. Three retry failures → drop block. | M1 + M6 audit |
 | L3 | LOW | Default PIN UX — spec / convention defaults are `123456` (PW1) and `12345678` (PW3); attacker tries these first | Documented loudly in README that user MUST change PINs immediately. `gpg --card-status` parse will show default-PIN warning. Decision: ship spec-conventional defaults so `gpg --card-edit` → `passwd` flow works out of the box. | M3 + M6 docs |
 | L4 | LOW | Generation timestamp (DO CE/CF/D0) source — STM32U535 has RTC but we may not wire it for M4 | M4 stubs to `0` (Unix epoch); M6 wires HAL RTC if budget allows. GnuPG accepts 0 (shows "1970-01-01"). Cosmetic. | M4 → M6 |
-| L5 | LOW | UIF "permanent" (`0x02`) lock — once set, cannot be toggled even by PW3; user shoots own foot | We accept 0x00 / 0x01 by default; 0x02 only via explicit vendor lt-rpc command (similar to Force-UV vendor cmd). Defends accidental-permanent. Phase 8 polish surfaces it normally. | M3 |
+| L5 | LOW | Touch-permanent (`0x02`) lock on the global flag — once set, cannot be toggled even by PW3; user shoots own foot | We accept `0x00` / `0x01` by default; `0x02` only via explicit vendor lt-rpc command (same gate-pattern as Phase 6 Force-UV permanent). Defends accidental-permanent. | M3 |
 | L6 | LOW | FIDO slot capacity drops from 32 to 29 | Documented; impossible to exceed 29 FIDO creds in real daily-driver use. README notes the 29-credential cap for the FIDO+OpenPGP build. | docs |
 | I1 | INFO | Phase 7b PIV alongside OpenPGP would force CCID multi-applet dispatch | CCID applet dispatcher takes AID at SELECT; adding PIV applet later is "add a second AID branch, ~5 KB." Architecture doesn't preclude. | future |
 | I2 | INFO | gpg-agent must run with `enable-ssh-support` on Linux for SSH-via-card to work | NixOS module addition (Phase 8) or README documentation. Phase 7 assumes user has this configured. | M5 docs |
@@ -208,9 +208,9 @@ Full AID is 16 bytes. Compile-time constants in `firmware/src/openpgp/openpgp_ai
 | `CE` | always | (auto) | Generation timestamp of sig key — R-mem |
 | `CF` | always | (auto) | Generation timestamp of dec key — R-mem |
 | `D0` | always | (auto) | Generation timestamp of aut key — R-mem |
-| `D6` | always | PW3 | UIF for sig (`0x00`/`0x01`/`0x02`) — R-mem |
-| `D7` | always | PW3 | UIF for dec — R-mem |
-| `D8` | always | PW3 | UIF for aut — R-mem |
+| `D6` | always | PW3 | Touch policy (`0x00` off / `0x01` on / `0x02` permanent) — single global flag |
+| `D7` | always | PW3 | Touch policy (**alias of D6** — all three DOs back the same byte) |
+| `D8` | always | PW3 | Touch policy (alias of D6) |
 
 **Algorithm attribute encoding** (DO C1/C2/C3 per spec §4.4.3.7):
 
@@ -297,13 +297,13 @@ GENERATE ASYMMETRIC KEY PAIR (APDU `00 47 80 00`) + key reference template in da
 All three require:
 
 1. Corresponding PIN verified (PW1.81 for CDS; PW1.82 for DEC / INT_AUT).
-2. If UIF for slot is `0x01` (default), `user_presence_check(30000) == UP_OK`.
+2. If the global `touch_required` flag is `0x01` or `0x02` (default `0x01`), `user_presence_check(30000) == UP_OK`.
 
-**PSO:CDS (00 2A 9E 9A)** — sig key (slot 29). VERIFY PW1.81. If force-verify (DO C4 bit 0) ON: PW1.81 must be verified in THIS APDU sequence (cleared after operation). UIF D6 → UP required. Output: 64 B Ed25519 signature. DO 93 (sig counter) increments by 1.
+**PSO:CDS (00 2A 9E 9A)** — sig key (slot 29). VERIFY PW1.81. If force-verify (DO C4 bit 0) ON: PW1.81 must be verified in THIS APDU sequence (cleared after operation). Global touch flag → UP required. Output: 64 B Ed25519 signature. DO 93 (sig counter) increments by 1.
 
-**PSO:DEC (00 2A 80 86)** — dec key (slot 30, Cv25519). VERIFY PW1.82. UIF D7 → UP required. Input: encrypted ephemeral pubkey wrapped in spec ASN.1 template. Operation: chip-side X25519 KX via `lt_ecc_ecdh_kx` using slot 30. Output: 32 B shared secret.
+**PSO:DEC (00 2A 80 86)** — dec key (slot 30, Cv25519). VERIFY PW1.82. Global touch flag → UP required. Input: encrypted ephemeral pubkey wrapped in spec ASN.1 template. Operation: chip-side X25519 KX via `lt_ecc_ecdh_kx` using slot 30. Output: 32 B shared secret.
 
-**INTERNAL AUTHENTICATE (00 88 00 00)** — aut key (slot 31, Ed25519). VERIFY PW1.82. UIF D8 → UP required. Input: challenge ≤4096 B. Output: 64 B Ed25519 signature.
+**INTERNAL AUTHENTICATE (00 88 00 00)** — aut key (slot 31, Ed25519). VERIFY PW1.82. Global touch flag → UP required. Input: challenge ≤4096 B. Output: 64 B Ed25519 signature.
 
 All three use the same TROPIC01 API as Phase 5 (`lt_ecc_eddsa_sign`, `lt_ecc_ecdh_kx`).
 
@@ -338,7 +338,8 @@ offset  size   field
    8      1    PW3 retry counter cache
    9      1    RC retry counter cache (0xFF if unset)
   10      1    force_verify (DO C4 bit 0; default 1)
-  11      3    UIF sig/dec/aut (D6/D7/D8; default 1/1/1)
+  11      1    touch_required (alias of D6/D7/D8; default 1)
+  12      2    reserved (was per-slot UIF in earlier draft)
   14     40    cardholder name (1 B len + 39 B data)
   54      2    language (ISO 639)
   56      1    sex
@@ -400,21 +401,25 @@ ssh-add -L   # prints aut key pubkey
 
 **Prerequisite:** user's GitHub account has the Ed25519 SSH pubkey added (one-time, from `ssh-add -L` output). NixOS `programs.gnupg.agent.enableSSHSupport = true;` or manual gpg-agent.conf.
 
-### 4.10 Touch policy (per-slot UIF, default = enabled)
+### 4.10 Touch policy (single global toggle, default = enabled)
 
-DO D6/D7/D8 control UIF for sig/dec/aut:
+**Design decision (2026-05-11):** one global flag — touch-required-for-all-PSO-ops or not. No per-slot policy. Justification: Phase 7 is daily-driver SSH + GPG; user wants one mental model, not three.
+
+DOs D6 / D7 / D8 are all exposed (so `gpg --card-edit` and `ykman openpgp keys set-touch` work without errors) but they all back the same underlying byte. Writing any of them updates the global flag; reading any returns the same value.
 
 | Value | Meaning |
 |---|---|
-| `0x00` | Never — no touch required |
-| `0x01` | Enabled — touch required, can be toggled by PW3 |
-| `0x02` | Permanent — touch required, CANNOT be toggled even by PW3 |
+| `0x00` | Off — no touch required for any PSO |
+| `0x01` | On — touch required for sig + dec + aut (default) |
+| `0x02` | Permanent — same as 0x01, but cannot be toggled even by PW3 |
 
-**First-init default:** all three = `0x01`.
+**First-init default:** `0x01` (touch required).
 
-User can toggle via PUT DATA D6/D7/D8 + PW3 (same UX as `ykman openpgp keys set-touch`).
+User can toggle via PUT DATA D6 (or D7 or D8 — all equivalent) + PW3, OR via vendor lt-rpc command `touch-set 0/1`.
 
-**`0x02` (permanent) requires a vendor lt-rpc command** (similar to Force-UV gate) — not PW3 alone. Defends accidental self-lockout (L5).
+**`0x02` (permanent) requires a vendor lt-rpc command** (same gate pattern as Phase 6 Force-UV permanent) — PW3 alone cannot set permanent. Defends accidental self-lockout (L5).
+
+**Trade-off vs Yubikey:** Yubikey OpenPGP supports per-slot policy (`ykman openpgp keys set-touch sig on` while `set-touch aut off`). We don't. A user who runs `ykman openpgp keys set-touch sig off` here will silently turn off touch for dec and aut too. Documented in README; matches user's intended UX ("either touch or no touch").
 
 ---
 
@@ -470,7 +475,7 @@ User can toggle via PUT DATA D6/D7/D8 + PW3 (same UX as `ykman openpgp keys set-
 **Deliverable:**
 
 - `firmware/src/openpgp/pgp_pin.{h,c}` — PW1/PW3/RC state machines. VERIFY (00 20), CHANGE REFERENCE DATA (00 24), RESET RETRY COUNTER (00 2C). M&D-backed retry counters using Phase 5 `pin_md.c` primitive; 9 chip slots (8..16).
-- PUT DATA (00 DA P1 P2) for writable DOs: cardholder name (5B), login data (5E), URL (5F50), language (5F2D), sex (5F35), PW status bytes (C4), UIF D6/D7/D8.
+- PUT DATA (00 DA P1 P2) for writable DOs: cardholder name (5B), login data (5E), URL (5F50), language (5F2D), sex (5F35), PW status bytes (C4), touch policy D6 (with D7/D8 as aliases — single global flag).
 - TERMINATE DF (00 E6) — PW3 only — clears PGP state in R-mem + erases ECC slots 29/30/31 via `lt_ecc_key_erase`.
 - ACTIVATE FILE (00 44) — PW3 only — re-initialises after TERMINATE DF; restores spec-default PW1/PW3 in M&D.
 - `firmware/src/fido_hid/slots.h` — `MD_SLOT_*` constants for PGP PIN allocations.
@@ -480,7 +485,7 @@ User can toggle via PUT DATA D6/D7/D8 + PW3 (same UX as `ykman openpgp keys set-
 
 - `gpg --card-edit` admin menu walks all DOs.
 - Wrong PW1 3× → blocked (0x6983); wrong PW3 3× → blocked; RC unblocks PW1.
-- Touch policy DO D6/D7/D8 settable via PUT DATA + PW3.
+- Global touch policy settable via PUT DATA D6 (or D7 or D8 — all back the same byte) + PW3, OR via vendor lt-rpc `touch-set`.
 - M&D slots 8..16 visibly consumed after wrong-PIN attempts.
 
 **Stop-here value:** Admin operations work. M&D-backed retry counters live. No keys yet.
@@ -492,7 +497,7 @@ User can toggle via PUT DATA D6/D7/D8 + PW3 (same UX as `ykman openpgp keys set-
 **Deliverable:**
 
 - GENERATE ASYMMETRIC KEY PAIR (00 47 80 00) — keys on slots 29/30/31. PW3 + UP required (H8 defense). Fingerprint per RFC 4880 §12.2. Generation timestamp = 0 (L4 defense; M4 stubs, M6 wires RTC if budget).
-- PSO:CDS (00 2A 9E 9A) — Ed25519 sign with slot 29. PW1.81 + force-verify-cleared-on-success + UIF-conditional UP required (H7 defense). Sig counter (DO 93) increments.
+- PSO:CDS (00 2A 9E 9A) — Ed25519 sign with slot 29. PW1.81 + force-verify-cleared-on-success + global-touch-conditional UP required (H7 defense). Sig counter (DO 93) increments.
 - `firmware/src/openpgp/pgp_keys.{h,c}` — generation + fingerprint + slot wiring.
 - `firmware/src/openpgp/pgp_pso.c` — PSO dispatcher (CDS only; DEC + INT_AUT in M5).
 - PUT DATA C1/C2/C3 — accepted only when slot uninitialised AND PW3 verified (M6/M9 defense).
@@ -583,12 +588,12 @@ User can toggle via PUT DATA D6/D7/D8 + PW3 (same UX as `ykman openpgp keys set-
 | R2 | T=1 chaining wrong — NAD/PCB/EDC mis-layout breaks pcsc-lite | M | M | Test against `pcsc_scan` + `opensc-tool` at M1. Reference ISO 7816-3 §11. |
 | R3 | Extended-length APDU spotty in pcsc-lite | L | L | Advertise short APDU support too. |
 | R4 | RFC 4880 SHA-1 fingerprint off-by-one in packet body length encoding | M | L | Validate against GnuPG's own fingerprint output at M4 commit. |
-| R5 | UIF semantics diverge from Yubikey convention | L | L | Test with `ykman openpgp keys set-touch`; document any deviation. |
+| R5 | Single-global-flag touch semantics surprise Yubikey users who expect per-slot policy | M | L | Documented in README + L5 threat row. `ykman openpgp keys set-touch sig off` works on our device but silently affects all three slots. |
 | R6 | Schema v3→v4 migration corrupts Phase 6 R-mem | L | H | Magic bump (`NX6K` → `NX7K`) + magic-mismatch path → factory_reset on downgrade. Test Phase 7 flash on dongle with full Phase 6 state at M1. |
 | R7 | M&D slots 8..16 collide with future FIDO PIN scheme | L | L | Document allocation in `slots.h` `MD_SLOT_*` constants. |
 | R8 | TROPIC01 `lt_ecc_ecdh_kx` API differs from expectation | L | H | Verify at M5 start. Fallback: software X25519 via `trezor_crypto` (already linked). |
 | R9 | gpg-agent's scdaemon doesn't speak T=1 cleanly | M | M | Test with `scd-agent` debug logs at M5. Fallback: T=0 (simpler). |
-| R10 | Touch-required for every operation makes SSH miserable | H | L | UIF default = `0x01` (toggleable). Document `ykman`-style disable. User likely keeps touch on for SIG, off for AUT. |
+| R10 | Touch-required globally makes SSH miserable when user wants no-touch on aut | M | L | Global flag is toggleable via PUT DATA D6 + PW3 OR vendor `touch-set 0`. User can choose "touch on everything" or "touch off everything" but not split (per Decision 2026-05-11). |
 | R11 | Default PINs (`123456` / `12345678`) ignored by lazy user | M | M | README warning + `gpg --card-status` flag. |
 | R12 | RTC needed for generation timestamps; not wired | L | L | M4 stubs to 0. M6 wires HAL RTC if budget. |
 | R13 | Flash hits ~232 KB — leaves ~24 KB for Phase 8 polish | M | M | Per-milestone budget tracking. If overrun: drop RESET RETRY COUNTER first. |
@@ -622,7 +627,7 @@ User can toggle via PUT DATA D6/D7/D8 + PW3 (same UX as `ykman openpgp keys set-
 
 - [ ] RFC 4880 §12.2 fingerprint format — verify packet body byte layout for Ed25519.
 - [ ] Generation time = 0 — verify GnuPG handles gracefully.
-- [ ] UIF default value: `0x01` (enabled). `0x02` only via vendor command.
+- [ ] Global `touch_required` default: `0x01` (touch required for all PSO ops). `0x02` (permanent) only via vendor command. D6/D7/D8 all alias the same byte.
 
 ### Before M5
 
@@ -676,10 +681,10 @@ User can toggle via PUT DATA D6/D7/D8 + PW3 (same UX as `ykman openpgp keys set-
 - [ ] §4.1 USB CCID via vendor-class endpoints + manual ICCD descriptor.
 - [ ] §4.4 PIN handling: 9 M&D slots for PW1+PW3+RC; ship spec-default PINs + loud documentation; force-verify default ON.
 - [ ] §4.5 GENERATE requires PW3 + SW1 press (H8).
-- [ ] §4.6 PSO + INT_AUT require PIN + UIF-conditional SW1 press (H7).
+- [ ] §4.6 PSO + INT_AUT require PIN + global-touch-conditional SW1 press (H7).
 - [ ] §4.7 R-mem schema v3 → v4; single magic NX7K; downgrade to Phase 6 triggers existing H4 factory_reset.
 - [ ] §4.8 FIDO slot cap at 29; OpenPGP slots fixed at 29/30/31; 32 total chip slots verified by sub-agent.
-- [ ] §4.10 UIF default = `0x01`; `0x02` only via vendor command.
+- [ ] §4.10 single global touch flag; default = `0x01`; `0x02` (permanent) only via vendor command. D6/D7/D8 all alias the same byte (Yubikey-style per-slot policy explicitly out of scope for Phase 7).
 - [ ] §9 flash budget acceptable: ~232 KB / 256 KB (24 KB headroom).
 - [ ] M1-M6 milestone breakdown sensible; HW checkpoint between each.
 - [ ] AAGUID bump to `...000004` acceptable (Phase 6 creds will not roam — same trade-off Yubikey makes across firmware versions).

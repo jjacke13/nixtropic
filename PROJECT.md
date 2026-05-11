@@ -313,7 +313,7 @@ Each phase is **independently shippable**. Stop anywhere = useful artifact. Hard
 - Map sig/dec/aut to TROPIC01 ECC slots 29/30/31
 - M&D-backed PW1/PW3/RC retry counters (chip M&D slots 8..16, 3 each PIN)
 - R-mem schema v4 with magic bump `NX6K` → `NX7K` (single magic; downgrade to Phase 6 triggers existing H4 factory_reset)
-- Per-slot UIF (User Interaction Flag) touch policy, default enabled
+- Global touch policy (single flag, default enabled — covers all PSO ops; DOs D6/D7/D8 all alias the same byte for spec compatibility)
 - AAGUID bumps to `...000004`
 
 **Test:** `gpg --card-status` shows ed25519 keys. `gpg --card-edit` walks all menus. `git commit -S` succeeds. `gpg --decrypt` round-trips on 4 KB ciphertext. `ssh git@github.com` authenticates via gpg-agent SSH support. Phase 6 validation chain still passes (FIDO regression test).
