@@ -78,22 +78,25 @@ fi
 echo ""
 echo "4/5  ATR check..."
 ATR_OUT=$(timeout 5 opensc-tool --atr 2>&1 | tail -3 || true)
-EXPECTED_ATR="3B:80:81:31:30"
-if echo "$ATR_OUT" | grep -q "$EXPECTED_ATR"; then
-  echo "  ✓ ATR = $EXPECTED_ATR"
+# Match either case — opensc prints lowercase, our spec'd value is uppercase.
+if echo "$ATR_OUT" | grep -qiE "3b:80:81:31:30"; then
+  echo "  ✓ ATR = 3B:80:81:31:30"
 else
   echo "  ✗ ATR mismatch (or no card detected)."
   echo "    opensc-tool output:"
   echo "$ATR_OUT" | sed 's/^/      /'
-  echo "    Expected: $EXPECTED_ATR"
+  echo "    Expected: 3B:80:81:31:30"
   overall_rc=6
 fi
 
 # --- 5. APDU loopback ---
 echo ""
 echo "5/5  APDU loopback (SELECT no-AID → SW=9000)..."
-APDU_OUT=$(timeout 5 opensc-tool --send-apdu "00:A4:04:00:00" 2>&1 | tail -3 || true)
-if echo "$APDU_OUT" | grep -qE "9000|SW1=90.*SW2=00"; then
+# Force --card-driver default so opensc doesn't bail on card auto-detect
+# (we don't match any of opensc's known applet ATR profiles yet — that
+# arrives in M2 when SELECT for the OpenPGP AID is wired up).
+APDU_OUT=$(timeout 5 opensc-tool --card-driver default --send-apdu "00:A4:04:00:00" 2>&1 | tail -5 || true)
+if echo "$APDU_OUT" | grep -qiE "9000|sw1=90.*sw2=00"; then
   echo "  ✓ SW=9000 (M1 echo)"
 else
   echo "  ✗ APDU echo failed."
