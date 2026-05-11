@@ -128,4 +128,20 @@ uint32_t credstore_peek_signcount(void);
  */
 void credstore_commit_signcount(void);
 
+/**
+ * @brief Factory reset: wipe ALL credentials.
+ *
+ *   1. tropic_ecc_erase(slot) for each of the 32 ECC slots — destroys
+ *      chip-side private keys.
+ *   2. slots_factory_reset() — clears the R-mem bitmap + every per-
+ *      credential R-mem entry + PIN state + M&D state.
+ *
+ * After this, the authenticator looks like a fresh device. Used by
+ * authenticatorReset (CTAP2 cmd 0x07) and by the lt-rpc debug
+ * SLOTS_RESET command.
+ *
+ * @return 0 on success; negative on chip error.
+ */
+int credstore_factory_reset(void);
+
 #endif /* NIXTROPIC_FIDO_HID_CREDSTORE_H */

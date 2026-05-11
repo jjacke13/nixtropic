@@ -683,6 +683,124 @@ def sub_validate_m2(args) -> int:
     return 0 if n_ok == len(results) else 1
 
 
+def sub_validate_m5(args) -> int:
+    """Phase 5 M5 — authenticatorReset.
+
+    Tests CTAP2 cmd 0x07 (authenticatorReset):
+      1. Reset is accepted ONLY within 10 seconds of power-up (CTAP2.1 §6.8).
+         The test assumes the firmware was recently flashed/booted; if Reset
+         returns NOT_ALLOWED, the dongle has been powered for >10 s — replug
+         and re-run.
+      2. After successful Reset: GetInfo reports clientPin=false (PIN gone).
+      3. After Reset: setPin works (proves the device is functionally fresh).
+
+    This is a smoke test, not exhaustive coverage. Resident-credentials-
+    wiped is harder to verify automatically (we'd need to remember the
+    credIds from a prior MakeCred run); easier to verify with a real RP.
+    """
+    import hashlib
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+    import hmac as pyhmac
+
+    path = find_fido_path()
+    print(f"FIDO HID @ {path}")
+    results: list[tuple[str, bool, str]] = []
+
+    with open_dev(path) as dev:
+        new_cid, _ = cmd_init(dev)
+
+        # 1) Reset
+        status, body = cmd_cbor(dev, new_cid, 0x07)  # CTAP2_CMD_RESET
+        ok_reset = (status == CTAP2_OK)
+        ok_timeout = (status == 0x30)  # NOT_ALLOWED (post-10s window)
+        if ok_timeout:
+            print("⚠ Reset returned NOT_ALLOWED — device has been powered "
+                  ">10 s. This is correct enforcement per CTAP2.1 §6.8.")
+            print("   To test the Reset success path: replug + re-run "
+                  "validate-phase5-m5 within 10 s of boot.")
+            results.append(("authenticatorReset within 10 s window",
+                            False, f"status=0x{status:02x} (window expired)"))
+            print_summary(results)
+            return 1
+        results.append(("authenticatorReset succeeded (within 10 s window)",
+                        ok_reset, f"status=0x{status:02x}"))
+        if not ok_reset:
+            print_summary(results)
+            return 1
+
+        # 2) GetInfo: clientPin == false (Reset wiped the PIN)
+        status, body = cmd_cbor(dev, new_cid, CTAP2_CMD_GET_INFO)
+        info = cbor_decode(body) if status == CTAP2_OK else None
+        results.append(("After Reset: GetInfo clientPin == false",
+                        info and info.get(4, {}).get("clientPin") is False,
+                        f"clientPin={info.get(4, {}).get('clientPin') if info else None!r}"))
+
+        # 3) Device still functional: GetKeyAgreement works
+        status, body = cmd_cbor(dev, new_cid, 0x06, cbor_encode({1: 1, 2: 2}))
+        ka = cbor_decode(body).get(1) if status == CTAP2_OK else None
+        ok = (status == CTAP2_OK and isinstance(ka, dict)
+              and isinstance(ka.get(-2), bytes) and len(ka[-2]) == 32)
+        results.append(("After Reset: GetKeyAgreement still works", ok,
+                        f"status=0x{status:02x}"))
+        if not ok:
+            print_summary(results)
+            return 1
+
+        # 4) setPin works (proves M&D slots are re-initializable after reset)
+        plat_priv = ec.generate_private_key(ec.SECP256R1())
+        plat_pub_nums = plat_priv.public_key().public_numbers()
+        plat_x = plat_pub_nums.x.to_bytes(32, "big")
+        plat_y = plat_pub_nums.y.to_bytes(32, "big")
+        peer_pub = ec.EllipticCurvePublicNumbers(
+            int.from_bytes(ka[-2], "big"),
+            int.from_bytes(ka[-3], "big"),
+            ec.SECP256R1()).public_key()
+        shared = plat_priv.exchange(ec.ECDH(), peer_pub)
+        shared_key = hashlib.sha256(shared).digest()
+
+        pin = b"reset-test"
+        padded = pin + b"\x00" * (64 - len(pin))
+        cipher = Cipher(algorithms.AES(shared_key), modes.CBC(b"\x00" * 16))
+        enc = cipher.encryptor()
+        new_pin_enc = enc.update(padded) + enc.finalize()
+        pin_auth = pyhmac.new(shared_key, new_pin_enc, hashlib.sha256).digest()[:16]
+
+        req = {
+            1: 1, 2: 3,  # protocol=1, subCommand=setPin
+            3: {1: 2, 3: -25, -1: 1, -2: plat_x, -3: plat_y},
+            4: pin_auth,
+            5: new_pin_enc,
+        }
+        status, _ = cmd_cbor(dev, new_cid, 0x06, cbor_encode(req))
+        results.append(("After Reset: setPin succeeds (device functional)",
+                        status == CTAP2_OK, f"status=0x{status:02x}"))
+
+        # 5) GetInfo shows clientPin=true (M&D state restored)
+        status, body = cmd_cbor(dev, new_cid, CTAP2_CMD_GET_INFO)
+        info = cbor_decode(body)
+        results.append(("After Reset+setPin: GetInfo clientPin == true",
+                        info.get(4, {}).get("clientPin") is True,
+                        f"clientPin={info.get(4, {}).get('clientPin')!r}"))
+
+    print()
+    print("═" * 63)
+    print("  Phase 5 M5 — authenticatorReset (CTAP2 cmd 0x07)")
+    print("═" * 63)
+    n_ok = 0
+    for i, (name, ok, detail) in enumerate(results, 1):
+        verdict = "PASS" if ok else "FAIL"
+        print(f"[{i}/{len(results)}] {name:<56s} {verdict}")
+        if not ok and detail:
+            print(f"        {detail}")
+        else:
+            n_ok += 1
+    print()
+    print(f"{n_ok}/{len(results)} PASS — Phase 5 M5 "
+          f"{'validated' if n_ok == len(results) else 'FAILED'}.")
+    return 0 if n_ok == len(results) else 1
+
+
 def sub_validate_m3(args) -> int:
     """Phase 5 M3 validation — ClientPIN protocol v1 (P-256 + AES-CBC).
 
@@ -1134,6 +1252,8 @@ def main() -> int:
                                help="Phase 5 M2 — real TROPIC01-backed FIDO2 (MIC-DROP)")
     p_val_m3  = sub.add_parser("validate-m3",
                                help="Phase 5 M3 — ClientPIN protocol v1 (P-256+AES-CBC)")
+    p_val_m5  = sub.add_parser("validate-m5",
+                               help="Phase 5 M5 — authenticatorReset (CTAP2 0x07)")
 
     p_init.set_defaults(func=sub_init)
     p_ping.set_defaults(func=sub_ping)
@@ -1144,6 +1264,7 @@ def main() -> int:
     p_val.set_defaults(func=sub_validate)
     p_val_m2.set_defaults(func=sub_validate_m2)
     p_val_m3.set_defaults(func=sub_validate_m3)
+    p_val_m5.set_defaults(func=sub_validate_m5)
 
     args = parser.parse_args()
     return args.func(args)

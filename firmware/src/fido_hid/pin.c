@@ -483,21 +483,27 @@ static int handle_change_pin(cbor_reader_t *r, size_t n_keys, uint8_t *resp, siz
         resp[0] = CTAP2_ERR_MISSING_PARAMETER; return 1;
     }
 
+    /* Decrement retries BEFORE any crypto check (pinAuth OR pinHash).
+     * cpp-reviewer audit 2026-05-11 H1: previously the decrement
+     * happened AFTER the pinAuth MAC check, giving an adversary who
+     * could forge or replay MACs a free probe oracle. Now the cost is
+     * paid up-front for any attempt, matching getPinToken's ordering. */
+    uint32_t new_retries = 0;
+    (void) slots_global_pin_dec_retries(&new_retries);
+
     /* Verify pinAuth = LEFT(HMAC(shared_key, newPinEnc || pinHashEnc), 16). */
     uint8_t auth_input[PIN_ENC_BUF_LEN + 16];
     memcpy(auth_input,                   new_pin_enc,  PIN_ENC_BUF_LEN);
     memcpy(&auth_input[PIN_ENC_BUF_LEN], pin_hash_enc, 16);
     uint8_t expected_auth[16];
     pin_auth_compute(shared_key, auth_input, sizeof auth_input, expected_auth);
-    if (ct_memcmp(expected_auth, pin_auth_in, 16) != 0) {
+    int auth_ok = (ct_memcmp(expected_auth, pin_auth_in, 16) == 0);
+    /* M1 fix: always wipe expected_auth regardless of branch outcome. */
+    memzero(expected_auth, sizeof expected_auth);
+    if (!auth_ok) {
         memzero(shared_key, sizeof shared_key);
-        memzero(expected_auth, sizeof expected_auth);
         resp[0] = CTAP2_ERR_PIN_AUTH_INVALID; return 1;
     }
-
-    /* Decrement retries BEFORE the PIN check (defense in depth). */
-    uint32_t new_retries = 0;
-    (void) slots_global_pin_dec_retries(&new_retries);
 
     /* Decrypt pinHashEnc → 16 B submitted hash. */
     uint8_t submitted_hash[PIN_HASH_LEN];

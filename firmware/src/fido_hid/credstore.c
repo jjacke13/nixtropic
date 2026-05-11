@@ -177,3 +177,26 @@ void credstore_commit_signcount(void)
      * credstore_peek_signcount returns one higher. */
     (void) tropic_mcounter_update(CREDSTORE_SIGNCOUNT_MCOUNTER);
 }
+
+/* ----- Factory reset ----- */
+
+int credstore_factory_reset(void)
+{
+    /* Erase all 32 ECC slots — best-effort. Empty slots return error
+     * but caller intent is "ensure this slot is empty". */
+    for (uint8_t i = 0; i < SLOTS_MAX; ++i) {
+        (void) tropic_ecc_erase(i);
+    }
+    /* Reset signCount source to MAX. cpp-reviewer audit 2026-05-11 M2:
+     * without this, a post-reset credential registers with a non-zero
+     * signCount which an RP may flag as a replay-detect sentinel and
+     * also leaks how many assertions the device has performed since
+     * its last init. */
+    (void) tropic_mcounter_init(CREDSTORE_SIGNCOUNT_MCOUNTER,
+                                CREDSTORE_MCOUNTER_MAX);
+    /* Wipe R-mem bitmap + per-cred metadata + PIN state + M&D state. */
+    int rc = slots_factory_reset();
+    /* Force re-init on next credstore use so we re-detect mcounter etc. */
+    s_initted = 0;
+    return rc;
+}

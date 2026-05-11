@@ -17,10 +17,17 @@
 #include "cbor.h"
 #include "proto.h"
 #include "pin.h"
+#include "credstore.h"
 
 #include <stdint.h>
 #include <stddef.h>
 #include <string.h>
+
+#include "stm32u5xx_hal.h"  /* HAL_GetTick for Reset 10s post-boot window */
+
+/* CTAP2.1 §6.8: authenticatorReset must be issued within this many ms
+ * of power-up. After the window, return CTAP2_ERR_NOT_ALLOWED. */
+#define RESET_WINDOW_MS  10000u
 
 /* nixtropic AAGUID per PROJECT.md plan decision #6:
  *   "nixtropic" (9 bytes: 6E 69 78 74 72 6F 70 69 63) + 6 zero bytes +
@@ -172,11 +179,36 @@ int fido_hid_cbor_dispatch(const uint8_t *req, size_t req_len,
         return ctap2_get_assertion(&req[1], req_len - 1u, resp, resp_max);
     case CTAP2_CMD_CLIENT_PIN:
         return pin_handle_cbor(&req[1], req_len - 1u, resp, resp_max);
+    case CTAP2_CMD_RESET: {
+        /* CTAP2.1 §6.8: authenticatorReset must be issued within 10
+         * seconds of power-up. After that window, refuse.
+         *
+         * HAL_GetTick() returns ms since SysTick reset (boot). It
+         * monotonically increases until rollover at ~49.7 days — well
+         * beyond our 10 s window check.
+         *
+         * User-presence is stub-true per PROJECT.md §2 decision #3
+         * (TS1302 has no button). Phase 6 daughter board will gate
+         * Reset on a real touch event.
+         *
+         * The reset wipes ALL credentials, PIN state, and M&D state.
+         * Recovery from RP side: the user must re-register all
+         * credentials. */
+        if (HAL_GetTick() > RESET_WINDOW_MS) {
+            resp[0] = CTAP2_ERR_NOT_ALLOWED;
+            return 1;
+        }
+        if (credstore_factory_reset() != 0) {
+            resp[0] = CTAP2_ERR_OTHER;
+            return 1;
+        }
+        resp[0] = CTAP2_OK;
+        return 1;
+    }
     case CTAP2_CMD_GET_NEXT_ASSERTION:
-    case CTAP2_CMD_RESET:
-        /* M5 will wire authenticatorReset. GetNextAssertion is for
-         * iterating multiple matches per allowList — not needed for
-         * the typical single-credential path. */
+        /* GetNextAssertion iterates multiple matches per allowList.
+         * Our single-credential-per-allowList-entry flow doesn't need
+         * it. CTAP2 §6.3: returning NOT_ALLOWED is valid. */
         resp[0] = CTAP2_ERR_NOT_ALLOWED;
         return 1;
     default:

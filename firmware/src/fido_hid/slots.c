@@ -108,8 +108,9 @@ static uint8_t  s_md_tag[SLOTS_MD_TAG_LEN];
 static uint8_t  s_md_ci[SLOTS_MD_CI_LEN];
 
 /* Write the global-state buffer back to R-mem slot 0. Always writes the
- * full 256 B for layout stability across firmware revisions. The buffer
- * mirrors the cached state in s_pin_*. */
+ * full 384 B (bumped from 256 in M4 for the M&D ci[] array) for layout
+ * stability across firmware revisions. The buffer mirrors the cached
+ * state in s_pin_* and s_md_*. */
 static int write_global(uint32_t bitmap)
 {
     uint8_t buf[SLOTS_GLOBAL_PAYLOAD_LEN];
