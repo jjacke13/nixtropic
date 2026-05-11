@@ -33,6 +33,7 @@
 #include "fido_hid/ctaphid.h"
 #include "fido_hid/credstore.h"
 #include "fido_hid/slots.h"
+#include "fido_hid/pin.h"
 #include "tropic/tropic.h"  /* re-enabled in Phase 3 M3 for libtropic on chip */
 
 #include "tusb.h"
@@ -207,6 +208,19 @@ int main(void)
         } else {
             printf("[slots] bitmap=0x%08lx used=%d/32\n",
                    (unsigned long) slots_bitmap(), slots_count_used());
+        }
+    }
+
+    /* Stage 8.7 — Phase 5 M3: ClientPIN ephemeral keypair.
+     * Generates a fresh P-256 keypair from TROPIC01 TRNG for CTAP2 PIN
+     * protocol v1 key agreement. Lives in RAM only; regenerated on every
+     * boot AND after each successful setPin/changePin. */
+    {
+        int rc = pin_init();
+        if (rc != 0) {
+            printf("[pin] init failed: %d (ClientPIN paths will error)\n", rc);
+        } else {
+            printf("[pin] ephemeral P-256 key ready; pin_set=%d\n", pin_is_set());
         }
     }
 

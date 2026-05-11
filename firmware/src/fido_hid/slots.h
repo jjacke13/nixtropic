@@ -144,4 +144,52 @@ int slots_read_meta(int slot_idx, slot_meta_t *out);
  */
 int slots_factory_reset(void);
 
+/* ===== Phase 5 M3: PIN state on global R-mem slot 0 =====
+ *
+ * The PIN state is persisted alongside the credential bitmap in R-mem
+ * slot 0, at offsets 10..30 per docs/PHASE-5-PLAN.md §4.2.
+ *
+ * On-disk layout (additive over M1; old schema=1 reads 0x00 at these
+ * offsets, which correctly reports "no PIN set"):
+ *   [10]      pin_set    (1 byte: 0=not set, 1=set)
+ *   [11..26]  pin_hash   (16 bytes: LEFT(SHA-256(PIN), 16))
+ *   [27..30]  pin_retries (uint32_BE)
+ *
+ * Wraps every R-mem touch in cached-then-write semantics (re-read after
+ * write to confirm). All accessors require slots_init() already ran. */
+
+#define SLOTS_PIN_HASH_LEN       16u
+#define SLOTS_PIN_RETRIES_INITIAL 8u
+
+/**
+ * @brief Read PIN state from R-mem slot 0.
+ * @param out_pin_set    1 if a PIN is currently set, 0 otherwise.
+ * @param out_retries    current retries-remaining count (only meaningful when pin_set).
+ * @param out_pin_hash   16 B; populated only when pin_set==1.
+ * @return 0 on success; -1 on chip error.
+ */
+int slots_global_pin_get(int *out_pin_set,
+                         uint32_t *out_retries,
+                         uint8_t out_pin_hash[SLOTS_PIN_HASH_LEN]);
+
+/**
+ * @brief Set / replace the PIN. Stores hash, resets retries to 8,
+ *        marks pin_set=1. Overwrites any previous PIN.
+ * @return 0 on success; -1 on chip error.
+ */
+int slots_global_pin_set(const uint8_t pin_hash[SLOTS_PIN_HASH_LEN]);
+
+/**
+ * @brief Decrement PIN retries counter (after a wrong-PIN attempt).
+ *        Floor at 0. Returns the new value via out_new.
+ * @return 0 on success; -1 on chip error.
+ */
+int slots_global_pin_dec_retries(uint32_t *out_new);
+
+/**
+ * @brief Restore PIN retries to INITIAL (after a correct PIN).
+ * @return 0 on success; -1 on chip error.
+ */
+int slots_global_pin_reset_retries(void);
+
 #endif /* NIXTROPIC_FIDO_HID_SLOTS_H */

@@ -159,6 +159,16 @@ set(TREZOR_CRYPTO_SOURCES
     # rand.c — trezor uses it for ed25519 batch verify; we don't, but
     # linker still wants the symbol.
     ${TREZOR_VENDOR}/rand.c
+    # Phase 5 M3: P-256 ECDH for CTAP2 ClientPIN keyAgreement (ecdh_multiply
+    # + ecdsa_get_public_key65). bignum256 + nist256p1 curve params + zkp
+    # stubs come along — secp256k1 is also referenced by ecdsa.c even when
+    # we only use P-256 (functions get GC'd by --gc-sections but symbols
+    # must resolve at link time).
+    ${TREZOR_VENDOR}/ecdsa.c
+    ${TREZOR_VENDOR}/nist256p1.c
+    ${TREZOR_VENDOR}/secp256k1.c
+    ${TREZOR_VENDOR}/bignum.c
+    ${TREZOR_VENDOR}/rfc6979.c
 )
 
 foreach(src ${LT_CAL_SOURCES} ${TREZOR_CRYPTO_SOURCES})
@@ -214,6 +224,7 @@ set(APP_SOURCES
     src/fido_hid/ctap2_creds.c
     src/fido_hid/credstore.c
     src/fido_hid/slots.c
+    src/fido_hid/pin.c
     src/tropic/tropic.c
     # src/tropic/lt_crypto_stubs.c  — M4: replaced by trezor_crypto CAL below
     ${CMSIS_STARTUP}
@@ -271,7 +282,7 @@ foreach(lt_src ${LIBTROPIC_SOURCES} ${LT_CAL_SOURCES} ${TREZOR_CRYPTO_SOURCES})
     COMPILE_FLAGS "-Wno-strict-prototypes -Wno-unused-parameter -Wno-undef -Wno-maybe-uninitialized -Wno-cast-align -Wno-conversion -Wno-shadow -Wno-pointer-sign -Wno-sign-compare -Wno-unused-function -Wno-implicit-fallthrough")
 endforeach()
 
-# Trezor-vendor crypto needs three extra defines per upstream's
+# Trezor-vendor crypto needs four extra defines per upstream's
 # tests/functional/src/CMakeLists.txt:134 build recipe:
 #   AES_VAR                      — enable variable-key AES dispatcher (so
 #                                  aes_encrypt_key(key, key_len, ctx)
@@ -281,9 +292,16 @@ endforeach()
 #                                  ed25519 batch verify (key gen/sign
 #                                  happen on TROPIC01, not the MCU)
 #   ed25519_verify=...           — collision-avoidance no-op for us
+#   USE_PRECOMPUTED_CP=0         — Phase 5 M3: disable the 127 KB
+#                                  precomputed multiplication table for
+#                                  nist256p1.cp. ECDH gets slower (~50ms
+#                                  vs ~10ms) but flash drops back into
+#                                  the 256 KB budget. ClientPIN is
+#                                  user-initiated and infrequent, so the
+#                                  slowdown is invisible.
 foreach(tz_src ${TREZOR_CRYPTO_SOURCES})
   set_source_files_properties(${tz_src} PROPERTIES
-    COMPILE_DEFINITIONS "AES_VAR;USE_INSECURE_PRNG;ed25519_verify=trezor_crypto_ed25519_verify")
+    COMPILE_DEFINITIONS "AES_VAR;USE_INSECURE_PRNG;USE_PRECOMPUTED_CP=0;ed25519_verify=trezor_crypto_ed25519_verify")
 endforeach()
 
 target_link_options(${FIRMWARE_ELF} PRIVATE

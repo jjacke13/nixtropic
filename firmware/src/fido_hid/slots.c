@@ -34,6 +34,10 @@
 #define GLOBAL_SCHEMA_OFF         4
 #define GLOBAL_BITMAP_OFF         6
 #define GLOBAL_BITMAP_LEN         4
+/* PIN state (Phase 5 M3). Stored at offsets 10..30 in global R-mem slot. */
+#define GLOBAL_PIN_SET_OFF       10
+#define GLOBAL_PIN_HASH_OFF      11
+#define GLOBAL_PIN_RETRIES_OFF   27
 
 #define CRED_MAGIC_OFF            0
 #define CRED_MAGIC_LEN            4
@@ -83,8 +87,15 @@ static int ct_memcmp(const uint8_t *a, const uint8_t *b, size_t n)
     return diff;
 }
 
+/* Cached PIN state — populated lazily from R-mem in slots_init / re-read
+ * helpers. Mirrored to R-mem on every change. */
+static uint8_t  s_pin_set;
+static uint8_t  s_pin_hash[SLOTS_PIN_HASH_LEN];
+static uint32_t s_pin_retries;
+
 /* Write the global-state buffer back to R-mem slot 0. Always writes the
- * full 256 B for layout stability across firmware revisions. */
+ * full 256 B for layout stability across firmware revisions. The buffer
+ * mirrors the cached state in s_pin_*. */
 static int write_global(uint32_t bitmap)
 {
     uint8_t buf[SLOTS_GLOBAL_PAYLOAD_LEN];
@@ -95,6 +106,12 @@ static int write_global(uint32_t bitmap)
     buf[GLOBAL_SCHEMA_OFF + 1] = (uint8_t) SLOTS_SCHEMA_VERSION;
     be32_store(&buf[GLOBAL_BITMAP_OFF], bitmap);
 
+    /* PIN state (M3+). Default zeros if no PIN set; safe because zero is
+     * "pin not set". */
+    buf[GLOBAL_PIN_SET_OFF] = s_pin_set;
+    memcpy(&buf[GLOBAL_PIN_HASH_OFF], s_pin_hash, SLOTS_PIN_HASH_LEN);
+    be32_store(&buf[GLOBAL_PIN_RETRIES_OFF], s_pin_retries);
+
     /* Erase before write — R-mem slots are write-once until erased. */
     (void) tropic_rmem_erase(SLOTS_RMEM_GLOBAL_SLOT);
     return tropic_rmem_write(SLOTS_RMEM_GLOBAL_SLOT, buf, sizeof buf);
@@ -102,20 +119,30 @@ static int write_global(uint32_t bitmap)
 
 /* Read & validate the global-state slot. Returns 0 and populates
  * *out_bitmap on success; -1 if magic mismatch (caller should treat as
- * first boot); -2 on chip read error. */
+ * first boot); -2 on chip read error.
+ *
+ * Also populates the cached s_pin_* fields from the disk image.
+ * Backward-compat: M1-era schema=1 stored zeros at these offsets, which
+ * correctly maps to "pin not set" — no migration needed. */
 static int read_global(uint32_t *out_bitmap)
 {
     uint8_t  buf[SLOTS_GLOBAL_PAYLOAD_LEN];
     size_t   got = 0;
 
     int rc = tropic_rmem_read(SLOTS_RMEM_GLOBAL_SLOT, buf, sizeof buf, &got);
-    if (rc != 0 || got < (GLOBAL_BITMAP_OFF + GLOBAL_BITMAP_LEN)) {
+    if (rc != 0 || got < (GLOBAL_PIN_RETRIES_OFF + 4u)) {
         return -2;
     }
     if (memcmp(&buf[GLOBAL_MAGIC_OFF], GLOBAL_MAGIC, GLOBAL_MAGIC_LEN) != 0) {
         return -1;
     }
     *out_bitmap = be32_load(&buf[GLOBAL_BITMAP_OFF]);
+
+    /* PIN state. */
+    s_pin_set     = buf[GLOBAL_PIN_SET_OFF] & 0x01u;
+    memcpy(s_pin_hash, &buf[GLOBAL_PIN_HASH_OFF], SLOTS_PIN_HASH_LEN);
+    s_pin_retries = be32_load(&buf[GLOBAL_PIN_RETRIES_OFF]);
+
     return 0;
 }
 
@@ -383,7 +410,11 @@ int slots_factory_reset(void)
     for (uint16_t i = 1u; i <= SLOTS_MAX; ++i) {
         (void) tropic_rmem_erase(i);
     }
-    /* Reset global state. */
+    /* Reset cached PIN state to defaults BEFORE write_global so the
+     * persisted layout reflects "no PIN". */
+    s_pin_set = 0;
+    memset(s_pin_hash, 0, sizeof s_pin_hash);
+    s_pin_retries = 0;
     if (write_global(0) != 0) {
         s_bitmap = 0;
         s_initted = 0;
@@ -392,4 +423,52 @@ int slots_factory_reset(void)
     s_bitmap = 0;
     s_initted = 1;
     return 0;
+}
+
+/* ===== PIN state accessors (Phase 5 M3) ===== */
+
+int slots_global_pin_get(int *out_pin_set,
+                         uint32_t *out_retries,
+                         uint8_t out_pin_hash[SLOTS_PIN_HASH_LEN])
+{
+    if (!s_initted) {
+        if (slots_init() != 0) return -1;
+    }
+    if (out_pin_set) *out_pin_set = (int) s_pin_set;
+    if (out_retries) *out_retries = s_pin_retries;
+    if (out_pin_hash) memcpy(out_pin_hash, s_pin_hash, SLOTS_PIN_HASH_LEN);
+    return 0;
+}
+
+int slots_global_pin_set(const uint8_t pin_hash[SLOTS_PIN_HASH_LEN])
+{
+    if (!pin_hash) return -1;
+    if (!s_initted) {
+        if (slots_init() != 0) return -1;
+    }
+    s_pin_set = 1;
+    memcpy(s_pin_hash, pin_hash, SLOTS_PIN_HASH_LEN);
+    s_pin_retries = SLOTS_PIN_RETRIES_INITIAL;
+    return write_global(s_bitmap);
+}
+
+int slots_global_pin_dec_retries(uint32_t *out_new)
+{
+    if (!s_initted) {
+        if (slots_init() != 0) return -1;
+    }
+    if (s_pin_retries > 0u) {
+        s_pin_retries--;
+    }
+    if (out_new) *out_new = s_pin_retries;
+    return write_global(s_bitmap);
+}
+
+int slots_global_pin_reset_retries(void)
+{
+    if (!s_initted) {
+        if (slots_init() != 0) return -1;
+    }
+    s_pin_retries = SLOTS_PIN_RETRIES_INITIAL;
+    return write_global(s_bitmap);
 }

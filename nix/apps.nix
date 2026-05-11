@@ -373,6 +373,20 @@ let
     '';
   };
 
+  # Phase 5 M3 — ClientPIN v1 validation. Exercises CTAP2 §5.5.4
+  # end-to-end (key agreement, setPin, getPinToken, changePin, retry
+  # counter, PIN-gated MakeCred/GetAssertion with UV bit verification).
+  validate-phase5-m3 = writeShellApplication {
+    name = "nixtropic-validate-phase5-m3";
+    runtimeInputs = [ py usbutils coreutils gnugrep ];
+    text = ''
+      set -uo pipefail
+      export LT_RPC_PY="${../tools/lt_rpc.py}"
+      export FIDO2_PY="${../tools/fido2_test.py}"
+      exec ${../tools/validate-phase5-m3.sh} "$@"
+    '';
+  };
+
   # Phase 1 — flash-and-validate: orchestrates DFU flash + immediate validate.
   # Solves the "boot markers emit only once" gotcha: after flash, the
   # firmware re-boots fresh and emits its boot block; the validator captures
@@ -626,6 +640,62 @@ let
           echo ""
           export LT_RPC_PY="${../tools/lt_rpc.py}"
           exec ${../tools/validate-phase3.sh}
+        '';
+      };
+
+  # Phase 5 M3 — flash-and-validate-phase5-m3: DFU flash + M3 ClientPIN suite.
+  flash-and-validate-phase5-m3 =
+    if firmware == null then
+      writeShellApplication {
+        name = "nixtropic-flash-and-validate-phase5-m3-placeholder";
+        text = ''
+          echo "Custom firmware not available in this flake."
+          exit 1
+        '';
+      }
+    else
+      writeShellApplication {
+        name = "nixtropic-flash-and-validate-phase5-m3";
+        runtimeInputs = [ dfu-util usbutils coreutils gnugrep py ];
+        text = ''
+          set -euo pipefail
+          FW_BIN="${firmware}/firmware.bin"
+
+          echo "═══════════════════════════════════════════════════════════════"
+          echo "  Phase 5 M3: flash-and-validate (ClientPIN)"
+          echo "═══════════════════════════════════════════════════════════════"
+
+          if ! lsusb | grep -q "0483:df11"; then
+            echo "ERROR: dongle not in DFU mode (0483:df11)." >&2
+            echo "Hold SW1 + replug, then re-run." >&2
+            exit 1
+          fi
+
+          echo "Step 1/2: DFU flash..."
+          DFU_LOG=$(mktemp); trap 'rm -f "$DFU_LOG"' EXIT
+          dfu-util -a 0 -s 0x08000000:leave -D "$FW_BIN" 2>&1 | tee "$DFU_LOG" >/dev/null || true
+          DFU_EXIT="''${PIPESTATUS[0]}"
+          if [ "$DFU_EXIT" -ne 0 ] && ! grep -q "File downloaded successfully" "$DFU_LOG"; then
+            echo "✗ DFU flash FAILED."; exit 1
+          fi
+
+          echo "✓ Flash complete. Waiting up to 12 s..."
+          for _ in $(seq 1 24); do
+            sleep 0.5
+            if lsusb | grep -q "cafe:4001"; then break; fi
+          done
+          if ! lsusb | grep -q "cafe:4001"; then
+            echo "✗ nixtropic firmware (cafe:4001) not enumerated." >&2
+            exit 1
+          fi
+          echo "✓ Enumerated. Settling 3 s..."
+          sleep 3
+
+          echo ""
+          echo "Step 2/2: ClientPIN suite..."
+          export LT_RPC_PY="${../tools/lt_rpc.py}"
+          export FIDO2_PY="${../tools/fido2_test.py}"
+          exec ${../tools/validate-phase5-m3.sh}
         '';
       };
 
@@ -1065,6 +1135,22 @@ in
       else
         "${flash-and-validate-phase5-m2}/bin/nixtropic-flash-and-validate-phase5-m2";
     meta.description = "DFU-flash open firmware + Phase 5 M2 FIDO2 mic-drop validation";
+  };
+
+  validate-phase5-m3 = {
+    type = "app";
+    program = "${validate-phase5-m3}/bin/nixtropic-validate-phase5-m3";
+    meta.description = "Phase 5 M3 — ClientPIN protocol v1 validation (13-test suite)";
+  };
+
+  flash-and-validate-phase5-m3 = {
+    type = "app";
+    program =
+      if firmware == null then
+        "${flash-and-validate-phase5-m3}/bin/nixtropic-flash-and-validate-phase5-m3-placeholder"
+      else
+        "${flash-and-validate-phase5-m3}/bin/nixtropic-flash-and-validate-phase5-m3";
+    meta.description = "DFU-flash open firmware + Phase 5 M3 ClientPIN validation";
   };
 
   identify = {

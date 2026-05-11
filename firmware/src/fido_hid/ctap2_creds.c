@@ -45,6 +45,7 @@
 #include "credstore.h"
 #include "cbor.h"
 #include "proto.h"
+#include "pin.h"
 
 #include <stdint.h>
 #include <stddef.h>
@@ -100,12 +101,14 @@ static int build_cose_ed25519(const uint8_t *pubkey, uint8_t *out, size_t out_ma
 
 /* ----- Request parsing ----- */
 
-/* Minimal MakeCredential request parser. We extract only:
+/* Minimal MakeCredential request parser. We extract:
  *   key 1: clientDataHash (32 B)
  *   key 2: rp.id (text string)
  *   key 4: pubKeyCredParams must contain at least one supported alg
+ *   key 8: pinAuth (optional, 16 B)
+ *   key 9: pinProtocol (optional, expected to be 1 if present)
  *
- * Other keys (excludeList, extensions, options, pinAuth) are skipped.
+ * Other keys (excludeList, extensions, options) are skipped.
  * excludeList handling is a Phase 5.5+ feature; for M2 we always
  * generate a fresh credential. extensions / options not enforced.
  *
@@ -113,12 +116,16 @@ static int build_cose_ed25519(const uint8_t *pubkey, uint8_t *out, size_t out_ma
 static int parse_make_cred(const uint8_t *req, size_t req_len,
                            uint8_t *out_client_hash,
                            const uint8_t **out_rp_id, size_t *out_rp_id_len,
-                           int *out_alg)
+                           int *out_alg,
+                           int *out_has_pin_auth, uint8_t out_pin_auth[16],
+                           int *out_pin_protocol)
 {
     int alg_found = 0;
     int alg_pref  = 0;        /* selected COSE alg id */
     int got_chash = 0;
     int got_rpid  = 0;
+    *out_has_pin_auth = 0;
+    *out_pin_protocol = 0;
 
     cbor_reader_t r;
     cbor_reader_init(&r, req, req_len);
@@ -204,6 +211,22 @@ static int parse_make_cred(const uint8_t *req, size_t req_len,
                     alg_found = 1;
                 }
             }
+        } else if (key == 8u) {
+            /* pinAuth = 16 B */
+            const uint8_t *p; size_t L;
+            if (cbor_reader_read_bytes(&r, &p, &L) < 0) {
+                return -(int) CTAP2_ERR_INVALID_CBOR;
+            }
+            if (L != 16u) return -(int) CTAP2_ERR_PIN_AUTH_INVALID;
+            memcpy(out_pin_auth, p, 16);
+            *out_has_pin_auth = 1;
+        } else if (key == 9u) {
+            /* pinProtocol (uint) */
+            uint8_t m2; uint64_t v;
+            if (cbor_reader_read_head(&r, &m2, &v) < 0 || m2 != 0u) {
+                return -(int) CTAP2_ERR_INVALID_CBOR;
+            }
+            *out_pin_protocol = (int) v;
         } else {
             if (cbor_reader_skip(&r) < 0) {
                 return -(int) CTAP2_ERR_INVALID_CBOR;
@@ -230,6 +253,8 @@ static int parse_make_cred(const uint8_t *req, size_t req_len,
  *   key 2: clientDataHash (32 B)
  *   key 3: allowList — array of { 1: <credId>, 2: "public-key" };
  *          we pick the first credId we recognize (resident-key flow)
+ *   key 6: pinAuth (optional, 16 B)
+ *   key 7: pinProtocol (optional uint)
  *
  * On exit out_cred_id_p / out_cred_id_len point into req[] (no copy).
  * If allowList was absent or empty, *out_cred_id_p stays NULL —
@@ -239,12 +264,16 @@ static int parse_make_cred(const uint8_t *req, size_t req_len,
 static int parse_get_assertion(const uint8_t *req, size_t req_len,
                                uint8_t *out_client_hash,
                                const uint8_t **out_rp_id, size_t *out_rp_id_len,
-                               const uint8_t **out_cred_id_p, size_t *out_cred_id_len)
+                               const uint8_t **out_cred_id_p, size_t *out_cred_id_len,
+                               int *out_has_pin_auth, uint8_t out_pin_auth[16],
+                               int *out_pin_protocol)
 {
     int got_chash = 0;
     int got_rpid  = 0;
     *out_cred_id_p = NULL;
     *out_cred_id_len = 0;
+    *out_has_pin_auth = 0;
+    *out_pin_protocol = 0;
 
     cbor_reader_t r;
     cbor_reader_init(&r, req, req_len);
@@ -307,6 +336,22 @@ static int parse_get_assertion(const uint8_t *req, size_t req_len,
                     }
                 }
             }
+        } else if (key == 6u) {
+            /* pinAuth */
+            const uint8_t *p; size_t L;
+            if (cbor_reader_read_bytes(&r, &p, &L) < 0) {
+                return -(int) CTAP2_ERR_INVALID_CBOR;
+            }
+            if (L != 16u) return -(int) CTAP2_ERR_PIN_AUTH_INVALID;
+            memcpy(out_pin_auth, p, 16);
+            *out_has_pin_auth = 1;
+        } else if (key == 7u) {
+            /* pinProtocol */
+            uint8_t m2; uint64_t v;
+            if (cbor_reader_read_head(&r, &m2, &v) < 0 || m2 != 0u) {
+                return -(int) CTAP2_ERR_INVALID_CBOR;
+            }
+            *out_pin_protocol = (int) v;
         } else {
             if (cbor_reader_skip(&r) < 0) {
                 return -(int) CTAP2_ERR_INVALID_CBOR;
@@ -322,6 +367,7 @@ static int parse_get_assertion(const uint8_t *req, size_t req_len,
 /* ----- AuthData builder ----- */
 
 #define FLAG_UP  0x01u
+#define FLAG_UV  0x04u   /* user-verified (Phase 5 M3: set when pinAuth verified) */
 #define FLAG_AT  0x40u
 
 static int build_authdata(const uint8_t *rp_id_hash, uint8_t flags,
@@ -363,11 +409,40 @@ int ctap2_make_credential(const uint8_t *req, size_t req_len,
     const uint8_t *rp_id_p = NULL;
     size_t  rp_id_len = 0;
     int     alg = 0;
+    int     has_pin_auth = 0;
+    uint8_t pin_auth_in[16] = {0};
+    int     pin_protocol = 0;
 
-    int err = parse_make_cred(req, req_len, client_hash, &rp_id_p, &rp_id_len, &alg);
+    int err = parse_make_cred(req, req_len, client_hash,
+                              &rp_id_p, &rp_id_len, &alg,
+                              &has_pin_auth, pin_auth_in, &pin_protocol);
     if (err < 0) {
         resp[0] = (uint8_t)(-err);
         return 1;
+    }
+
+    /* PIN gating per CTAP2 §5.1 step 4:
+     *   - If PIN is set on this authenticator AND request has no pinAuth:
+     *       reject with CTAP2_ERR_PIN_REQUIRED.
+     *   - If pinAuth IS present:
+     *       verify pinProtocol == 1 AND token verifies AND in-boot
+     *       lockout not active. Otherwise PIN_AUTH_INVALID.
+     *   - If both above pass: set UV bit in authData.
+     *
+     * Edge case: pinAuth provided but PIN not set on device. CTAP2 says
+     * authenticator MAY reject; we accept and ignore (since the token
+     * couldn't have been minted without setPin first). */
+    uint8_t uv_flag = 0;
+    if (has_pin_auth) {
+        if (pin_protocol != (int) PIN_PROTOCOL_VERSION) {
+            resp[0] = CTAP1_ERR_INVALID_PARAMETER; return 1;
+        }
+        if (pin_verify_pinauth(pin_auth_in, client_hash) != 0) {
+            resp[0] = CTAP2_ERR_PIN_AUTH_INVALID; return 1;
+        }
+        uv_flag = FLAG_UV;
+    } else if (pin_is_set()) {
+        resp[0] = CTAP2_ERR_PIN_REQUIRED; return 1;
     }
 
     /* rpIdHash = SHA-256(rpId) */
@@ -399,11 +474,12 @@ int ctap2_make_credential(const uint8_t *req, size_t req_len,
         return 1;
     }
 
-    /* authData with AT bit set. Peek-then-commit the signCount so a
-     * failed build doesn't desync the on-chip counter. */
+    /* authData with AT bit set. UV bit reflects PIN verification status.
+     * Peek-then-commit the signCount so a failed build doesn't desync
+     * the on-chip counter. */
     uint32_t sc = credstore_peek_signcount();
     uint8_t auth_data[256];
-    int auth_data_len = build_authdata(rp_id_hash, FLAG_UP | FLAG_AT,
+    int auth_data_len = build_authdata(rp_id_hash, FLAG_UP | uv_flag | FLAG_AT,
                                        sc,
                                        cred_id, CREDSTORE_CRED_ID_LEN,
                                        cose_pub, (size_t) cose_pub_len,
@@ -462,14 +538,32 @@ int ctap2_get_assertion(const uint8_t *req, size_t req_len,
     size_t  rp_id_len = 0;
     const uint8_t *cred_id_p = NULL;
     size_t  cred_id_len = 0;
+    int     has_pin_auth = 0;
+    uint8_t pin_auth_in[16] = {0};
+    int     pin_protocol = 0;
 
     int err = parse_get_assertion(req, req_len,
                                   client_hash,
                                   &rp_id_p, &rp_id_len,
-                                  &cred_id_p, &cred_id_len);
+                                  &cred_id_p, &cred_id_len,
+                                  &has_pin_auth, pin_auth_in, &pin_protocol);
     if (err < 0) {
         resp[0] = (uint8_t)(-err);
         return 1;
+    }
+
+    /* PIN gating — same shape as MakeCred. */
+    uint8_t uv_flag = 0;
+    if (has_pin_auth) {
+        if (pin_protocol != (int) PIN_PROTOCOL_VERSION) {
+            resp[0] = CTAP1_ERR_INVALID_PARAMETER; return 1;
+        }
+        if (pin_verify_pinauth(pin_auth_in, client_hash) != 0) {
+            resp[0] = CTAP2_ERR_PIN_AUTH_INVALID; return 1;
+        }
+        uv_flag = FLAG_UV;
+    } else if (pin_is_set()) {
+        resp[0] = CTAP2_ERR_PIN_REQUIRED; return 1;
     }
 
     if (cred_id_p == NULL) {
@@ -489,11 +583,11 @@ int ctap2_get_assertion(const uint8_t *req, size_t req_len,
     uint8_t rp_id_hash[32];
     sha256_Raw(rp_id_p, (uint32_t) rp_id_len, rp_id_hash);
 
-    /* authData WITHOUT attestedCredentialData (UP only). Peek-then-
-     * commit signCount, sign-then-commit. */
+    /* authData WITHOUT attestedCredentialData. UP always set; UV set
+     * iff pinAuth verified. */
     uint32_t sc = credstore_peek_signcount();
     uint8_t auth_data[64];
-    int auth_data_len = build_authdata(rp_id_hash, FLAG_UP,
+    int auth_data_len = build_authdata(rp_id_hash, FLAG_UP | uv_flag,
                                        sc,
                                        NULL, 0, NULL, 0,
                                        auth_data, sizeof auth_data);

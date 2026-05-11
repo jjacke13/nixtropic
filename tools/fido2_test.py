@@ -683,6 +683,335 @@ def sub_validate_m2(args) -> int:
     return 0 if n_ok == len(results) else 1
 
 
+def sub_validate_m3(args) -> int:
+    """Phase 5 M3 validation — ClientPIN protocol v1 (P-256 + AES-CBC).
+
+    Exercises CTAP2 §5.5.4 end-to-end:
+      1) GetInfo → clientPin=false (pre-set)
+      2) GetKeyAgreement → P-256 pubkey from authenticator
+      3) SetPin "1234"
+      4) GetInfo → clientPin=true
+      5) GetPinRetries → 8
+      6) GetPinToken("1234") → encrypted token, decrypt successfully
+      7) GetPinToken("wrong") → PIN_INVALID, retries decrements
+      8) GetPinToken("1234") → success, retries restored to 8
+      9) ChangePin "1234" → "5678"
+     10) GetPinToken("5678") → success
+     11) MakeCred without pinAuth → PIN_REQUIRED (0x36)
+     12) MakeCred WITH pinAuth → success, UV bit set in flags
+     13) GetAssertion WITH pinAuth → success, UV bit set in flags
+
+    Requires the `cryptography` package (pip install cryptography).
+    """
+    import hashlib
+    import hmac as pyhmac
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.hazmat.primitives.serialization import (
+        Encoding, PublicFormat, PrivateFormat, NoEncryption,
+    )
+    from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+
+    path = find_fido_path()
+    print(f"FIDO HID @ {path}")
+    results: list[tuple[str, bool, str]] = []
+
+    def expect(label: str, cond: bool, detail: str = ""):
+        results.append((label, cond, detail))
+
+    # --- Crypto helpers -------------------------------------------------
+
+    def gen_platform_p256():
+        sk = ec.generate_private_key(ec.SECP256R1())
+        pk = sk.public_key()
+        nums = pk.public_numbers()
+        x = nums.x.to_bytes(32, "big")
+        y = nums.y.to_bytes(32, "big")
+        return sk, x, y
+
+    def derive_shared(plat_priv, auth_x: bytes, auth_y: bytes) -> bytes:
+        peer = ec.EllipticCurvePublicNumbers(
+            int.from_bytes(auth_x, "big"),
+            int.from_bytes(auth_y, "big"),
+            ec.SECP256R1(),
+        ).public_key()
+        shared = plat_priv.exchange(ec.ECDH(), peer)   # 32 B X coordinate
+        return hashlib.sha256(shared).digest()
+
+    def aes_cbc_enc(key: bytes, plaintext: bytes) -> bytes:
+        cipher = Cipher(algorithms.AES(key), modes.CBC(b"\x00" * 16))
+        enc = cipher.encryptor()
+        return enc.update(plaintext) + enc.finalize()
+
+    def aes_cbc_dec(key: bytes, ciphertext: bytes) -> bytes:
+        cipher = Cipher(algorithms.AES(key), modes.CBC(b"\x00" * 16))
+        dec = cipher.decryptor()
+        return dec.update(ciphertext) + dec.finalize()
+
+    def pin_auth(key: bytes, msg: bytes) -> bytes:
+        return pyhmac.new(key, msg, hashlib.sha256).digest()[:16]
+
+    def cose_p256_pubkey(x: bytes, y: bytes) -> dict:
+        return {
+            1: 2,        # kty = EC2
+            3: -25,      # alg = ECDH-ES + HKDF-256
+            -1: 1,       # crv = P-256
+            -2: x,
+            -3: y,
+        }
+
+    def pad_pin(pin_utf8: bytes) -> bytes:
+        if len(pin_utf8) > 63:
+            raise ValueError("PIN too long")
+        return pin_utf8 + b"\x00" * (64 - len(pin_utf8))
+
+    # --- Open device + CID ----------------------------------------------
+
+    with open_dev(path) as dev:
+        new_cid, _ = cmd_init(dev)
+
+        # 1) GetInfo: clientPin pre-set state
+        status, body = cmd_cbor(dev, new_cid, CTAP2_CMD_GET_INFO)
+        info = cbor_decode(body) if status == CTAP2_OK else None
+        client_pin_pre = info.get(4, {}).get("clientPin") if info else None
+        expect("GetInfo: clientPin == false (no PIN yet)",
+               client_pin_pre is False,
+               f"got {client_pin_pre!r}")
+
+        # 2) GetKeyAgreement
+        status, body = cmd_cbor(dev, new_cid, 0x06, cbor_encode({1: 1, 2: 2}))
+        ka = cbor_decode(body).get(1) if status == CTAP2_OK else None
+        ok = (status == CTAP2_OK and isinstance(ka, dict)
+              and ka.get(1) == 2 and ka.get(-1) == 1
+              and isinstance(ka.get(-2), bytes) and len(ka[-2]) == 32
+              and isinstance(ka.get(-3), bytes) and len(ka[-3]) == 32)
+        expect("GetKeyAgreement → P-256 COSE_Key", ok,
+               f"status=0x{status:02x}")
+        if not ok:
+            print_summary(results); return 1
+        auth_x = ka[-2]; auth_y = ka[-3]
+
+        # Platform keypair + shared key
+        plat_priv, plat_x, plat_y = gen_platform_p256()
+        shared_key = derive_shared(plat_priv, auth_x, auth_y)
+        plat_cose = cose_p256_pubkey(plat_x, plat_y)
+
+        # 3) SetPin "1234"
+        pin = b"1234"
+        new_pin_enc = aes_cbc_enc(shared_key, pad_pin(pin))
+        req = {
+            1: 1,  # pinProtocol
+            2: 3,  # subCommand = setPin
+            3: plat_cose,
+            4: pin_auth(shared_key, new_pin_enc),
+            5: new_pin_enc,
+        }
+        status, body = cmd_cbor(dev, new_cid, 0x06, cbor_encode(req))
+        expect("SetPin '1234'", status == CTAP2_OK,
+               f"status=0x{status:02x}")
+
+        # 4) GetInfo: clientPin now true
+        status, body = cmd_cbor(dev, new_cid, CTAP2_CMD_GET_INFO)
+        info = cbor_decode(body)
+        expect("GetInfo: clientPin == true (after SetPin)",
+               info.get(4, {}).get("clientPin") is True,
+               f"got {info.get(4, {}).get('clientPin')!r}")
+
+        # Need fresh key agreement — firmware rotates after setPin
+        status, body = cmd_cbor(dev, new_cid, 0x06, cbor_encode({1: 1, 2: 2}))
+        ka = cbor_decode(body)[1]
+        auth_x = ka[-2]; auth_y = ka[-3]
+        plat_priv, plat_x, plat_y = gen_platform_p256()
+        shared_key = derive_shared(plat_priv, auth_x, auth_y)
+        plat_cose = cose_p256_pubkey(plat_x, plat_y)
+
+        # 5) GetRetries → 8
+        status, body = cmd_cbor(dev, new_cid, 0x06, cbor_encode({1: 1, 2: 1}))
+        retries = cbor_decode(body).get(3) if status == CTAP2_OK else None
+        expect("GetPinRetries → 8", status == CTAP2_OK and retries == 8,
+               f"status=0x{status:02x} retries={retries}")
+
+        # 6) GetPinToken with correct PIN
+        pin_hash = hashlib.sha256(pin).digest()[:16]
+        pin_hash_enc = aes_cbc_enc(shared_key, pin_hash)
+        req = {
+            1: 1,
+            2: 5,  # getPinToken
+            3: plat_cose,
+            6: pin_hash_enc,
+        }
+        status, body = cmd_cbor(dev, new_cid, 0x06, cbor_encode(req))
+        token_enc = cbor_decode(body).get(2) if status == CTAP2_OK else None
+        if status == CTAP2_OK and isinstance(token_enc, bytes) and len(token_enc) == 32:
+            pin_token = aes_cbc_dec(shared_key, token_enc)
+            expect("GetPinToken correct PIN → 32 B token decrypts",
+                   len(pin_token) == 32,
+                   f"token={pin_token.hex()}")
+        else:
+            pin_token = None
+            expect("GetPinToken correct PIN → 32 B token decrypts",
+                   False, f"status=0x{status:02x}")
+
+        # 7) GetPinToken with wrong PIN
+        wrong_hash = hashlib.sha256(b"wrong").digest()[:16]
+        wrong_enc = aes_cbc_enc(shared_key, wrong_hash)
+        req[6] = wrong_enc
+        status, body = cmd_cbor(dev, new_cid, 0x06, cbor_encode(req))
+        expect("GetPinToken wrong PIN → PIN_INVALID (0x31)",
+               status == 0x31, f"status=0x{status:02x}")
+
+        # 8) GetRetries → 7 (decremented)
+        status, body = cmd_cbor(dev, new_cid, 0x06, cbor_encode({1: 1, 2: 1}))
+        retries = cbor_decode(body).get(3) if status == CTAP2_OK else None
+        expect("GetRetries → 7 after wrong PIN",
+               status == CTAP2_OK and retries == 7,
+               f"retries={retries}")
+
+        # Wrong PIN rotates ephemeral key — fetch new key agreement.
+        status, body = cmd_cbor(dev, new_cid, 0x06, cbor_encode({1: 1, 2: 2}))
+        ka = cbor_decode(body)[1]
+        auth_x = ka[-2]; auth_y = ka[-3]
+        plat_priv, plat_x, plat_y = gen_platform_p256()
+        shared_key = derive_shared(plat_priv, auth_x, auth_y)
+        plat_cose = cose_p256_pubkey(plat_x, plat_y)
+
+        # 9) GetPinToken correct again → retries reset to 8
+        pin_hash_enc = aes_cbc_enc(shared_key, hashlib.sha256(pin).digest()[:16])
+        req = {1: 1, 2: 5, 3: plat_cose, 6: pin_hash_enc}
+        status, body = cmd_cbor(dev, new_cid, 0x06, cbor_encode(req))
+        if status == CTAP2_OK:
+            token_enc = cbor_decode(body).get(2)
+            pin_token = aes_cbc_dec(shared_key, token_enc) if token_enc else None
+        expect("GetPinToken correct PIN (recovery) → token",
+               status == CTAP2_OK and pin_token and len(pin_token) == 32,
+               f"status=0x{status:02x}")
+
+        status, body = cmd_cbor(dev, new_cid, 0x06, cbor_encode({1: 1, 2: 1}))
+        retries = cbor_decode(body).get(3)
+        expect("Retries reset to 8 after correct PIN",
+               retries == 8, f"retries={retries}")
+
+        # 10) ChangePin "1234" → "5678"
+        new_pin = b"5678"
+        new_pin_enc = aes_cbc_enc(shared_key, pad_pin(new_pin))
+        old_hash_enc = aes_cbc_enc(shared_key, hashlib.sha256(pin).digest()[:16])
+        req = {
+            1: 1, 2: 4, 3: plat_cose,
+            4: pin_auth(shared_key, new_pin_enc + old_hash_enc),
+            5: new_pin_enc,
+            6: old_hash_enc,
+        }
+        status, body = cmd_cbor(dev, new_cid, 0x06, cbor_encode(req))
+        expect("ChangePin '1234'→'5678'", status == CTAP2_OK,
+               f"status=0x{status:02x}")
+
+        # 11) GetPinToken with NEW PIN (after key rotation)
+        status, body = cmd_cbor(dev, new_cid, 0x06, cbor_encode({1: 1, 2: 2}))
+        ka = cbor_decode(body)[1]
+        auth_x = ka[-2]; auth_y = ka[-3]
+        plat_priv, plat_x, plat_y = gen_platform_p256()
+        shared_key = derive_shared(plat_priv, auth_x, auth_y)
+        plat_cose = cose_p256_pubkey(plat_x, plat_y)
+        new_hash_enc = aes_cbc_enc(shared_key, hashlib.sha256(new_pin).digest()[:16])
+        req = {1: 1, 2: 5, 3: plat_cose, 6: new_hash_enc}
+        status, body = cmd_cbor(dev, new_cid, 0x06, cbor_encode(req))
+        token_enc = cbor_decode(body).get(2) if status == CTAP2_OK else None
+        pin_token = aes_cbc_dec(shared_key, token_enc) if token_enc else None
+        expect("GetPinToken with NEW PIN → token",
+               status == CTAP2_OK and pin_token and len(pin_token) == 32,
+               f"status=0x{status:02x}")
+
+        # 12) MakeCred WITHOUT pinAuth → PIN_REQUIRED
+        client_hash = os.urandom(32)
+        bad_req = {
+            1: client_hash,
+            2: {"id": "test-m3.example", "name": "test"},
+            3: {"id": os.urandom(16), "name": "user", "displayName": "Test"},
+            4: [{"alg": -8, "type": "public-key"}],
+        }
+        status, body = cmd_cbor(dev, new_cid, CTAP2_CMD_MAKE_CRED, cbor_encode(bad_req))
+        expect("MakeCred w/o pinAuth → PIN_REQUIRED (0x36)",
+               status == 0x36, f"status=0x{status:02x}")
+
+        # 13) MakeCred WITH pinAuth → success + UV flag
+        pinauth_mc = pin_auth(pin_token, client_hash)
+        good_req = dict(bad_req)
+        good_req[8] = pinauth_mc
+        good_req[9] = 1
+        status, body = cmd_cbor(dev, new_cid, CTAP2_CMD_MAKE_CRED, cbor_encode(good_req))
+        ok = False; cred_id = None; pubkey = None; detail = ""
+        if status == CTAP2_OK:
+            resp = cbor_decode(body)
+            fmt = resp.get(1); authdata = resp.get(2); attstmt = resp.get(3)
+            _, flags, _, cred_id, cose = parse_authdata(authdata, expect_at=True)
+            pubkey = cose_ed25519_pubkey(cose)
+            uv_set = (flags & 0x04) != 0
+            try:
+                Ed25519PublicKey.from_public_bytes(pubkey).verify(
+                    attstmt["sig"], authdata + client_hash)
+                ok = uv_set and fmt == "packed"
+                detail = f"flags=0x{flags:02x} uv={uv_set}"
+            except InvalidSignature:
+                detail = "sig verify FAIL"
+        else:
+            detail = f"status=0x{status:02x}"
+        expect("MakeCred WITH pinAuth → success, UV flag set, sig verifies",
+               ok, detail)
+
+        # 14) GetAssertion WITH pinAuth → success + UV flag
+        if cred_id and pubkey:
+            client_hash2 = os.urandom(32)
+            pinauth_ga = pin_auth(pin_token, client_hash2)
+            ga_req = {
+                1: "test-m3.example",
+                2: client_hash2,
+                3: [{"id": cred_id, "type": "public-key"}],
+                6: pinauth_ga,
+                7: 1,
+            }
+            status, body = cmd_cbor(dev, new_cid, CTAP2_CMD_GET_ASSERTION, cbor_encode(ga_req))
+            ok = False; detail = ""
+            if status == CTAP2_OK:
+                resp = cbor_decode(body)
+                ad2 = resp[2]; sig2 = resp[3]
+                _, flags2, _, _, _ = parse_authdata(ad2, expect_at=False)
+                uv_set = (flags2 & 0x04) != 0
+                try:
+                    Ed25519PublicKey.from_public_bytes(pubkey).verify(
+                        sig2, ad2 + client_hash2)
+                    ok = uv_set
+                    detail = f"flags=0x{flags2:02x} uv={uv_set}"
+                except InvalidSignature:
+                    detail = "sig verify FAIL"
+            else:
+                detail = f"status=0x{status:02x}"
+            expect("GetAssertion WITH pinAuth → success, UV flag set",
+                   ok, detail)
+        else:
+            expect("GetAssertion WITH pinAuth — SKIPPED (MakeCred failed)",
+                   False, "no cred_id from previous step")
+
+    print_summary(results)
+    return 0 if all(ok for _, ok, _ in results) else 1
+
+
+def print_summary(results):
+    print()
+    print("═" * 63)
+    print("  Phase 5 M3 — ClientPIN protocol v1 (P-256 + AES-CBC + HMAC)")
+    print("═" * 63)
+    n_ok = 0
+    for i, (name, ok, detail) in enumerate(results, 1):
+        verdict = "PASS" if ok else "FAIL"
+        print(f"[{i:2d}/{len(results)}] {name:<56s} {verdict}")
+        if not ok and detail:
+            print(f"        {detail}")
+        else:
+            n_ok += 1
+    print()
+    print(f"{n_ok}/{len(results)} PASS — Phase 5 M3 "
+          f"{'validated' if n_ok == len(results) else 'FAILED'}.")
+
+
 def sub_validate(args) -> int:
     """Run a 5-test suite, exit 0 on full pass."""
     path = find_fido_path()
@@ -803,6 +1132,8 @@ def main() -> int:
     p_val     = sub.add_parser("validate",  help="run full Phase 4 suite")
     p_val_m2  = sub.add_parser("validate-m2",
                                help="Phase 5 M2 — real TROPIC01-backed FIDO2 (MIC-DROP)")
+    p_val_m3  = sub.add_parser("validate-m3",
+                               help="Phase 5 M3 — ClientPIN protocol v1 (P-256+AES-CBC)")
 
     p_init.set_defaults(func=sub_init)
     p_ping.set_defaults(func=sub_ping)
@@ -812,6 +1143,7 @@ def main() -> int:
     p_assert.set_defaults(func=sub_assertion)
     p_val.set_defaults(func=sub_validate)
     p_val_m2.set_defaults(func=sub_validate_m2)
+    p_val_m3.set_defaults(func=sub_validate_m3)
 
     args = parser.parse_args()
     return args.func(args)

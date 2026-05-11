@@ -16,6 +16,7 @@
 #include "ctap2.h"
 #include "cbor.h"
 #include "proto.h"
+#include "pin.h"
 
 #include <stdint.h>
 #include <stddef.h>
@@ -91,7 +92,7 @@ static int build_get_info(uint8_t *resp, size_t resp_max)
     cbor_write_text(&w, "plat");
     cbor_write_bool(&w, false);          /* not a platform authenticator */
     cbor_write_text(&w, "clientPin");
-    cbor_write_bool(&w, false);          /* ClientPIN comes in M3 */
+    cbor_write_bool(&w, pin_is_set());   /* Phase 5 M3: PIN protocol supported; "true" = PIN currently set */
 
     /* key 5 → maxMsgSize.
      * Cap at 1024 to match FIDO_HID_MAX_PAYLOAD / 2 — half the buffer
@@ -155,12 +156,13 @@ int fido_hid_cbor_dispatch(const uint8_t *req, size_t req_len,
         return ctap2_make_credential(&req[1], req_len - 1u, resp, resp_max);
     case CTAP2_CMD_GET_ASSERTION:
         return ctap2_get_assertion(&req[1], req_len - 1u, resp, resp_max);
-    case CTAP2_CMD_GET_NEXT_ASSERTION:
     case CTAP2_CMD_CLIENT_PIN:
+        return pin_handle_cbor(&req[1], req_len - 1u, resp, resp_max);
+    case CTAP2_CMD_GET_NEXT_ASSERTION:
     case CTAP2_CMD_RESET:
-        /* Phase 5 territory (ClientPIN/Reset; persistent credential
-         * iteration). Return NOT_ALLOWED so fido2-token tells "feature
-         * absent" apart from "unknown command". */
+        /* M5 will wire authenticatorReset. GetNextAssertion is for
+         * iterating multiple matches per allowList — not needed for
+         * the typical single-credential path. */
         resp[0] = CTAP2_ERR_NOT_ALLOWED;
         return 1;
     default:
