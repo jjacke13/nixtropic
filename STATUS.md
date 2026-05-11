@@ -4,6 +4,65 @@
 
 ---
 
+## 2026-05-11 — Phase 6 PASS ✅✅✅✅ — Production-grade UX (button + Force-UV + credentialManagement)
+
+**Phase:** 6 (Production-grade UX) — **COMPLETE, all 4 milestones**
+
+**Pass criterion met (per docs/PHASE-6-PLAN.md §2):**
+Plug nixtropic dongle → Firefox → `https://webauthn.io` → register (LED blinks at 2 Hz → press SW1 → solid 500 ms → success) → log out → log in (LED blinks → press SW1 → success). PIN prompted by browser (Force-UV auto-on). `fido2-token -L -r /dev/hidrawN` lists the registered credential with the real user_handle from webauthn.io. The dongle is now a daily-driver Yubikey-class FIDO2 security key.
+
+**Milestone-by-milestone HW validation:**
+
+| | What | Commits | Validation |
+|---|---|---|---|
+| **M1** | SW1 user-presence + LED state machine | 4a8b2b5 | 3/3 PASS `validate-phase6-m1` + real touch confirms per signing op |
+| **M2** | Force-UV (auto-on first setPIN) + alwaysUv + Reset-with-SW1 | e88a7df | 10/10 PASS `validate-phase6-m2` + Firefox prompts PIN on every authenticate (browser-cache behaviour, spec-compliant) |
+| **M3** | authenticatorCredentialManagement (CTAP2 cmd 0x0A) | 56d2fe8 | 11/11 PASS `validate-phase6-m3` + `fido2-token -L -r` interop confirmed |
+| **M4** | cpp-reviewer audit + AAGUID bump + closer | THIS | Audit: 1 doc inconsistency + 1 LOW (defense-in-depth) applied; 1 CRITICAL rejected (spec ambiguity, libfido2 follows the no-prefix variant — empirical interop wins). 2 MEDIUMs deferred to Phase 8. |
+
+**Threat-model defenses shipped (docs/PHASE-6-PLAN.md §3, 12 red-team rows added during plan):**
+
+- **C1** — fresh-consent gate: `user_presence_check` returns `UP_FAIL` immediately if SW1 is already pressed at entry. Held / wedged button never satisfies multiple ops.
+- **H1** — `authenticatorReset` requires SW1 press when state exists. 10 s window unchanged. Closes the "passive physical attacker unplug-replug-Reset" path.
+- **H2** — `s_credstore_mutating` flag bounces concurrent MakeCred/GetAssertion during `deleteCredential` with NOT_ALLOWED.
+- **H3** — `pinUvAuthParam` per CTAP2.1 §6.8.2 + libfido2 `lib/credman.c` `prepare_hmac`: `HMAC(token, subCmd ‖ params)[:16]`. No outer `0x0A` prefix (an earlier audit recommendation that broke libfido2 compat — empirical interop trumps spec ambiguity).
+- **H4** — R-mem magic bump `"NX5K"` → `"NX6K"` + `force_uv` byte at offset 321 (past v2 `GLOBAL_MD_END_OFF`).  Phase 5 firmware reading v3 R-mem fails the magic check loudly (factory_reset) instead of silent corruption.
+- **H5** — `up_result_t` sign-canary return (`UP_OK = 0xA5C3`, `UP_FAIL = 0x3C5A`). Single-instruction voltage-glitch skip cannot synthesize `UP_OK`.
+- **M2** (covert channel) — LED state changes only on protocol boundaries; cpp-reviewer audit confirms zero `led_set_state` calls inside PIN/AES/HMAC paths.
+- **M3** (reentrancy) — `user_presence_is_awaiting()` guard in CTAPHID dispatcher returns `ERR_CHANNEL_BUSY` for any non-INIT frame during UP wait; INIT fast-paths so stuck channels can still be reset.
+
+**cpp-reviewer audit (M4):**
+- **Rejected:** H3-SPEC (audit claimed `0x0A` prefix required, but libfido2's `prepare_hmac` does NOT prefix; reverting would re-break the interop just validated).
+- **Applied:** header doc inconsistency in `credmgmt.h` + Low-1 zero `s_iter_cred_rp_hash` in iterator reset for defense-in-depth.
+- **Deferred to Phase 8:** Med-1 `user_handle_len` returns wrong CTAP2 error code on > 64 B; Med-2 `int8_t` iterator arrays have headroom but should be `uint8_t`.
+- **C1/H1/H2/H4/H5/M2/M3** all confirmed correctly implemented.
+
+**`nix run .#lint`:** 27/27 cppcheck clean.
+
+**Build numbers at Phase 6 completion:**
+- `firmware.bin = ~206 KB / 256 KB (78.6%)` — +4 KB over Phase 5.  M3 credMgmt was the largest add (+12 KB credentialManagement implementation + iterator + user_handle).
+- `RAM = 25.7 KB / 192 KB (13.07%)` — +128 B (debouncer state, LED FSM, credMgmt iterator, busy flags).
+
+**AAGUID:** `6e697874726f70696300000000000003` — "nixtropic" + version 0x03 (Phase 6 — real SW1 UP + Force-UV + credentialManagement). Bumped from `…0002` per `docs/WEBAUTHN-NOTES.md §3` policy. Existing Phase 5-vintage credentials registered with `…0002` will NOT roam to Phase 6 firmware — same trade-off Yubikey makes across firmware versions.
+
+**What "real security key" now means:**
+- Every signing operation requires a physical SW1 press within 30 s.
+- Setting a PIN automatically enforces it on every operation (Force-UV default-on).
+- Reset requires a fresh SW1 press when any state exists (anti-passive-physical).
+- Credentials can be audited and deleted via standard tooling (`fido2-token -L -r`, `-D`).
+- Single-instruction voltage-glitch skip of the UP check cannot forge `UP_OK`.
+
+**Outstanding follow-ups (Phase 8 polish bucket):**
+- Configurable PIN/touch policies à la Yubikey (`authenticatorConfig`, credProtect, PIN protocol v2 token permissions, per-slot touch policy for Phase 7 OpenPGP)
+- rp.id text storage (currently we return hex-of-rpIdHash as a stand-in in `enumerateRPs` response)
+- user.name + user.displayName storage (Med-1 + `(null)` in `fido2-token -L` output)
+- credProps extension (task #52) — fixes "unknown discoverability" RP label
+- TROPIC01 firmware version pin at boot (plan §4.8 L2 — deferred)
+
+**Next phase:** Phase 7 — CCID OpenPGP card. **Locked decision (memory `project_phase7_ecc_only_lock.md`):** ECC-only (Ed25519 + Curve25519 + Ed25519 for sign/decrypt/auth). RSA support would blow the 256 KB flash budget.
+
+---
+
 ## 2026-05-11 — Phase 5 PASS ✅✅✅ — TROPIC01-backed FIDO2 with hardware-enforced PIN
 
 **Phase:** 5 (Wire FIDO2 to TROPIC01 — THE MIC-DROP) — **COMPLETE, all 5 milestones**

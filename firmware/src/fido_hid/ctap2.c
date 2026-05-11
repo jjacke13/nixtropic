@@ -42,17 +42,19 @@
  *          resident credentials, shared hw monotonic counter)
  *
  * Authenticators MUST keep their AAGUID stable across instances of the
- * same model. The bump from 0x01 to 0x02 marks the behavior change:
- * Phase 5 stores credentials on the chip, Phase 4 did not — relying
- * parties wanting to distinguish "this is real" from "this was stub"
- * can do so by AAGUID.
+ * same model.  Trailing byte = capability set version:
+ *   0x01 — Phase 4 (stub backend, embedded keypair)
+ *   0x02 — Phase 5 M2..M5 (TROPIC01 chip-side keys, hardware-PIN)
+ *   0x03 — Phase 6 (real SW1 UP + Force-UV + credentialManagement)
+ *
+ * AAGUID bump policy + history in docs/WEBAUTHN-NOTES.md §3.
  *
  * Non-static so ctap2_creds.c can reference the same blob. */
 const uint8_t NIXTROPIC_AAGUID[16] = {
     0x6Eu, 0x69u, 0x78u, 0x74u,  /* "nixt" */
     0x72u, 0x6Fu, 0x70u, 0x69u,  /* "ropi" */
     0x63u, 0x00u, 0x00u, 0x00u,  /* "c" + pad */
-    0x00u, 0x00u, 0x00u, 0x02u,  /* pad + Phase 5 M2 version */
+    0x00u, 0x00u, 0x00u, 0x03u,  /* pad + Phase 6 version */
 };
 
 /* ----- authenticatorGetInfo (0x04) -----

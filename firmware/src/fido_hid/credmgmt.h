@@ -16,11 +16,18 @@
  *   0x07  updateUserInformation — Phase 8 polish (needs full user
  *          name/displayName storage; M3 stores only user_handle).
  *
- * pinUvAuthParam construction (H3 defense, docs/PHASE-6-PLAN.md §3 + §4.5):
- *   HMAC-SHA-256(pinUvAuthToken,
- *                0x0a || subCommand || raw_subCommandParams_bytes)[:16]
- * Domain-separated so a pinAuth captured from MakeCred / GetAssertion
- * cannot be replayed against credentialManagement.
+ * pinUvAuthParam construction — matches CTAP2.1 §6.8.2 step 2 AND
+ * libfido2's `lib/credman.c` `prepare_hmac`:
+ *   HMAC-SHA-256(pinUvAuthToken, subCommand || subCommandParams)[:16]
+ * The sub-command byte alone is the domain tag.  No outer 0x0A prefix.
+ *
+ * (An earlier cpp-reviewer recommendation called for a 0x0A prefix per
+ * one reading of CTAP2.1.  Empirically libfido2 does NOT include the
+ * outer cmd byte — its `prepare_hmac` writes `hmac_data[0] = cmd`
+ * where `cmd` IS the sub-command byte.  Cross-command replay defense
+ * still holds: MakeCred's HMAC input is the 32-byte clientDataHash;
+ * credMgmt's is `subCmd || params` which starts with a small integer.
+ * Different byte sequences, different HMAC outputs.)
  *
  * Iterator state machine: any sub-command OTHER than the matching
  * GetNext* resets the iterator.  Strictly spec-conformant per

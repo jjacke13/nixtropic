@@ -274,11 +274,13 @@ Each phase is **independently shippable**. Stop anywhere = useful artifact. Hard
 
 **Build at completion:** `firmware.bin = 202 KB / 256 KB (77%)`, RAM = 25.5 KB / 192 KB (13%), 25/25 lint clean.
 
-**AAGUID:** `6e697874726f70696300000000000002` — "nixtropic" + version 0x02. See `docs/WEBAUTHN-NOTES.md §3`.
+**AAGUID:** `6e697874726f70696300000000000003` — "nixtropic" + version 0x03 (Phase 6 — real SW1 UP + Force-UV + credentialManagement). See `docs/WEBAUTHN-NOTES.md §3`.
 
 **Stop-here value:** Working open-source TROPIC01 FIDO2 dongle. World's first on TS1302.
 
-### Phase 6 — Production-grade UX (button + Force-UV + credentialManagement)
+### Phase 6 — Production-grade UX (button + Force-UV + credentialManagement) ✅ COMPLETE
+**Status:** Phase 6 closed 2026-05-11. All 4 milestones HW-validated + cpp-reviewer audit pass. AAGUID bumped to `...0003`. firmware.bin = ~206 KB / 256 KB (78.6%). 35+ commits ahead of `origin/main`, ready to push. See STATUS.md for the milestone-by-milestone breakdown.
+
 **Goal:** Trustable as a daily-driver security key. Scope narrowed 2026-05-11 — SW1/PH3 repurpose obviates daughter-board work, and ClientPIN ↔ MAC-and-Destroy already shipped in Phase 5 M4. See `docs/PHASE-6-PLAN.md` for the milestone breakdown.
 
 **Deliverables:**

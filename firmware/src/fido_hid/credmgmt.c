@@ -82,7 +82,12 @@ void credmgmt_reset_iterator(void)
     s_iter_rp_pos = 0;
     s_iter_cred_count = 0;
     s_iter_cred_pos = 0;
-    /* Don't memzero the slots arrays — they're indices, not secrets. */
+    /* Defense-in-depth (M4 audit Low-1): zero the per-RP filter hash so
+     * a stale value from a prior enumerate can't influence a future bug
+     * that consults it without first checking ITER_CREDS.  The hash
+     * isn't secret (rpIdHash is wire-visible) but it's a free clean-up. */
+    memset(s_iter_cred_rp_hash, 0, sizeof s_iter_cred_rp_hash);
+    /* Slot index arrays aren't secrets; leave them — saves a memset. */
 }
 
 /* ----- Helpers ----- */

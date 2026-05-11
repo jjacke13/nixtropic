@@ -462,6 +462,21 @@ let
     '';
   };
 
+  # Phase 6 FULL — M1 + M2 + M3 chain.  ~95 s walltime + flash time.
+  # Two SW1 presses + one 30 s timeout (M1).  Per
+  # feedback_validation_temporal_constraints.md: no time-bounded tests
+  # in Phase 6 require boot-window ordering, so we run by milestone.
+  validate-phase6 = writeShellApplication {
+    name = "nixtropic-validate-phase6";
+    runtimeInputs = [ py usbutils coreutils gnugrep ];
+    text = ''
+      set -uo pipefail
+      export FIDO2_PY="${../tools/fido2_test.py}"
+      export LT_RPC_PY="${../tools/lt_rpc.py}"
+      exec ${../tools/validate-phase6.sh} "$@"
+    '';
+  };
+
   # Phase 6 M2 — direct vendor commands for the Force-UV flag.
   # `force-uv-get` reads (unauthenticated).
   # `force-uv-set <0|1>` writes (requires active PIN session on device).
@@ -789,6 +804,60 @@ let
           export LT_RPC_PY="${../tools/lt_rpc.py}"
           export FIDO2_PY="${../tools/fido2_test.py}"
           exec ${../tools/validate-phase5.sh}
+        '';
+      };
+
+  # Phase 6 FULL — flash-and-validate-phase6: DFU flash + M1+M2+M3 chain.
+  # ~95 s walltime after flash.  Two SW1 presses (M1 + M3) + one 30 s
+  # timeout (M1).  M2 is fully automated.
+  flash-and-validate-phase6 =
+    if firmware == null then
+      writeShellApplication {
+        name = "nixtropic-flash-and-validate-phase6-placeholder";
+        text = ''echo "Custom firmware not available in this flake."; exit 1'';
+      }
+    else
+      writeShellApplication {
+        name = "nixtropic-flash-and-validate-phase6";
+        runtimeInputs = [ dfu-util usbutils coreutils gnugrep py ];
+        text = ''
+          set -euo pipefail
+          FW_BIN="${firmware}/firmware.bin"
+
+          echo "═══════════════════════════════════════════════════════════════"
+          echo "  Phase 6 FULL: flash-and-validate"
+          echo "═══════════════════════════════════════════════════════════════"
+
+          if ! lsusb | grep -q "0483:df11"; then
+            echo "ERROR: dongle not in DFU mode (0483:df11)." >&2
+            echo "       Hold SW1 while plugging USB to enter DFU." >&2
+            exit 1
+          fi
+
+          DFU_LOG=$(mktemp); trap 'rm -f "$DFU_LOG"' EXIT
+          echo "Step 1/2: DFU flash..."
+          dfu-util -a 0 -s 0x08000000:leave -D "$FW_BIN" 2>&1 | tee "$DFU_LOG" >/dev/null || true
+          DFU_EXIT="''${PIPESTATUS[0]}"
+          if [ "$DFU_EXIT" -ne 0 ] && ! grep -q "File downloaded successfully" "$DFU_LOG"; then
+            echo "✗ DFU flash FAILED."; exit 1
+          fi
+
+          echo "✓ Flash complete. Waiting for enumeration..."
+          for _ in $(seq 1 24); do
+            sleep 0.5
+            if lsusb | grep -q "cafe:4001"; then break; fi
+          done
+          if ! lsusb | grep -q "cafe:4001"; then
+            echo "✗ Enumeration failed." >&2; exit 1
+          fi
+          echo "✓ Enumerated. Settling 3 s..."
+          sleep 3
+
+          echo ""
+          echo "Step 2/2: Phase 6 full chain (M1+M2+M3)..."
+          export FIDO2_PY="${../tools/fido2_test.py}"
+          export LT_RPC_PY="${../tools/lt_rpc.py}"
+          exec ${../tools/validate-phase6.sh}
         '';
       };
 
@@ -1591,6 +1660,22 @@ in
       else
         "${flash-and-validate-phase6-m3}/bin/nixtropic-flash-and-validate-phase6-m3";
     meta.description = "DFU-flash open firmware + Phase 6 M3 credMgmt validation";
+  };
+
+  validate-phase6 = {
+    type = "app";
+    program = "${validate-phase6}/bin/nixtropic-validate-phase6";
+    meta.description = "Phase 6 FULL — M1 + M2 + M3 chain (~95 s, 2 SW1 presses)";
+  };
+
+  flash-and-validate-phase6 = {
+    type = "app";
+    program =
+      if firmware == null then
+        "${flash-and-validate-phase6}/bin/nixtropic-flash-and-validate-phase6-placeholder"
+      else
+        "${flash-and-validate-phase6}/bin/nixtropic-flash-and-validate-phase6";
+    meta.description = "DFU-flash open firmware + Phase 6 FULL validation";
   };
 
   force-uv-get = {

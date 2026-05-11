@@ -532,9 +532,9 @@ def sub_validate_m2(args) -> int:
             info = cbor_decode(body)
             aaguid = info.get(3, b"")
             assert isinstance(aaguid, bytes) and len(aaguid) == 16
-            assert aaguid[-1] == 0x02, (
-                f"aaguid trailing byte 0x{aaguid[-1]:02x} != 0x02 — "
-                f"is this M2 firmware or Phase 4 stub?")
+            assert aaguid[-1] in (0x02, 0x03), (
+                f"aaguid trailing byte 0x{aaguid[-1]:02x} not in {{0x02, 0x03}} — "
+                f"is this Phase 5+ firmware or Phase 4 stub?")
             opts = info.get(4, {})
             assert opts.get("rk") is True, "rk option must be true in M2"
             ok = True
