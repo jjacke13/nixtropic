@@ -2,7 +2,7 @@
 
 > **Audience:** AI coding agents (Claude, Codex, etc.) working on this project across sessions.
 > **Status:** Living document. Update as decisions and facts evolve.
-> **Last updated:** 2026-05-11 (Phase 6 ✅ COMPLETE; Phase 7 plan draft — §2 #12 ECC-only lock, #13 two-variant build (firmware-fido + firmware-combo), #14 slot allocation Option A; §6 Phase 7 entry rewritten — clean-room spec-driven, no CanoKey reference)
+> **Last updated:** 2026-05-11 (Phase 6 ✅ COMPLETE; Phase 7 plan draft — §2 #12 ECC-only lock, #13 single build (was two-variant; amended same-day after slot-count verification — 32 ECC slots not 8), #14 slot allocation 29 FIDO + 3 OpenPGP; §6 Phase 7 entry rewritten — clean-room spec-driven, no CanoKey reference; pushed to origin/main)
 > **Read order:** This document first. Reference `research/` files for technical depth as needed (don't preload them — fetch by section when relevant).
 
 ---
@@ -35,8 +35,8 @@ Distribution: Nix flake (`nixtropic`) packaging the firmware build, the host too
 | 10 | **Pairing keys at build: default to PRODUCTION (`*_prod0`)** | User's specific TS1302 (validated 2026-05-10) ships **production** silicon `TR01-C2P-T101`, **silicon rev ACAB**, NOT engineering samples. Default the firmware build to `sh0priv_prod0`/`sh0pub_prod0`. Build flag `NIXTROPIC_ENG_KEYS` switches to `*_eng_sample` for development of other (older / engineering-sample) chips. | 2026-05-10 |
 | 11 | **Document audience: AI agents primary** | This file is for AI agents. User reads conversationally, references this file when needed. | 2026-05-10 |
 | 12 | **Phase 7 = ECC-only.** Ed25519 (sig), Cv25519 (dec), Ed25519 (aut). No RSA. | Flash budget: STM32U535 256 KB ceiling; Phase 6 lands ~206 KB; ECC adds ~26 KB → ~232 KB combo total. RSA would add ~40 KB and overrun. GnuPG ECC smartcard fully covered. Users who need RSA have other devices. See `docs/PHASE-7-PLAN.md` §0 + memory `project_phase7_ecc_only_lock.md`. | 2026-05-11 |
-| 13 | **Two-variant Phase 7 build:** `firmware-fido` (Phase 6 functionality, 8 FIDO creds, no CCID) and `firmware-combo` (5 FIDO creds + 3 OpenPGP slots + CCID). | FIDO-only users keep full Phase 6 capability with no regression. Combo users opt in to the slot-allocation trade-off. Compile-time `NIXTROPIC_OPENPGP` flag; CCID + applet + ISO 7816 layer entirely preprocessor-excluded from fido-only build. Default `nix build .#firmware` = combo. Variant switching is loud (R-mem magic mismatch → factory_reset). AAGUID: combo `...0004`, fido-only `...0003`. See `docs/PHASE-7-PLAN.md` §4.8. | 2026-05-11 |
-| 14 | **TROPIC01 ECC slot allocation policy (Option A — hard split).** Combo: slots 0..4 FIDO (`SLOTS_MAX=5`), slots 5/6/7 OpenPGP sig/dec/aut. Fido-only: slots 0..7 FIDO (`SLOTS_MAX=8`). | Compile-time constants — no runtime "which slot is GPG-claimed" state machine. Simplest mental model. M&D slots: fido-only uses 0..7; combo additionally uses 8..16 for PW1/PW3/RC (3 each). See `docs/PHASE-7-PLAN.md` §4.4 + §4.5. | 2026-05-11 |
+| 13 | **Phase 7 single build** (was two-variant; **amended same-day 2026-05-11** after sub-agent slot-count verification). One firmware ships with both FIDO and OpenPGP card; CCID interface always present. | Original draft proposed `firmware-fido` + `firmware-combo` to "preserve full FIDO capacity." Sub-agent verification on 2026-05-11 showed TROPIC01 has **32 ECC slots** (not 8); the real trade-off was 32→29 — trivial. Two-variant complexity (per-variant R-mem magic, slot-conflict factory_reset, parallel CI builds) had been justified by a wrong premise. Single build is simpler to ship/test/document. Users who don't want CCID can ignore the interface (it enumerates but only responds to OpenPGP AID SELECT). AAGUID: `...0004`. See `docs/PHASE-7-PLAN.md` §1 + §4.7. | 2026-05-11 |
+| 14 | **TROPIC01 ECC slot allocation:** slots 0..28 for FIDO credentials (`FIDO_SLOTS_MAX=29`), slots 29/30/31 reserved for OpenPGP sig/dec/aut. | 32 total ECC slots verified by sub-agent (`research/tropic01-inventory.md`, libtropic enum `TR01_ECC_SLOT_0..31`, firmware `slots.h:40 SLOTS_MAX=32u`). Compile-time constants — no runtime "which slot is claimed" state machine. FIDO slot allocator refuses indices ≥ 29. M&D slots: 0..7 FIDO PIN (Phase 5); 8..16 PGP PW1/PW3/RC (3 each). See `docs/PHASE-7-PLAN.md` §4.4 + §4.5 + §4.8. | 2026-05-11 |
 
 ---
 
@@ -296,31 +296,31 @@ Each phase is **independently shippable**. Stop anywhere = useful artifact. Hard
 
 **Stop-here value:** Production-class security key with the three "real Yubikey" UX features (touch, always-PIN option, credential management).
 
-### Phase 7 — CCID OpenPGP card (ECC-only, two build variants)
+### Phase 7 — CCID OpenPGP card (ECC-only, single build)
 **Goal:** GnuPG / SSH (via gpg-agent) / QtPass work natively without host glue. **Daily-driver criterion:** `gpg --card-status` + `git commit -S` + `ssh git@github.com` all green.
 
-**Implementation source (decision 2026-05-11, amended):** clean-room against the canonical OpenPGP Card v3.4.1 specification (https://gnupg.org/ftp/specs/OpenPGP-smart-card-application-3.4.1.pdf). No Gnuk / CanoKey code referenced (previous draft mentioned CanoKey as port source; struck per user direction). Spec-driven implementation; crypto backend reuses trezor_crypto + TROPIC01 ECC slots (already linked from Phase 5).
+**Implementation source (decision 2026-05-11):** clean-room against the canonical OpenPGP Card v3.4.1 specification (https://gnupg.org/ftp/specs/OpenPGP-smart-card-application-3.4.1.pdf). No Gnuk / CanoKey code referenced. Spec-driven implementation; crypto backend reuses trezor_crypto + TROPIC01 ECC slots (already linked from Phase 5).
 
 **Locked decisions** (§2 #12, #13, #14):
-- **ECC-only** — Ed25519 (sig/aut) + Cv25519 (dec). No RSA. Flash budget reason.
-- **Two variants** — `firmware-fido` (no CCID, full 8 FIDO creds) and `firmware-combo` (CCID + OpenPGP, 5 FIDO creds + 3 PGP slots). Default `nix build .#firmware` = combo.
-- **Slot allocation Option A** — combo hard-splits slots 0..4 FIDO + 5/6/7 PGP. Variant switching = loud R-mem magic mismatch → factory_reset.
+- **ECC-only** — Ed25519 (sig/aut) + Cv25519 (dec). No RSA. TROPIC01 has zero RSA hardware (verified by sub-agent 2026-05-11).
+- **Single build** — one firmware ships FIDO + OpenPGP together; CCID interface always present. (Original draft proposed two variants; amended same-day after slot count corrected from 8 → 32 made the trade-off trivial.)
+- **Slot allocation** — slots 0..28 FIDO (`FIDO_SLOTS_MAX=29`); slots 29/30/31 reserved for OpenPGP sig/dec/aut. 32 total ECC slots verified by sub-agent.
 
 **Deliverables:**
-- USB descriptor: CDC + HID-lt-rpc + HID-FIDO2 + CCID (combo only)
+- USB descriptor: CDC + HID-lt-rpc + HID-FIDO2 + CCID
 - ISO 7816 APDU dispatcher (T=1, extended-length, 4 KB max)
 - OpenPGP applet — SELECT, GET/PUT DATA (~22 DOs), VERIFY/CHANGE/RESET RC for PW1/PW3/RC, GENERATE, PSO:CDS, PSO:DEC, INTERNAL AUTHENTICATE, TERMINATE DF, ACTIVATE FILE
-- Map sig/dec/aut to TROPIC01 ECC slots 5/6/7
-- M&D-backed PW1/PW3/RC retry counters (chip slots 8..16)
-- R-mem schema v4 with per-variant magic (NX7F fido-only / NX7C combo)
+- Map sig/dec/aut to TROPIC01 ECC slots 29/30/31
+- M&D-backed PW1/PW3/RC retry counters (chip M&D slots 8..16, 3 each PIN)
+- R-mem schema v4 with magic bump `NX6K` → `NX7K` (single magic; downgrade to Phase 6 triggers existing H4 factory_reset)
 - Per-slot UIF (User Interaction Flag) touch policy, default enabled
-- AAGUID combo bumps to `...000004`
+- AAGUID bumps to `...000004`
 
-**Test:** `gpg --card-status` shows ed25519 keys. `gpg --card-edit` walks all menus. `git commit -S` succeeds. `gpg --decrypt` round-trips on 4 KB ciphertext. `ssh git@github.com` authenticates via gpg-agent SSH support. fido-only build passes full `validate-phase6` chain (zero regression).
+**Test:** `gpg --card-status` shows ed25519 keys. `gpg --card-edit` walks all menus. `git commit -S` succeeds. `gpg --decrypt` round-trips on 4 KB ciphertext. `ssh git@github.com` authenticates via gpg-agent SSH support. Phase 6 validation chain still passes (FIDO regression test).
 
 **Stop-here value:** Yubikey-class for GPG/SSH/smartcard use cases. Daily-driver complete.
 
-**See:** `docs/PHASE-7-PLAN.md` for full §3 threat model (H6-I2, 18 rows), §4 architecture (10 subsections), §5 milestone breakdown (M1-M6).
+**See:** `docs/PHASE-7-PLAN.md` for full §3 threat model (H6-I2, 17 rows), §4 architecture (10 subsections), §5 milestone breakdown (M1-M6).
 
 ### Phase 8 — Polish: Nix flake, NixOS module, CLI
 **Goal:** Distribution-ready package.
