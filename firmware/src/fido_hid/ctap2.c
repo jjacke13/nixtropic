@@ -52,10 +52,11 @@ const uint8_t NIXTROPIC_AAGUID[16] = {
  *   3: aaguid (16-byte byte string) — REQUIRED
  *   4: options (map<text, bool>)
  *   5: maxMsgSize (uint)
+ *   6: pinUvAuthProtocols (array of uint) — supported PIN protocol versions
  *   9: transports (array of strings)
  *   10: algorithms (array of maps with "alg" + "type")
  *
- * Map keys MUST appear in canonical numeric order (1, 3, 4, 5, 9, 10).
+ * Map keys MUST appear in canonical numeric order (1, 3, 4, 5, 6, 9, 10).
  * Options map text keys also in canonical (length, then byte) order:
  *   "rk" (2) < "up" (2) < "plat" (4) < "clientPin" (9)
  *
@@ -63,14 +64,19 @@ const uint8_t NIXTROPIC_AAGUID[16] = {
  *   -8 = EdDSA (Ed25519) — matches TROPIC01's primary curve
  *   -7 = ES256 (ECDSA over P-256) — TROPIC01 also supports
  * Type is always "public-key".
+ *
+ * pinUvAuthProtocols (key 6) is REQUIRED by libfido2's
+ * fido_dev_set_pin / fido_do_ecdh — without it the client can't tell
+ * which PIN protocol to negotiate and aborts with FIDO_ERR_INTERNAL.
+ * Phase 5 M3 supports protocol 1 only.
  */
 static int build_get_info(uint8_t *resp, size_t resp_max)
 {
     cbor_writer_t w;
     cbor_writer_init(&w, resp, resp_max);
 
-    /* Top-level map: 6 entries */
-    cbor_write_map_header(&w, 6);
+    /* Top-level map: 7 entries (Phase 5 M3 added pinUvAuthProtocols) */
+    cbor_write_map_header(&w, 7);
 
     /* key 1 → versions = ["FIDO_2_0"] */
     cbor_write_uint(&w, 1);
@@ -99,6 +105,14 @@ static int build_get_info(uint8_t *resp, size_t resp_max)
      * leaves room for response framing overhead. */
     cbor_write_uint(&w, 5);
     cbor_write_uint(&w, 1024);
+
+    /* key 6 → pinUvAuthProtocols = [1].
+     * Phase 5 M3 implements pinProtocol version 1 only (P-256 + AES-256-
+     * CBC + HMAC-SHA-256). pinProtocol 2 (HKDF derivation, AES-CTR, longer
+     * sharedSecret) is a Phase 6+ option if needed for newer clients. */
+    cbor_write_uint(&w, 6);
+    cbor_write_array_header(&w, 1);
+    cbor_write_uint(&w, 1);
 
     /* key 9 → transports = ["usb"] */
     cbor_write_uint(&w, 9);
