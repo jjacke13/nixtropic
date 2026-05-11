@@ -64,30 +64,40 @@
 
 /* Magic byte values.
  *
- * Phase 6 M2 bumps the global magic from "NX5K" → "NX6K".  Rationale
- * (docs/PHASE-6-PLAN.md §4.3 H4 defense):
+ * Phase 7 M1 bumps the global magic from "NX6K" → "NX7K".  Rationale
+ * (docs/PHASE-7-PLAN.md §4.7 H4 reuse):
  *
- *   - Phase 5 firmware reading Phase 6 R-mem sees "NX6K", does NOT
+ *   - Phase 6 firmware reading Phase 7 R-mem sees "NX7K", does NOT
  *     recognise it, falls into the first-boot path → factory_reset.
- *     Loud failure ("device was wiped") instead of silently misreading
- *     the new force_uv byte as M&D ci[].
- *   - Phase 6 firmware reading Phase 5 R-mem sees "NX5K", recognises
- *     it as the legacy v2 magic, migrates in-RAM (preserving PIN +
- *     M&D state + credentials), writes back with the new magic.
+ *     Loud failure ("device was wiped") on accidental downgrade.
+ *   - Phase 7 firmware reading Phase 6 R-mem sees "NX6K", recognises
+ *     it as legacy v3, migrates in-RAM (preserves PIN + M&D state +
+ *     credentials + force_uv across the Phase 7 upgrade).  Slot 0
+ *     payload is unchanged from v3 — we just bump the magic + schema
+ *     version byte as a marker.
+ *   - Phase 7 firmware reading Phase 5 R-mem ("NX5K", v2) migrates
+ *     v2 → v4 directly: preserves M&D state, defaults force_uv = 0
+ *     (was the v2→v3 step), bumps magic.
  *
- * Per-credential magic is unchanged across the upgrade — cred slots
- * (R-mem 1..32) didn't grow. */
-static const uint8_t GLOBAL_MAGIC[GLOBAL_MAGIC_LEN]        = { 'N', 'X', '6', 'K' };
-static const uint8_t GLOBAL_MAGIC_LEGACY[GLOBAL_MAGIC_LEN] = { 'N', 'X', '5', 'K' };
-static const uint8_t CRED_MAGIC[CRED_MAGIC_LEN]            = { 'N', 'X', 'C', 'R' };
+ * Per-credential magic is unchanged — cred slots (R-mem 1..32) had
+ * no layout change in Phase 6 or Phase 7. */
+static const uint8_t GLOBAL_MAGIC[GLOBAL_MAGIC_LEN]           = { 'N', 'X', '7', 'K' };
+static const uint8_t GLOBAL_MAGIC_LEGACY_V3[GLOBAL_MAGIC_LEN] = { 'N', 'X', '6', 'K' };
+static const uint8_t GLOBAL_MAGIC_LEGACY_V2[GLOBAL_MAGIC_LEN] = { 'N', 'X', '5', 'K' };
+static const uint8_t CRED_MAGIC[CRED_MAGIC_LEN]               = { 'N', 'X', 'C', 'R' };
 
 /* schema_version 1 = M1/M3 (256 B layout, no M&D fields)
  * schema_version 2 = M4 (384 B layout, M&D state at offsets 31..320)
- * schema_version 3 = Phase 6 M2 (392 B layout, +1 B force_uv at 321) */
-#define SLOTS_SCHEMA_VERSION      3u
+ * schema_version 3 = Phase 6 M2 (392 B layout, +1 B force_uv at 321)
+ * schema_version 4 = Phase 7 M1 (392 B — identical to v3; bump is purely
+ *                   a magic/version marker for downgrade detection) */
+#define SLOTS_SCHEMA_VERSION      4u
+#define SLOTS_SCHEMA_VERSION_V3   3u
 #define SLOTS_SCHEMA_VERSION_V2   2u
 /* Phase 6 M2 grew global payload from 384 → 392 (rounded to 8-byte
- * alignment past the new force_uv byte at offset 321). */
+ * alignment past the new force_uv byte at offset 321).  Phase 7 M1
+ * keeps the same payload size — slot 0 layout is unchanged, only
+ * magic + schema_version bytes are bumped. */
 #define SLOTS_GLOBAL_PAYLOAD_LEN  392u
 #define SLOTS_CRED_PAYLOAD_LEN    SLOTS_RMEM_PER_CRED_SIZE
 
@@ -171,11 +181,12 @@ static int write_global(uint32_t bitmap)
 }
 
 /* Read & validate the global-state slot.  Returns:
- *   0  = success, schema v3 ("NX6K"), nothing to do.
- *   1  = success, legacy v2 ("NX5K") — caller MUST write_global() to
- *        migrate to v3 layout before returning to user code.  In-RAM
+ *   0  = success, current schema v4 ("NX7K"), nothing to do.
+ *   1  = success, legacy schema v2/v3 — caller MUST write_global() to
+ *        migrate to v4 layout before returning to user code.  In-RAM
  *        state is already populated; v2 had no force_uv byte so the
- *        flag defaults to 0.
+ *        flag defaults to 0; v3 is a strict prefix of v4 (only the
+ *        magic + version bytes change).
  *  -1  = magic mismatch (caller should treat as first boot).
  *  -2  = chip read error.
  *  -3  = recognised magic but unsupported schema (caller should
@@ -190,23 +201,36 @@ static int read_global(uint32_t *out_bitmap)
         return -2;
     }
 
-    int is_legacy_v2 = 0;
+    /* 0 = current v4 / 2 = legacy v2 / 3 = legacy v3 */
+    int legacy_version = 0;
     if (memcmp(&buf[GLOBAL_MAGIC_OFF], GLOBAL_MAGIC, GLOBAL_MAGIC_LEN) == 0) {
-        /* Current v3 magic. */
-    } else if (memcmp(&buf[GLOBAL_MAGIC_OFF], GLOBAL_MAGIC_LEGACY,
+        /* Current v4 magic ("NX7K"). */
+    } else if (memcmp(&buf[GLOBAL_MAGIC_OFF], GLOBAL_MAGIC_LEGACY_V3,
                       GLOBAL_MAGIC_LEN) == 0) {
-        /* Phase 5 v2 magic — accept and migrate.  Preserves user's PIN
-         * + M&D state + credentials across the Phase 6 upgrade. */
-        is_legacy_v2 = 1;
+        /* Phase 6 v3 magic ("NX6K") — accept and migrate to v4.  Slot 0
+         * payload is identical between v3 and v4; only the magic +
+         * schema_version bytes change.  Preserves PIN + M&D + force_uv
+         * + credentials across the Phase 7 upgrade. */
+        legacy_version = 3;
+    } else if (memcmp(&buf[GLOBAL_MAGIC_OFF], GLOBAL_MAGIC_LEGACY_V2,
+                      GLOBAL_MAGIC_LEN) == 0) {
+        /* Phase 5 v2 magic ("NX5K") — accept and migrate v2 → v4.
+         * v2 had no force_uv byte (defaults to 0 here, same as
+         * the original v2→v3 step). */
+        legacy_version = 2;
     } else {
         return -1;
     }
 
     uint16_t schema = ((uint16_t) buf[GLOBAL_SCHEMA_OFF] << 8) |
                        (uint16_t) buf[GLOBAL_SCHEMA_OFF + 1];
-    if (is_legacy_v2) {
+    if (legacy_version == 2) {
         if (schema != SLOTS_SCHEMA_VERSION_V2) {
-            return -3;  /* unknown schema under legacy magic */
+            return -3;  /* unknown schema under legacy v2 magic */
+        }
+    } else if (legacy_version == 3) {
+        if (schema != SLOTS_SCHEMA_VERSION_V3) {
+            return -3;  /* unknown schema under legacy v3 magic */
         }
     } else {
         if (schema != SLOTS_SCHEMA_VERSION) {
@@ -234,14 +258,16 @@ static int read_global(uint32_t *out_bitmap)
         memset(s_md_ci,  0, SLOTS_MD_CI_LEN);
     }
 
-    /* Force-UV (Phase 6 M2+).  v2 layout has no such byte; default 0. */
-    if (is_legacy_v2 || got <= GLOBAL_FORCE_UV_OFF) {
+    /* Force-UV (Phase 6 M2+).  v2 layout has no such byte; default 0.
+     * v3 + current both place it at GLOBAL_FORCE_UV_OFF. */
+    if (legacy_version == 2 || got <= GLOBAL_FORCE_UV_OFF) {
         s_force_uv = 0u;
     } else {
         s_force_uv = (buf[GLOBAL_FORCE_UV_OFF] != 0u) ? 1u : 0u;
     }
 
-    return is_legacy_v2 ? 1 : 0;
+    /* Return 1 if migration to current schema needed; 0 if already current. */
+    return (legacy_version != 0) ? 1 : 0;
 }
 
 /* Write a fully-formed per-credential R-mem entry. */
@@ -419,16 +445,20 @@ int slots_alloc(const uint8_t rp_id_hash[SLOTS_RP_ID_HASH_LEN],
         if (rc != 0) return -2;
     }
 
-    /* Find first free slot. */
+    /* Find first free slot.  Phase 7 M1: cap at FIDO_SLOTS_MAX (29);
+     * slots 29/30/31 are reserved for OpenPGP sig/dec/aut keys.  At
+     * full FIDO load this returns -1 (full) even though chip slots
+     * 29..31 may be physically unused for OpenPGP — that's the
+     * documented 29-credential cap (L6 in PHASE-7-PLAN.md §3). */
     int idx = -1;
-    for (int i = 0; i < (int) SLOTS_MAX; ++i) {
+    for (int i = 0; i < (int) FIDO_SLOTS_MAX; ++i) {
         if ((s_bitmap & (1u << i)) == 0u) {
             idx = i;
             break;
         }
     }
     if (idx < 0) {
-        return -1;     /* full */
+        return -1;     /* full (FIDO quota exhausted at 29 credentials) */
     }
 
     /* Generate 16 B nonce from TROPIC01 TRNG. */

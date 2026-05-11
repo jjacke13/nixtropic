@@ -38,6 +38,15 @@
 #include <stddef.h>
 
 #define SLOTS_MAX                    32u
+/* Phase 7 M1 — FIDO allocator cap.  TROPIC01 has 32 ECC slots total
+ * (verified via libtropic enum TR01_ECC_SLOT_0..TR01_ECC_SLOT_31 and
+ * research/tropic01-inventory.md).  Phase 7 reserves slots 29/30/31
+ * for OpenPGP sig/dec/aut keys; FIDO credential allocation refuses
+ * indices ≥ FIDO_SLOTS_MAX. */
+#define FIDO_SLOTS_MAX               29u
+#define OPENPGP_SLOT_SIG             29u   /* Ed25519, DO C7 fingerprint */
+#define OPENPGP_SLOT_DEC             30u   /* Cv25519, DO C8 */
+#define OPENPGP_SLOT_AUT             31u   /* Ed25519, DO C9 */
 #define SLOTS_CRED_ID_LEN            18u
 #define SLOTS_CRED_ID_NONCE_LEN      16u
 #define SLOTS_RP_ID_HASH_LEN         32u
