@@ -32,8 +32,10 @@
 #define CTAP2_ERR_CBOR_UNEXPECTED_TYPE    0x11u
 #define CTAP2_ERR_INVALID_CBOR            0x12u
 #define CTAP2_ERR_MISSING_PARAMETER       0x14u
-#define CTAP2_ERR_OPERATION_DENIED        0x27u
 #define CTAP2_ERR_UNSUPPORTED_ALGORITHM   0x26u
+#define CTAP2_ERR_OPERATION_DENIED        0x27u
+#define CTAP2_ERR_KEY_STORE_FULL          0x28u
+#define CTAP2_ERR_NO_CREDENTIALS          0x2Eu
 #define CTAP2_ERR_NOT_ALLOWED             0x30u
 #define CTAP2_ERR_OTHER                   0x7Fu
 

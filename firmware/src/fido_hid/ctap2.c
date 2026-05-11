@@ -23,19 +23,25 @@
 
 /* nixtropic AAGUID per PROJECT.md plan decision #6:
  *   "nixtropic" (9 bytes: 6E 69 78 74 72 6F 70 69 63) + 6 zero bytes +
- *   version byte (0x01 for Phase 4 generation).
+ *   version byte.
+ *
+ * Trailing byte history:
+ *   0x01 — Phase 4 stub firmware (embedded Ed25519 seed, fixed credId)
+ *   0x02 — Phase 5 M2 firmware (TROPIC01-backed per-credential keys,
+ *          resident credentials, shared hw monotonic counter)
  *
  * Authenticators MUST keep their AAGUID stable across instances of the
- * same model. Bump the trailing byte if we ever materially change the
- * authenticator's behavior in a way relying parties would want to
- * distinguish (e.g., Phase 5 enabling real TROPIC01-backed credentials).
+ * same model. The bump from 0x01 to 0x02 marks the behavior change:
+ * Phase 5 stores credentials on the chip, Phase 4 did not — relying
+ * parties wanting to distinguish "this is real" from "this was stub"
+ * can do so by AAGUID.
  *
  * Non-static so ctap2_creds.c can reference the same blob. */
 const uint8_t NIXTROPIC_AAGUID[16] = {
     0x6Eu, 0x69u, 0x78u, 0x74u,  /* "nixt" */
     0x72u, 0x6Fu, 0x70u, 0x69u,  /* "ropi" */
     0x63u, 0x00u, 0x00u, 0x00u,  /* "c" + pad */
-    0x00u, 0x00u, 0x00u, 0x01u,  /* pad + Phase 4 version */
+    0x00u, 0x00u, 0x00u, 0x02u,  /* pad + Phase 5 M2 version */
 };
 
 /* ----- authenticatorGetInfo (0x04) -----
@@ -79,13 +85,13 @@ static int build_get_info(uint8_t *resp, size_t resp_max)
     cbor_write_map_header(&w, 4);
 
     cbor_write_text(&w, "rk");
-    cbor_write_bool(&w, false);          /* no resident keys in Phase 4 */
+    cbor_write_bool(&w, true);           /* Phase 5 M2: resident keys supported (TROPIC01 R-mem) */
     cbor_write_text(&w, "up");
-    cbor_write_bool(&w, true);           /* user-presence stubbed true (P5/P6) */
+    cbor_write_bool(&w, true);           /* user-presence stubbed true (PROJECT.md decision #3) */
     cbor_write_text(&w, "plat");
     cbor_write_bool(&w, false);          /* not a platform authenticator */
     cbor_write_text(&w, "clientPin");
-    cbor_write_bool(&w, false);          /* ClientPIN comes in Phase 5 */
+    cbor_write_bool(&w, false);          /* ClientPIN comes in M3 */
 
     /* key 5 → maxMsgSize.
      * Cap at 1024 to match FIDO_HID_MAX_PAYLOAD / 2 — half the buffer

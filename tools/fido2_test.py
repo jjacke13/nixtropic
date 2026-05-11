@@ -487,6 +487,202 @@ def sub_assertion(args) -> int:
     return 0
 
 
+def sub_validate_m2(args) -> int:
+    """Phase 5 M2 validation — real TROPIC01-backed keys, multi-credential.
+
+    Pre-condition: slot bitmap is empty (the wrapper shell script runs
+    `lt_rpc.py slots-reset` first so we start clean).
+
+    Test scenario:
+      1) GetInfo → AAGUID trailing byte 0x02 (M2 firmware marker)
+      2) MakeCred for site1.example → distinct pubkey/credId; sig verifies
+      3) MakeCred for site2.example → distinct from site1
+      4) MakeCred for site3.example → distinct from site1+site2
+      5) GetAssertion site1 credId → sig verifies with site1 pubkey
+         signCount > 0 (monotonic from MakeCred ops)
+      6) GetAssertion site2 credId → sig verifies with site2 pubkey
+         signCount > step 5's signCount
+      7) GetAssertion forged credId (random 18 B) → NO_CREDENTIALS
+      8) GetAssertion site3 credId → sig verifies with site3 pubkey
+         signCount > step 6's signCount
+    """
+    import hashlib
+    path = find_fido_path()
+    print(f"FIDO HID @ {path}")
+    results: list[tuple[str, bool, str]] = []
+    sites: list[tuple[str, bytes, bytes]] = []  # (rp_id, pubkey, cred_id)
+    signcounts: list[int] = []
+
+    with open_dev(path) as dev:
+        new_cid, _ = cmd_init(dev)
+
+        # 1) GetInfo — confirm AAGUID Phase 5 marker.
+        ok = False
+        detail = ""
+        try:
+            status, body = cmd_cbor(dev, new_cid, CTAP2_CMD_GET_INFO)
+            assert status == CTAP2_OK, f"status 0x{status:02x}"
+            info = cbor_decode(body)
+            aaguid = info.get(3, b"")
+            assert isinstance(aaguid, bytes) and len(aaguid) == 16
+            assert aaguid[-1] == 0x02, (
+                f"aaguid trailing byte 0x{aaguid[-1]:02x} != 0x02 — "
+                f"is this M2 firmware or Phase 4 stub?")
+            opts = info.get(4, {})
+            assert opts.get("rk") is True, "rk option must be true in M2"
+            ok = True
+            detail = f"aaguid={aaguid.hex()} rk={opts.get('rk')}"
+        except Exception as e:
+            detail = f"{type(e).__name__}: {e}"
+        results.append(("GetInfo: AAGUID = ...0002, rk=true", ok, detail))
+
+        # 2-4) MakeCred for three distinct sites.
+        for i, rp_id in enumerate(
+                ["site1.example", "site2.example", "site3.example"], start=2):
+            ok = False
+            detail = ""
+            try:
+                status, fmt, authdata, attstmt, chash = _do_make_credential(
+                    dev, new_cid, rp_id=rp_id)
+                assert status == CTAP2_OK, f"status 0x{status:02x}"
+                assert fmt == "packed"
+                rp_id_hash, flags, signcount, cred_id, cose = parse_authdata(
+                    authdata, expect_at=True)
+                expected_hash = hashlib.sha256(rp_id.encode()).digest()
+                assert rp_id_hash == expected_hash, "rpIdHash mismatch"
+                pubkey = cose_ed25519_pubkey(cose)
+                assert len(cred_id) == 18, f"cred_id len {len(cred_id)} != 18"
+                assert cred_id[0] == 0x01, f"cred_id version {cred_id[0]:#x} != 0x01"
+                Ed25519PublicKey.from_public_bytes(pubkey).verify(
+                    attstmt["sig"], authdata + chash)
+                # Verify uniqueness against previously seen credentials
+                for j, (prev_rp, prev_pub, prev_cred) in enumerate(sites):
+                    assert pubkey != prev_pub, (
+                        f"pubkey collision with {prev_rp} (j={j})")
+                    assert cred_id != prev_cred, (
+                        f"credId collision with {prev_rp} (j={j})")
+                sites.append((rp_id, pubkey, cred_id))
+                signcounts.append(signcount)
+                ok = True
+                detail = (f"slot={cred_id[1]} sc={signcount} "
+                          f"pk={pubkey[:8].hex()}…")
+            except Exception as e:
+                detail = f"{type(e).__name__}: {e}"
+            results.append(
+                (f"MakeCred {rp_id} (distinct pubkey+credId, sig verifies)",
+                 ok, detail))
+
+        # 5) GetAssertion site1 → verify with site1 pubkey.
+        if len(sites) >= 1:
+            rp_id, pubkey, cred_id = sites[0]
+            ok = False
+            detail = ""
+            try:
+                status, credential, ad2, sig2, chash2 = _do_get_assertion(
+                    dev, new_cid, rp_id, cred_id)
+                assert status == CTAP2_OK, f"status 0x{status:02x}"
+                rp_id_hash2, flags2, signcount2, _, _ = parse_authdata(
+                    ad2, expect_at=False)
+                assert credential["id"] == cred_id, "credId echo mismatch"
+                expected_hash = hashlib.sha256(rp_id.encode()).digest()
+                assert rp_id_hash2 == expected_hash
+                Ed25519PublicKey.from_public_bytes(pubkey).verify(
+                    sig2, ad2 + chash2)
+                assert signcount2 > max(signcounts), (
+                    f"signCount {signcount2} not > prev max {max(signcounts)}")
+                signcounts.append(signcount2)
+                ok = True
+                detail = f"sc={signcount2} (was {signcounts[-2]})"
+            except Exception as e:
+                detail = f"{type(e).__name__}: {e}"
+            results.append(("GetAssertion site1 (verifies + sc>prev)", ok, detail))
+
+        # 6) GetAssertion site2 → verify with site2 pubkey, sc strictly higher.
+        if len(sites) >= 2:
+            rp_id, pubkey, cred_id = sites[1]
+            ok = False
+            detail = ""
+            try:
+                status, credential, ad2, sig2, chash2 = _do_get_assertion(
+                    dev, new_cid, rp_id, cred_id)
+                assert status == CTAP2_OK, f"status 0x{status:02x}"
+                _, _, signcount2, _, _ = parse_authdata(ad2, expect_at=False)
+                Ed25519PublicKey.from_public_bytes(pubkey).verify(
+                    sig2, ad2 + chash2)
+                assert signcount2 > max(signcounts), (
+                    f"signCount {signcount2} not > prev max {max(signcounts)}")
+                signcounts.append(signcount2)
+                ok = True
+                detail = f"sc={signcount2}"
+            except Exception as e:
+                detail = f"{type(e).__name__}: {e}"
+            results.append(("GetAssertion site2 (verifies + sc strictly>)", ok, detail))
+
+        # 7) Negative: forged credId → NO_CREDENTIALS (0x2E).
+        ok = False
+        detail = ""
+        try:
+            forged = bytes([0x01, 0x07]) + os.urandom(16)   # slot 7 random nonce
+            status, body = cmd_cbor(
+                dev, new_cid, CTAP2_CMD_GET_ASSERTION,
+                cbor_encode({
+                    1: "site1.example",
+                    2: os.urandom(32),
+                    3: [{"id": forged, "type": "public-key"}],
+                }))
+            ok = (status == 0x2E)  # CTAP2_ERR_NO_CREDENTIALS
+            detail = f"status=0x{status:02x} (want 0x2E)"
+        except Exception as e:
+            detail = f"{type(e).__name__}: {e}"
+        results.append(("GetAssertion forged credId → NO_CREDENTIALS", ok, detail))
+
+        # 8) GetAssertion site3 → verify with site3 pubkey, sc strictly higher.
+        if len(sites) >= 3:
+            rp_id, pubkey, cred_id = sites[2]
+            ok = False
+            detail = ""
+            try:
+                status, credential, ad2, sig2, chash2 = _do_get_assertion(
+                    dev, new_cid, rp_id, cred_id)
+                assert status == CTAP2_OK, f"status 0x{status:02x}"
+                _, _, signcount2, _, _ = parse_authdata(ad2, expect_at=False)
+                Ed25519PublicKey.from_public_bytes(pubkey).verify(
+                    sig2, ad2 + chash2)
+                assert signcount2 > max(signcounts), (
+                    f"signCount {signcount2} not > prev max {max(signcounts)}")
+                ok = True
+                detail = f"sc={signcount2}"
+            except Exception as e:
+                detail = f"{type(e).__name__}: {e}"
+            results.append(("GetAssertion site3 (verifies + sc strictly>)", ok, detail))
+
+    print()
+    print("═" * 63)
+    print("  Phase 5 M2 — real TROPIC01-backed FIDO2 (THE MIC-DROP)")
+    print("═" * 63)
+    n_ok = 0
+    for i, (name, ok, detail) in enumerate(results, 1):
+        verdict = "PASS" if ok else "FAIL"
+        print(f"[{i}/{len(results)}] {name:<54s} {verdict}")
+        if not ok:
+            print(f"        {detail}")
+        else:
+            n_ok += 1
+    print()
+    print(f"{n_ok}/{len(results)} PASS — Phase 5 M2 "
+          f"{'validated' if n_ok == len(results) else 'FAILED'}.")
+    if n_ok == len(results):
+        print()
+        print("Per-credential keys generated on TROPIC01, signed on TROPIC01,")
+        print("verified host-side. Shared monotonic counter strictly increases.")
+        print("Forged credIds rejected. AAGUID v2 advertised.")
+        print()
+        print("MANUAL NEXT: plug into a browser → https://webauthn.io → register +")
+        print("log in. That's the real mic-drop. (Use the same cred_id across the")
+        print("register-then-log-in flow for the demo.)")
+    return 0 if n_ok == len(results) else 1
+
+
 def sub_validate(args) -> int:
     """Run a 5-test suite, exit 0 on full pass."""
     path = find_fido_path()
@@ -605,6 +801,8 @@ def main() -> int:
     p_make    = sub.add_parser("make-cred", help="CTAP2 authenticatorMakeCredential")
     p_assert  = sub.add_parser("assertion", help="MakeCred → GetAssertion round-trip")
     p_val     = sub.add_parser("validate",  help="run full Phase 4 suite")
+    p_val_m2  = sub.add_parser("validate-m2",
+                               help="Phase 5 M2 — real TROPIC01-backed FIDO2 (MIC-DROP)")
 
     p_init.set_defaults(func=sub_init)
     p_ping.set_defaults(func=sub_ping)
@@ -613,6 +811,7 @@ def main() -> int:
     p_make.set_defaults(func=sub_make_cred)
     p_assert.set_defaults(func=sub_assertion)
     p_val.set_defaults(func=sub_validate)
+    p_val_m2.set_defaults(func=sub_validate_m2)
 
     args = parser.parse_args()
     return args.func(args)

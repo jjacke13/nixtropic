@@ -129,4 +129,29 @@ int tropic_rmem_erase(uint16_t slot);
  */
 int tropic_random(uint8_t *out, size_t len);
 
+/**
+ * @brief Initialize TROPIC01 monotonic counter `idx` (0..15) to `value`.
+ *        TROPIC01 counters DECREMENT — init with a high value, each
+ *        update brings it toward 0. At 0, further updates return error.
+ *        Safe to call on an already-initialized counter (resets it).
+ *
+ * @return 0 on success; negative libtropic error code otherwise.
+ */
+int tropic_mcounter_init(uint8_t idx, uint32_t value);
+
+/**
+ * @brief Decrement TROPIC01 monotonic counter `idx` by 1. Atomic on chip.
+ *
+ * @return 0 on success; negative libtropic error code otherwise.
+ */
+int tropic_mcounter_update(uint8_t idx);
+
+/**
+ * @brief Read TROPIC01 monotonic counter `idx`. Out parameter receives
+ *        the current chip value (high values = "still has remaining").
+ *
+ * @return 0 on success; negative libtropic error code otherwise.
+ */
+int tropic_mcounter_get(uint8_t idx, uint32_t *out_value);
+
 #endif /* NIXTROPIC_TROPIC_H */

@@ -184,7 +184,6 @@ int main(void)
     cdc_protocol_init();
     hid_rpc_init();
     fido_hid_init();
-    credstore_init();
 
     /* Stage 8.5 — libtropic on chip (M3). Runs power-cycle again + lt_init.
      * If lt_init fails the chip is still powered (power-cycle ran first),
@@ -193,17 +192,20 @@ int main(void)
      * host if lt_init didn't succeed. */
     tropic_init();
 
-    /* Stage 8.6 — Phase 5 M1: TROPIC01 slot manager.
-     * Opens L3 session lazily on first use; reads R-mem slot 0 to detect
-     * first-boot vs returning state; orphan-scrubs the bitmap. We log on
-     * failure but don't halt — Phase 4 stub credstore is still functional
-     * if slots_init fails (Phase 5 paths return errors to the host). */
+    /* Stage 8.6 — Phase 5: credential store + slot manager.
+     * Phase 5 M2: credstore_init opens L3 lazily on first use, calls
+     * slots_init internally (reads R-mem slot 0, orphan-scrubs bitmap),
+     * and initializes TROPIC01 mcounter 0 to MAX if it's a first boot
+     * (used as the shared monotonic signCount).
+     *
+     * We log on failure but don't halt — FIDO2 paths will simply return
+     * CTAP errors to the host. CDC + lt-rpc HID paths remain operational. */
     {
-        int rc = slots_init();
+        int rc = credstore_init();
         if (rc != 0) {
-            printf("[slots] init failed: %d (Phase 5 paths will return errors)\n", rc);
+            printf("[credstore] init failed: %d (FIDO2 paths will error)\n", rc);
         } else {
-            printf("[slots] init OK; bitmap=0x%08lx used=%d/32\n",
+            printf("[slots] bitmap=0x%08lx used=%d/32\n",
                    (unsigned long) slots_bitmap(), slots_count_used());
         }
     }

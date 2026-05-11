@@ -358,6 +358,21 @@ let
     '';
   };
 
+  # Phase 5 M2 — validate-phase5-m2 (THE MIC-DROP): real TROPIC01-backed
+  # FIDO2 keys. Resets slot bitmap, runs MakeCred×3 on distinct rpIds,
+  # GetAssertion×3 against each, monotonic counter check, forged-credId
+  # negative test. Per docs/PHASE-5-PLAN.md §5 + §2 ("THE MIC-DROP").
+  validate-phase5-m2 = writeShellApplication {
+    name = "nixtropic-validate-phase5-m2";
+    runtimeInputs = [ py usbutils coreutils gnugrep ];
+    text = ''
+      set -uo pipefail
+      export LT_RPC_PY="${../tools/lt_rpc.py}"
+      export FIDO2_PY="${../tools/fido2_test.py}"
+      exec ${../tools/validate-phase5-m2.sh} "$@"
+    '';
+  };
+
   # Phase 1 — flash-and-validate: orchestrates DFU flash + immediate validate.
   # Solves the "boot markers emit only once" gotcha: after flash, the
   # firmware re-boots fresh and emits its boot block; the validator captures
@@ -611,6 +626,76 @@ let
           echo ""
           export LT_RPC_PY="${../tools/lt_rpc.py}"
           exec ${../tools/validate-phase3.sh}
+        '';
+      };
+
+  # Phase 5 M2 — flash-and-validate-phase5-m2: DFU flash + M2 mic-drop.
+  flash-and-validate-phase5-m2 =
+    if firmware == null then
+      writeShellApplication {
+        name = "nixtropic-flash-and-validate-phase5-m2-placeholder";
+        text = ''
+          echo "Custom firmware not available in this flake."
+          exit 1
+        '';
+      }
+    else
+      writeShellApplication {
+        name = "nixtropic-flash-and-validate-phase5-m2";
+        runtimeInputs = [ dfu-util usbutils coreutils gnugrep py ];
+        text = ''
+          set -euo pipefail
+
+          FW_BIN="${firmware}/firmware.bin"
+
+          echo "═══════════════════════════════════════════════════════════════"
+          echo "  Phase 5 M2: flash-and-validate (THE MIC-DROP)"
+          echo "═══════════════════════════════════════════════════════════════"
+          echo ""
+
+          if ! lsusb | grep -q "0483:df11"; then
+            echo "ERROR: dongle not in DFU mode (0483:df11)." >&2
+            echo "Hold SW1 + replug, then re-run." >&2
+            exit 1
+          fi
+
+          echo "Step 1/3: DFU flash..."
+          DFU_LOG=$(mktemp)
+          trap 'rm -f "$DFU_LOG"' EXIT
+
+          dfu-util -a 0 -s 0x08000000:leave -D "$FW_BIN" 2>&1 | tee "$DFU_LOG" >/dev/null || true
+          DFU_EXIT="''${PIPESTATUS[0]}"
+
+          if [ "$DFU_EXIT" -ne 0 ] && ! grep -q "File downloaded successfully" "$DFU_LOG"; then
+            echo "✗ DFU flash FAILED."
+            exit 1
+          fi
+
+          echo "✓ Flash complete. Waiting up to 12 s for USB re-enumeration..."
+
+          for _ in $(seq 1 24); do
+            sleep 0.5
+            if lsusb | grep -q "cafe:4001"; then
+              break
+            fi
+          done
+
+          if ! lsusb | grep -q "cafe:4001"; then
+            echo "✗ nixtropic open firmware (cafe:4001) not enumerated after 12 s." >&2
+            lsusb | grep -E "0483:|cafe:" >&2 || echo "    (no TS1302 VID seen)" >&2
+            exit 1
+          fi
+
+          echo "✓ nixtropic firmware enumerated."
+          echo ""
+          echo "Settling for 3 s..."
+          sleep 3
+          echo ""
+          echo "Steps 2-3/3: factory_reset + Phase 5 M2 FIDO2 mic-drop suite..."
+          echo ""
+          export LT_RPC_PY="${../tools/lt_rpc.py}"
+          export FIDO2_PY="${../tools/fido2_test.py}"
+          exec ${../tools/validate-phase5-m2.sh}
         '';
       };
 
@@ -964,6 +1049,22 @@ in
       else
         "${flash-and-validate-phase5-m1}/bin/nixtropic-flash-and-validate-phase5-m1";
     meta.description = "DFU-flash open firmware + Phase 5 M1 slot manager validation";
+  };
+
+  validate-phase5-m2 = {
+    type = "app";
+    program = "${validate-phase5-m2}/bin/nixtropic-validate-phase5-m2";
+    meta.description = "Phase 5 M2 — TROPIC01-backed FIDO2 multi-credential validation (THE MIC-DROP)";
+  };
+
+  flash-and-validate-phase5-m2 = {
+    type = "app";
+    program =
+      if firmware == null then
+        "${flash-and-validate-phase5-m2}/bin/nixtropic-flash-and-validate-phase5-m2-placeholder"
+      else
+        "${flash-and-validate-phase5-m2}/bin/nixtropic-flash-and-validate-phase5-m2";
+    meta.description = "DFU-flash open firmware + Phase 5 M2 FIDO2 mic-drop validation";
   };
 
   identify = {

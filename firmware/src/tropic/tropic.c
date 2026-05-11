@@ -275,6 +275,35 @@ int tropic_random(uint8_t *out, size_t len)
     return (r == LT_OK) ? 0 : -(int) r;
 }
 
+/* ----- Monotonic counter wrappers (Phase 5 M2) ----- */
+
+int tropic_mcounter_init(uint8_t idx, uint32_t value)
+{
+    if (idx > 15u) return -1;
+    if (tropic_l3_session_ensure() != 0) return -1;
+    lt_ret_t r = lt_mcounter_init(&s_handle,
+                                  (enum lt_mcounter_index_t) idx, value);
+    return (r == LT_OK) ? 0 : -(int) r;
+}
+
+int tropic_mcounter_update(uint8_t idx)
+{
+    if (idx > 15u) return -1;
+    if (tropic_l3_session_ensure() != 0) return -1;
+    lt_ret_t r = lt_mcounter_update(&s_handle,
+                                    (enum lt_mcounter_index_t) idx);
+    return (r == LT_OK) ? 0 : -(int) r;
+}
+
+int tropic_mcounter_get(uint8_t idx, uint32_t *out_value)
+{
+    if (idx > 15u || out_value == NULL) return -1;
+    if (tropic_l3_session_ensure() != 0) return -1;
+    lt_ret_t r = lt_mcounter_get(&s_handle,
+                                 (enum lt_mcounter_index_t) idx, out_value);
+    return (r == LT_OK) ? 0 : -(int) r;
+}
+
 /* ----- L2 sweep ----- */
 
 static int read_chip_id(void)
