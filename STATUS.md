@@ -4,6 +4,49 @@
 
 ---
 
+## 2026-05-11 — Phase 5 PASS ✅✅✅ — TROPIC01-backed FIDO2 with hardware-enforced PIN
+
+**Phase:** 5 (Wire FIDO2 to TROPIC01 — THE MIC-DROP) — **COMPLETE, all 5 milestones**
+
+**Pass criterion met (per docs/PHASE-5-PLAN.md §2):**
+Plug nixtropic dongle → Firefox → `https://webauthn.io` → register → log out → log in → success. **Confirmed live** with credential `AQS57EtxK4UI7IuVwL1YNDlW` (slot 4 on chip, version=0x01, 16 B TRNG nonce). After completion the dongle is a working open-source FIDO2 security key with hardware-backed PIN protection.
+
+**Milestone-by-milestone HW validation:**
+
+| | What | Commits | Validation |
+|---|---|---|---|
+| **M1** | TROPIC01 slot manager + R-mem layout | c0bf345 | 7/7 PASS `validate-phase5-m1` + persistence across power-cycle |
+| **M2** | Credstore on TROPIC01 (chip-side Ed25519) | 4e793f7 | 8/8 PASS `validate-phase5-m2` + real webauthn.io register/login via Firefox |
+| **M3** | ClientPIN protocol v1 (P-256 + AES-CBC + HMAC) | 936d6ca + b95ff09 | 15/15 PASS + `fido2-token -S` + Firefox UV-required PIN prompt |
+| **M4** | MAC-and-Destroy hardware PIN retry counter | bfa86f0 + b32ee94 | 15/15×2 regression + manual 9-wrong-PIN lockout test confirms HW enforcement |
+| **M5** | authenticatorReset + cpp-reviewer audit | 8b77c35 | Reset within 10 s window + 4 audit findings fixed (1 HIGH, 2 MEDIUM, 1 stale comment) |
+
+**cpp-reviewer audit (M5):** 1 HIGH (changePin retry-decrement ordering) + 2 MEDIUM (expected_auth not zeroed on success path; mcounter not reset on factory_reset) + 1 INFO (stale "256 B" comment). All fixed in commit `8b77c35`. Audit also confirmed: prior Phase 3/4 findings not regressed; two-layer M3+M4 PIN bypass protection structurally sound (no code path reaches successful PIN response while skipping `pin_md_verify`); M4 re-init-all-slots fix correctly structured.
+
+**`nix run .#lint`:** 25/25 cppcheck clean.
+
+**Build numbers at Phase 5 completion:**
+- `firmware.bin = 202 120 B / 256 KB (77%)` — +43 KB over Phase 4 stub (added P-256 ECDH, M&D scheme, slot manager).
+- `RAM = 25 576 B / 192 KB (13%)` — +728 B over Phase 4 stub.
+- Lint sweep covers `firmware/src/{cdc_protocol,fido_hid,hid_rpc,platform,tropic,usb,main.c}/` — 25 files.
+
+**AAGUID:** `6e697874726f70696300000000000002` — "nixtropic\0\0\0\0\0\0\x02". Unchanged since M2; per `docs/WEBAUTHN-NOTES.md §3` policy M4/M5 internal hardening doesn't warrant a bump.
+
+**What's a "real security key" now means:** an adversary who physically possesses the dongle and reflashes the STM32 firmware **still cannot brute-force the PIN**. After 8 wrong attempts, the TROPIC01 hardware M&D slots are consumed — the master_secret required to decrypt the PIN-verification ciphertext is unrecoverable without the correct PIN. Only `authenticatorReset` (or vendor `slots-reset`) recovers, and either wipes all credentials in the process.
+
+**Outstanding follow-ups (Phase 8 polish bucket):**
+- credProps extension (task 52) — fixes "unknown discoverability" RP label
+- Brave/Chromium WebAuthn modal greyed out on Linux — investigated, libfido2 + Firefox work
+- hidraw udev rule in `nixos/tropic.nix` — currently in `/run/udev/rules.d/` (volatile)
+- `authenticatorCredentialManagement` (task 54) — enables `ykman fido credentials list`-style enumeration
+- Force-UV device-side option (task 53) — Yubikey-style "always require PIN" regardless of RP hints
+
+**Phase 6 preview:** real user-presence button (daughter board), replaces the UP=stub-true. Touch-to-confirm signatures + Reset.
+
+**Next phase:** Phase 6 — production-grade UX (button + PIN lockout).
+
+---
+
 ## 2026-05-11 — Phase 4 PASS ✅ — FIDO2 stack (stub backend) running end-to-end
 
 **Phase:** 4 (CTAPHID + CTAP2 GetInfo/MakeCredential/GetAssertion, stub Ed25519 backend) — **COMPLETE**

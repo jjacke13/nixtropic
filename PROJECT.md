@@ -2,7 +2,7 @@
 
 > **Audience:** AI coding agents (Claude, Codex, etc.) working on this project across sessions.
 > **Status:** Living document. Update as decisions and facts evolve.
-> **Last updated:** 2026-05-11 (Phase 5 planned; Decision #7 re-amended to v3 — hand-rolled with CanoKey + SoloKeys + CTAP2 spec as triangulating references; Phase 7 OpenPGP source = CanoKey)
+> **Last updated:** 2026-05-11 (Phase 5 ✅ COMPLETE — all 5 milestones HW-validated; cpp-reviewer audit pass with 1 HIGH + 2 MEDIUMs fixed)
 > **Read order:** This document first. Reference `research/` files for technical depth as needed (don't preload them — fetch by section when relevant).
 
 ---
@@ -256,17 +256,25 @@ Each phase is **independently shippable**. Stop anywhere = useful artifact. Hard
 
 **Stop-here value:** First TS1302 firmware exposing FIDO2 (HID 0xF1D0) end-to-end with a verifiable signature flow. Protocol layer fully validated — Phase 5 only needs to swap the crypto backend.
 
-### Phase 5 — Wire FIDO2 to TROPIC01 (THE MIC-DROP)
+### Phase 5 — Wire FIDO2 to TROPIC01 (THE MIC-DROP) — ✅ COMPLETE 2026-05-11
 **Goal:** Real FIDO2 backed by real TROPIC01 keys. End-to-end working WebAuthn.
 
-**Deliverables:**
-- `MakeCredential` → fresh Ed25519 key in unused ECC slot → return public key + credentialId
-- `GetAssertion` → look up credentialId → `lt_ecc_eddsa_sign` → return assertion
-- Credential metadata (rpId hash, credentialId, slot index, counter) stored in R-mem
-- Slot allocation/eviction policy
-- ClientPIN: software AES-256-GCM (TinyCrypt) + HMAC-SHA256 (HASH peripheral + sw HMAC)
+**Outcome:** All 5 milestones HW-validated. Working open-source FIDO2 security key with hardware-backed PIN protection.
+- M1 ✅ slot manager + R-mem layout (commit `c0bf345`)
+- M2 ✅ TROPIC01-backed credstore (commit `4e793f7`) — webauthn.io register + login via Firefox confirmed
+- M3 ✅ ClientPIN protocol v1 (P-256 + AES-CBC + HMAC) (commits `936d6ca` + `b95ff09` libfido2-compat fix)
+- M4 ✅ MAC-and-Destroy hardware PIN retry counter (commits `bfa86f0` + `b32ee94` re-init-all-slots fix)
+- M5 ✅ authenticatorReset + cpp-reviewer audit (commit `8b77c35`) — 1 HIGH + 2 MEDIUMs fixed
 
-**Test:** Register on `webauthn.io` → log in successfully via real browser. Multiple sites, multiple credentials. Verify chip state matches expectations.
+**Crypto stack proven in production:**
+- Per-credential Ed25519 keypairs on TROPIC01 ECC slots (chip-side `lt_ecc_key_generate` + `lt_ecc_eddsa_sign`)
+- Shared signCount via TROPIC01 hw monotonic counter 0 (decrementing chip → increasing reported value)
+- ClientPIN: ephemeral P-256 ECDH, SHA-256(shared.X), AES-256-CBC IV=0, HMAC-SHA-256 (all `trezor_crypto`)
+- M&D retry counter: canonical Tropic Square scheme from `examples/model/mac_and_destroy/main.c` — wrong PIN consumes a slot, master_secret encrypted per-slot, recovered via M&D probe
+
+**Build at completion:** `firmware.bin = 202 KB / 256 KB (77%)`, RAM = 25.5 KB / 192 KB (13%), 25/25 lint clean.
+
+**AAGUID:** `6e697874726f70696300000000000002` — "nixtropic" + version 0x02. See `docs/WEBAUTHN-NOTES.md §3`.
 
 **Stop-here value:** Working open-source TROPIC01 FIDO2 dongle. World's first on TS1302.
 
