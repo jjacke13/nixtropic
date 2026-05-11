@@ -485,6 +485,21 @@ When you need depth, fetch these. Don't preload — they're large.
 | Whether Tropic Square has a TS1302 firmware roadmap of their own | Re-verify quarterly | `research/prior-art.md` re-check |
 | User-presence button hardware design (daughter board vs repurpose GPIO) | Phase 6 | Compare effort |
 | Whether to also ship PIV (Phase 7b) | After Phase 7 ships | Decide based on uptake |
+| credProps extension (fixes "unknown discoverability" RP label) | Phase 5 M3 OR Phase 8 polish | ~30 LOC, see `docs/WEBAUTHN-NOTES.md §5` |
+| Brave/Chromium WebAuthn modal greys out our device on Linux | Phase 8 polish | libfido2 + Firefox work; Chromium FIDO HID detection differs. See `docs/WEBAUTHN-NOTES.md §8` |
+| hidraw udev rule missing from `nixos/tropic.nix` | Phase 8 polish | systemd hwdb auto-tags us as security-device so common case works; explicit rule needed for fallback. See `docs/WEBAUTHN-NOTES.md §7` |
+
+---
+
+## 14. Reference docs in this repo
+
+| Doc | What |
+|---|---|
+| **`docs/PHASE-5-PLAN.md`** | Locked Phase 5 plan: milestones, threat model, R-mem layout, credId format, risk register |
+| **`docs/WEBAUTHN-NOTES.md`** | Field-by-field decoder for RP-side credential metadata (credId, AAGUID, transports, discoverability); AAGUID version policy; udev/browser troubleshooting |
+| `docs/RECOVERY.md` | DFU recovery procedure if firmware bricks |
+| `docs/PHASE-1-PLAN.md` | Historical Phase 1 plan (libtropic L1+L2 on STM32) |
+| `STATUS.md` | Per-phase HW-in-the-loop validation log |
 
 ---
 
