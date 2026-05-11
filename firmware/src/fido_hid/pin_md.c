@@ -218,24 +218,27 @@ int pin_md_verify(const uint8_t pin_material[PIN_MD_MATERIAL_LEN],
                         kdf_input_00, 1, t_prime);
 
     if (ct_memcmp(t_prime, stored_tag, SLOTS_MD_TAG_LEN) == 0) {
-        /* PIN correct. Re-initialize all unused slots with new u
-         * derived from recovered s', then reset next_slot pointer. */
+        /* PIN correct. Re-initialize ALL 8 slots with new_u so that
+         * slots consumed by prior wrong-PIN attempts (state K = f(v_wrong))
+         * AND the one just consumed by this verify (K = f(v_correct))
+         * are all restored to K = f(u_setup). Since s_recovered ==
+         * s_original on a correct verify, new_u == u_setup. Re-initing
+         * slots that were already in K = f(u_setup) state is idempotent
+         * (one extra M&D call, same K). */
         uint8_t new_u[32] = {0};
         uint8_t ignore[32];
+        int reinit_failed = 0;
         hmac_sha256_compute(s_prime, PIN_MD_MASTER_SECRET_LEN,
                             kdf_input_01, 1, new_u);
-        for (uint8_t i = slot_idx + 1u; i < SLOTS_MD_ROUNDS; ++i) {
+        for (uint8_t i = 0; i < SLOTS_MD_ROUNDS; ++i) {
             if (tropic_mac_and_destroy(i, new_u, ignore) != 0) {
-                /* Partial reinit — best-effort. */
-                memzero(new_u, sizeof new_u);
-                rc = -1;
-                goto cleanup;
+                reinit_failed = 1;
+                break;
             }
         }
         memzero(new_u, sizeof new_u);
-        /* Also re-init slot `slot_idx` since it was consumed by this
-         * verify call. */
-        if (tropic_mac_and_destroy(slot_idx, new_u, ignore) != 0) {
+        memzero(ignore, sizeof ignore);
+        if (reinit_failed) {
             rc = -1;
             goto cleanup;
         }
