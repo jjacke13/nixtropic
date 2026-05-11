@@ -94,4 +94,23 @@ int pin_token_is_valid(void);
 int pin_verify_pinauth(const uint8_t pinauth_16[PIN_AUTH_LEN],
                        const uint8_t client_data_hash_32[32]);
 
+/**
+ * @brief Variable-length pinUvAuthParam verifier (Phase 6 M3).
+ *
+ *        Computes LEFT(HMAC-SHA256(pinUvAuthToken, data || data_len B), 16)
+ *        and constant-time-compares against `pinauth_16`.
+ *
+ *        Used by `authenticatorCredentialManagement` (CTAP2 cmd 0x0A)
+ *        where the HMAC input is domain-separated as
+ *           [0x0a, subCommand, ...subCommandParams bytes...]
+ *        rather than the fixed 32-byte clientDataHash used by
+ *        MakeCred / GetAssertion.  H3 defense in
+ *        docs/PHASE-6-PLAN.md §3 — prevents replay of a pinAuth from one
+ *        CTAP context (MakeCred) against another (credMgmt sub-command).
+ *
+ * @return 0 on match; -1 on mismatch or no active token.
+ */
+int pin_verify_pinauth_data(const uint8_t pinauth_16[PIN_AUTH_LEN],
+                            const uint8_t *data, size_t data_len);
+
 #endif /* NIXTROPIC_FIDO_HID_PIN_H */

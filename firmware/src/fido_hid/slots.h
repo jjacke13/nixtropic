@@ -44,6 +44,12 @@
 #define SLOTS_RMEM_GLOBAL_SLOT       0u
 #define SLOTS_RMEM_PER_CRED_SIZE     256u
 #define SLOTS_RMEM_GLOBAL_SIZE       256u
+/* Phase 6 M3 — user_handle storage in per-credential slot.  Up to 64 B
+ * per WebAuthn spec (RP-supplied at MakeCred).  Stored in the 200 B
+ * reserved area of the per-cred slot at offset 56..120.  Old creds
+ * (Phase 5 schema) read all-zeros there, which decodes as
+ * user_handle_len = 0 (i.e. "no user info"). */
+#define SLOTS_USER_HANDLE_MAX        64u
 
 #define SLOTS_ALG_ED25519            8u
 
@@ -58,6 +64,11 @@ typedef struct {
     uint8_t  flags;                                     /* SLOTS_FLAG_* */
     uint8_t  rp_id_hash[SLOTS_RP_ID_HASH_LEN];
     uint8_t  cred_id_nonce[SLOTS_CRED_ID_NONCE_LEN];
+    /* Phase 6 M3 — user_handle from MakeCredential, used by
+     * authenticatorCredentialManagement enumerateCredentials response.
+     * Old (Phase 5) creds read user_handle_len=0 here. */
+    uint8_t  user_handle_len;
+    uint8_t  user_handle[SLOTS_USER_HANDLE_MAX];
 } slot_meta_t;
 
 /**
@@ -81,14 +92,18 @@ int slots_init(void);
  * touch ECC slots in M1; credstore.c will in M2). On error, R-mem state
  * is left consistent — partial allocations are rolled back.
  *
- * @param  rp_id_hash     SHA-256 of rp.id (32 B); persisted in meta.
- * @param  alg            COSE alg id (only SLOTS_ALG_ED25519 in M1).
- * @param  out_cred_id    Caller buffer; 18 B written on success.
- * @param  out_slot_idx   Caller's slot index out (0..31).
- * @return 0 on success; -1 if full; -2 on TROPIC01 error.
+ * @param  rp_id_hash       SHA-256 of rp.id (32 B); persisted in meta.
+ * @param  alg              COSE alg id (only SLOTS_ALG_ED25519 in M1).
+ * @param  user_handle      User handle from MakeCredential (optional;
+ *                          may be NULL for Phase-5-style alloc).
+ * @param  user_handle_len  0..SLOTS_USER_HANDLE_MAX.  Pass 0 to omit.
+ * @param  out_cred_id      Caller buffer; 18 B written on success.
+ * @param  out_slot_idx     Caller's slot index out (0..31).
+ * @return 0 on success; -1 if full or invalid params; -2 on TROPIC01 error.
  */
 int slots_alloc(const uint8_t rp_id_hash[SLOTS_RP_ID_HASH_LEN],
                 uint8_t alg,
+                const uint8_t *user_handle, size_t user_handle_len,
                 uint8_t out_cred_id[SLOTS_CRED_ID_LEN],
                 int *out_slot_idx);
 

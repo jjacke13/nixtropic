@@ -260,7 +260,13 @@ Sub-commands we implement:
 Sub-commands we DEFER to Phase 8:
 - 0x07 updateUserInformation (CTAP2.1 addition; nice-to-have).
 
-**pinUvAuthParam (H3 defense — domain-separated HMAC input):** every sub-command takes a `pinUvAuthParam` = `HMAC-SHA-256(pinUvAuthToken, 0x0a ‖ subCommand ‖ subCommandParams)[:16]`. The leading `0x0a` is the CTAP2 command byte for credMgmt — this binds the HMAC to *this command*, so a captured `pinAuth` from MakeCred (command `0x01`) cannot be replayed against credMgmt. Phase 5 M3's `pin_verify_pinauth(token, msg)` helper is **NOT directly reused** in M3 because it doesn't enforce a domain tag in the input; instead `credmgmt_verify_pin_auth(...)` constructs the domain-separated buffer `[0x0a, subCmd, params...]` and passes it through. Audit checkpoint at M3: confirm no caller of `pin_verify_pinauth` accepts attacker-controlled bytes without a command prefix; if any exists, add the prefix.
+**pinUvAuthParam — spec-compliant per CTAP2.1 §6.8.2 step 2:**
+`HMAC-SHA-256(pinUvAuthToken, subCommand ‖ subCommandParams)[:16]`.
+The sub-command byte alone is the domain tag — there is **no** outer `0x0a` prefix.  Cross-command replay defense (e.g. captured pinAuth from MakeCred replayed against credMgmt) comes from MakeCred's HMAC input being a 32-byte `clientDataHash` vs. credMgmt's being `subCmd || params` — different byte strings, different HMAC outputs.
+
+**Amended 2026-05-11** — the original plan called for `0x0a || subCmd || params` per a cpp-reviewer recommendation (H3 finding).  The cpp-reviewer suggestion was over-engineering; the actual CTAP2.1 spec text is just `subCmd || params`.  libfido2 strictly follows the spec, so the 0x0a prefix broke `fido2-token -L -r` with `PIN_AUTH_INVALID`.  Fixed in M3 implementation.  Cpp-reviewer recommendations must be cross-checked against the canonical spec for security-relevant protocol code.
+
+`credmgmt_verify_pin_auth(...)` (in `credmgmt.c`) constructs the buffer `[subCmd, params...]` and passes it through `pin_verify_pinauth_data` (variable-length variant added in M3).
 
 **RP enumeration:** walking the credstore looking for unique rpIdHash values. With 32 slots max and 32 B rpIdHash each, this is a 32-pass O(n²) scan. Fine.
 

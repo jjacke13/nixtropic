@@ -20,6 +20,7 @@
 #include "credstore.h"
 #include "slots.h"
 #include "user_presence.h"
+#include "credmgmt.h"
 
 #include <stdint.h>
 #include <stddef.h>
@@ -98,9 +99,9 @@ static int build_get_info(uint8_t *resp, size_t resp_max)
 
     /* key 4 → options.  CTAP2.1 canonical text-key order (length-then-lex
      * on encoded bytes): rk (2), up (2), plat (4), alwaysUv (8),
-     * clientPin (9). */
+     * credMgmt (8), clientPin (9), credentialMgmtPreview (21). */
     cbor_write_uint(&w, 4);
-    cbor_write_map_header(&w, 5);
+    cbor_write_map_header(&w, 7);
 
     cbor_write_text(&w, "rk");
     cbor_write_bool(&w, true);           /* Phase 5 M2: resident keys supported (TROPIC01 R-mem) */
@@ -113,8 +114,12 @@ static int build_get_info(uint8_t *resp, size_t resp_max)
                                          /* Phase 6 M2: Force-UV — when true, signing ops require
                                           * pinAuth regardless of RP's `userVerification` hint.
                                           * Auto-enabled on first setPIN; togglable via lt-rpc. */
+    cbor_write_text(&w, "credMgmt");
+    cbor_write_bool(&w, true);           /* Phase 6 M3: authenticatorCredentialManagement (cmd 0x0A) */
     cbor_write_text(&w, "clientPin");
     cbor_write_bool(&w, pin_is_set());   /* Phase 5 M3: PIN protocol supported; "true" = PIN currently set */
+    cbor_write_text(&w, "credentialMgmtPreview");
+    cbor_write_bool(&w, true);           /* CTAP2.0 alias for credMgmt; libfido2 checks either. */
 
     /* key 5 → maxMsgSize.
      * Cap at 1024 to match FIDO_HID_MAX_PAYLOAD / 2 — half the buffer
@@ -172,6 +177,13 @@ int fido_hid_cbor_dispatch(const uint8_t *req, size_t req_len,
 
     uint8_t sub = req[0];
 
+    /* Phase 6 M3: any non-credMgmt CBOR command resets the
+     * credentialManagement iterator (CTAP2.1 §6.8 "iterator state
+     * expires on any other authenticator operation"). */
+    if (sub != CTAP2_CMD_CREDENTIAL_MGMT) {
+        credmgmt_reset_iterator();
+    }
+
     switch (sub) {
     case CTAP2_CMD_GET_INFO: {
         int n = build_get_info(&resp[1], resp_max - 1u);
@@ -228,6 +240,9 @@ int fido_hid_cbor_dispatch(const uint8_t *req, size_t req_len,
         resp[0] = CTAP2_OK;
         return 1;
     }
+    case CTAP2_CMD_CREDENTIAL_MGMT:
+        return credmgmt_handle_cbor(&req[1], req_len - 1u, resp, resp_max);
+
     case CTAP2_CMD_GET_NEXT_ASSERTION:
         /* GetNextAssertion iterates multiple matches per allowList.
          * Our single-credential-per-allowList-entry flow doesn't need

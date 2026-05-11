@@ -23,6 +23,7 @@
 #define CTAP2_CMD_CLIENT_PIN        0x06u
 #define CTAP2_CMD_RESET             0x07u
 #define CTAP2_CMD_GET_NEXT_ASSERTION 0x08u
+#define CTAP2_CMD_CREDENTIAL_MGMT   0x0Au   /* CTAP2.1 §6.8 (Phase 6 M3) */
 
 /* CTAP2 status codes (CTAP §6.4). */
 #define CTAP2_OK                          0x00u
@@ -45,6 +46,7 @@
 #define CTAP2_ERR_PIN_NOT_SET             0x35u  /* operation needs PIN but none set */
 #define CTAP2_ERR_PIN_REQUIRED            0x36u  /* MakeCred/GetAssertion w/o pinAuth */
 #define CTAP2_ERR_PIN_POLICY_VIOLATION    0x37u  /* PIN length / content rejected */
+#define CTAP2_ERR_REQUEST_TOO_LARGE       0x39u
 #define CTAP2_ERR_OTHER                   0x7Fu
 
 /* Cred handlers — defined in ctap2_creds.c, called from ctap2.c

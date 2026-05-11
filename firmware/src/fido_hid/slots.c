@@ -57,6 +57,10 @@
 #define CRED_FLAGS_OFF            6
 #define CRED_RP_HASH_OFF          8
 #define CRED_NONCE_OFF            40
+/* Phase 6 M3 — user_handle in the previously-reserved area.  Old creds
+ * (Phase 5) have zero-init here, decoding as user_handle_len = 0. */
+#define CRED_USER_HANDLE_LEN_OFF 56
+#define CRED_USER_HANDLE_OFF     57
 
 /* Magic byte values.
  *
@@ -245,7 +249,8 @@ static int write_cred(int slot_idx,
                       uint8_t alg,
                       uint8_t flags,
                       const uint8_t rp_id_hash[SLOTS_RP_ID_HASH_LEN],
-                      const uint8_t cred_id_nonce[SLOTS_CRED_ID_NONCE_LEN])
+                      const uint8_t cred_id_nonce[SLOTS_CRED_ID_NONCE_LEN],
+                      const uint8_t *user_handle, size_t user_handle_len)
 {
     uint8_t buf[SLOTS_CRED_PAYLOAD_LEN];
     memset(buf, 0, sizeof buf);
@@ -256,6 +261,15 @@ static int write_cred(int slot_idx,
     buf[CRED_FLAGS_OFF]  = flags;
     memcpy(&buf[CRED_RP_HASH_OFF], rp_id_hash, SLOTS_RP_ID_HASH_LEN);
     memcpy(&buf[CRED_NONCE_OFF],   cred_id_nonce, SLOTS_CRED_ID_NONCE_LEN);
+
+    /* Phase 6 M3 — optional user_handle (capped at SLOTS_USER_HANDLE_MAX). */
+    if (user_handle != NULL && user_handle_len > 0u) {
+        size_t cap = (user_handle_len > SLOTS_USER_HANDLE_MAX)
+                        ? SLOTS_USER_HANDLE_MAX
+                        : user_handle_len;
+        buf[CRED_USER_HANDLE_LEN_OFF] = (uint8_t) cap;
+        memcpy(&buf[CRED_USER_HANDLE_OFF], user_handle, cap);
+    }
 
     uint16_t rs = SLOTS_RMEM_SLOT_FOR(slot_idx);
     (void) tropic_rmem_erase(rs);
@@ -281,6 +295,21 @@ static int read_cred(int slot_idx, slot_meta_t *out)
         out->flags = buf[CRED_FLAGS_OFF];
         memcpy(out->rp_id_hash,    &buf[CRED_RP_HASH_OFF], SLOTS_RP_ID_HASH_LEN);
         memcpy(out->cred_id_nonce, &buf[CRED_NONCE_OFF],   SLOTS_CRED_ID_NONCE_LEN);
+
+        /* Phase 6 M3 — user_handle if present and read length covers it.
+         * Old (Phase 5) creds read 0 here, which is the sentinel "no
+         * user info." */
+        out->user_handle_len = 0;
+        memset(out->user_handle, 0, sizeof out->user_handle);
+        if (got > CRED_USER_HANDLE_LEN_OFF) {
+            uint8_t len = buf[CRED_USER_HANDLE_LEN_OFF];
+            if (len > 0u && len <= SLOTS_USER_HANDLE_MAX
+                && got >= (size_t)(CRED_USER_HANDLE_OFF + len)) {
+                out->user_handle_len = len;
+                memcpy(out->user_handle,
+                       &buf[CRED_USER_HANDLE_OFF], len);
+            }
+        }
     }
     return 0;
 }
@@ -375,10 +404,14 @@ int slots_init(void)
 
 int slots_alloc(const uint8_t rp_id_hash[SLOTS_RP_ID_HASH_LEN],
                 uint8_t alg,
+                const uint8_t *user_handle, size_t user_handle_len,
                 uint8_t out_cred_id[SLOTS_CRED_ID_LEN],
                 int *out_slot_idx)
 {
     if (rp_id_hash == NULL || out_cred_id == NULL || out_slot_idx == NULL) {
+        return -1;
+    }
+    if (user_handle_len > SLOTS_USER_HANDLE_MAX) {
         return -1;
     }
     if (!s_initted) {
@@ -408,7 +441,8 @@ int slots_alloc(const uint8_t rp_id_hash[SLOTS_RP_ID_HASH_LEN],
      * This makes a power-loss-mid-alloc safe: the bitmap bit stays 0,
      * so the orphan slot is invisible to lookup and will be overwritten
      * by the next alloc. */
-    if (write_cred(idx, alg, SLOTS_FLAG_RESIDENT, rp_id_hash, nonce) != 0) {
+    if (write_cred(idx, alg, SLOTS_FLAG_RESIDENT, rp_id_hash, nonce,
+                   user_handle, user_handle_len) != 0) {
         return -2;
     }
 

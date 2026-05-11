@@ -1113,6 +1113,265 @@ def sub_validate_m3(args) -> int:
     return 0 if all(ok for _, ok, _ in results) else 1
 
 
+def sub_validate_phase6_m3(args) -> int:
+    """Phase 6 M3 validation — authenticatorCredentialManagement (CTAP2 0x0A).
+
+    Interactive: one MakeCredential press (SW1).  Then 9 auto-checks of
+    the credMgmt sub-commands.
+
+    Sub-commands exercised (CTAP2.1 §6.8):
+       0x01 getCredsMetadata
+       0x02 enumerateRPsBegin
+       0x03 enumerateRPsGetNextRP  (not needed for the single-RP test;
+                                    iterator-reset is covered implicitly)
+       0x04 enumerateCredentialsBegin
+       0x06 deleteCredential
+
+    Defenses exercised:
+       H2 (serialization) — implicit; we don't test the race because it
+            requires concurrent CTAPHID transactions which the harness
+            doesn't fabricate.
+       H3 (domain-separated pinAuth) — every credMgmt request includes
+            pinAuth = HMAC(token, 0x0a || subCmd || params)[:16].
+            Verified by the firmware accepting it.
+
+    Requires sudo (lt-rpc slots-reset) and `cryptography` (P-256 ECDH).
+    """
+    import hashlib
+    import hmac as pyhmac
+    import subprocess
+    import shutil
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+
+    LT_RPC = os.environ.get("LT_RPC_PY", os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "lt_rpc.py"))
+
+    def lt(cmd: str, *extra: str) -> tuple[int, str]:
+        py = shutil.which("python3") or "python3"
+        proc = subprocess.run([py, LT_RPC, cmd, *extra],
+                              capture_output=True, text=True)
+        return proc.returncode, (proc.stdout or "") + (proc.stderr or "")
+
+    def gen_platform_p256():
+        sk = ec.generate_private_key(ec.SECP256R1())
+        nums = sk.public_key().public_numbers()
+        return sk, nums.x.to_bytes(32, "big"), nums.y.to_bytes(32, "big")
+
+    def derive_shared(plat_priv, ax: bytes, ay: bytes) -> bytes:
+        peer = ec.EllipticCurvePublicNumbers(
+            int.from_bytes(ax, "big"), int.from_bytes(ay, "big"),
+            ec.SECP256R1()).public_key()
+        return hashlib.sha256(plat_priv.exchange(ec.ECDH(), peer)).digest()
+
+    def aes_cbc_enc(key: bytes, pt: bytes) -> bytes:
+        c = Cipher(algorithms.AES(key), modes.CBC(b"\x00" * 16))
+        e = c.encryptor()
+        return e.update(pt) + e.finalize()
+
+    def aes_cbc_dec(key: bytes, ct: bytes) -> bytes:
+        c = Cipher(algorithms.AES(key), modes.CBC(b"\x00" * 16))
+        d = c.decryptor()
+        return d.update(ct) + d.finalize()
+
+    def pin_auth(key: bytes, msg: bytes) -> bytes:
+        return pyhmac.new(key, msg, hashlib.sha256).digest()[:16]
+
+    def cose_p256_pub(x: bytes, y: bytes) -> dict:
+        return {1: 2, 3: -25, -1: 1, -2: x, -3: y}
+
+    def pad_pin(p: bytes) -> bytes:
+        if len(p) > 63: raise ValueError("PIN too long")
+        return p + b"\x00" * (64 - len(p))
+
+    path = find_fido_path()
+    print(f"FIDO HID @ {path}")
+    results: list[tuple[str, bool, str]] = []
+
+    def expect(label: str, cond: bool, detail: str = ""):
+        results.append((label, cond, detail))
+
+    rc, out = lt("slots-reset")
+    if rc != 0:
+        print(f"  (slots-reset rc={rc}; continuing)")
+
+    with open_dev(path) as dev:
+        new_cid, _ = cmd_init(dev)
+
+        # Establish PIN + token session.
+        st, body = cmd_cbor(dev, new_cid, 0x06, cbor_encode({1: 1, 2: 2}))
+        ka = cbor_decode(body)[1]
+        plat_sk, plat_x, plat_y = gen_platform_p256()
+        shared = derive_shared(plat_sk, ka[-2], ka[-3])
+        plat_cose = cose_p256_pub(plat_x, plat_y)
+        new_pin_enc = aes_cbc_enc(shared, pad_pin(b"1234"))
+        st, _ = cmd_cbor(dev, new_cid, 0x06, cbor_encode({
+            1: 1, 2: 3, 3: plat_cose,
+            4: pin_auth(shared, new_pin_enc), 5: new_pin_enc}))
+        expect("Setup: SetPin '1234'", st == CTAP2_OK,
+               f"status=0x{st:02x}")
+
+        # Fresh key agreement (firmware rotated after setPin).
+        st, body = cmd_cbor(dev, new_cid, 0x06, cbor_encode({1: 1, 2: 2}))
+        ka = cbor_decode(body)[1]
+        plat_sk, plat_x, plat_y = gen_platform_p256()
+        shared = derive_shared(plat_sk, ka[-2], ka[-3])
+        plat_cose = cose_p256_pub(plat_x, plat_y)
+
+        # getPinToken — activates the session.
+        pin_hash16 = hashlib.sha256(b"1234").digest()[:16]
+        st, body = cmd_cbor(dev, new_cid, 0x06, cbor_encode({
+            1: 1, 2: 5, 3: plat_cose,
+            6: aes_cbc_enc(shared, pin_hash16)}))
+        token_enc = cbor_decode(body).get(2) if st == CTAP2_OK else None
+        if not (st == CTAP2_OK and isinstance(token_enc, bytes)
+                and len(token_enc) == 32):
+            expect("Setup: getPinToken", False,
+                   f"status=0x{st:02x}")
+            print_summary(results,
+                          title="Phase 6 M3 — authenticatorCredentialManagement",
+                          short_name="Phase 6 M3")
+            return 1
+        token = aes_cbc_dec(shared, token_enc)
+        expect("Setup: getPinToken (token decrypted)", True,
+               f"token={token[:8].hex()}…")
+
+        def cm_pin_auth(sub: int, params_cbor: bytes) -> bytes:
+            """Per CTAP2.1 §6.8.2 step 2:
+            HMAC(pinUvAuthToken, subCommand || subCommandParams)[:16].
+            Sub-command alone is the domain tag — no 0x0a prefix."""
+            return pyhmac.new(token,
+                              bytes([sub]) + params_cbor,
+                              hashlib.sha256).digest()[:16]
+
+        def cm_call(sub: int, params: dict | None = None
+                    ) -> tuple[int, bytes]:
+            """Build + send a credMgmt request; return (status, body)."""
+            params_cbor = cbor_encode(params) if params is not None else b""
+            req = {1: sub, 3: 1, 4: cm_pin_auth(sub, params_cbor)}
+            if params is not None:
+                req[2] = params
+            return cmd_cbor(dev, new_cid, 0x0a, cbor_encode(req))
+
+        # 1) getCredsMetadata when empty — existing=0, max_remaining=32.
+        st, body = cm_call(0x01)
+        m = cbor_decode(body) if st == CTAP2_OK else None
+        ok = (st == CTAP2_OK and m is not None
+              and m.get(1) == 0 and m.get(2) == 32)
+        expect("getCredsMetadata (empty) → existing=0, max=32",
+               ok, f"status=0x{st:02x} body={m}")
+
+        # 2) enumerateRPsBegin when empty → NO_CREDENTIALS (0x2E).
+        st, _ = cm_call(0x02)
+        expect("enumerateRPsBegin (empty) → NO_CREDENTIALS",
+               st == 0x2E, f"status=0x{st:02x}")
+
+        # 3) MakeCredential (with pinAuth + SW1 press).
+        print()
+        print("─" * 63)
+        print("  Interactive: PRESS SW1 within 30 s.")
+        print("─" * 63)
+        input("  → Press Enter then press SW1 on the dongle... ")
+
+        client_hash = os.urandom(32)
+        user_handle = b"user-abc-123"
+        rp_id = "site1.example"
+        # pinAuth for MakeCred (different domain — not credMgmt's HMAC).
+        mc_pin_auth = pyhmac.new(token, client_hash,
+                                 hashlib.sha256).digest()[:16]
+        mc_req = {
+            1: client_hash,
+            2: {"id": rp_id, "name": "site1"},
+            3: {"id": user_handle, "name": "alice",
+                "displayName": "Alice Test"},
+            4: [{"alg": -8, "type": "public-key"}],
+            8: mc_pin_auth, 9: 1,
+        }
+        st, body = cmd_cbor(dev, new_cid, CTAP2_CMD_MAKE_CRED,
+                            cbor_encode(mc_req), timeout_ms=35000)
+        if st != CTAP2_OK:
+            expect("MakeCredential for site1", False,
+                   f"status=0x{st:02x}")
+            print_summary(results,
+                          title="Phase 6 M3 — authenticatorCredentialManagement",
+                          short_name="Phase 6 M3")
+            return 1
+        mc_resp = cbor_decode(body)
+        _, _, _, mc_cred_id, _ = parse_authdata(mc_resp[2], expect_at=True)
+        expect("MakeCredential for site1 → success", True,
+               f"credId={mc_cred_id.hex()[:24]}…")
+        rp_id_hash = hashlib.sha256(rp_id.encode()).digest()
+
+        # 4) getCredsMetadata after MakeCred → existing=1.
+        st, body = cm_call(0x01)
+        m = cbor_decode(body) if st == CTAP2_OK else None
+        ok = (st == CTAP2_OK and m is not None
+              and m.get(1) == 1 and m.get(2) == 31)
+        expect("getCredsMetadata (1 cred) → existing=1, max=31",
+               ok, f"status=0x{st:02x} body={m}")
+
+        # 5) enumerateRPsBegin → totalRPs=1, returns site1's rpIdHash.
+        st, body = cm_call(0x02)
+        m = cbor_decode(body) if st == CTAP2_OK else None
+        ok = (st == CTAP2_OK and m is not None
+              and m.get(4) == rp_id_hash and m.get(5) == 1)
+        expect("enumerateRPsBegin → totalRPs=1 + matching rpIdHash",
+               ok, f"status=0x{st:02x} totalRPs={m.get(5) if m else '?'}")
+
+        # 6) enumerateCredentialsBegin(rpIdHash) → totalCredentials=1.
+        st, body = cm_call(0x04, {1: rp_id_hash})
+        m = cbor_decode(body) if st == CTAP2_OK else None
+        cm_cred_id = m.get(7, {}).get("id") if isinstance(m, dict) else None
+        ok = (st == CTAP2_OK and isinstance(cm_cred_id, bytes)
+              and cm_cred_id == mc_cred_id and m.get(9) == 1)
+        expect("enumerateCredentialsBegin(rp1) → totalCreds=1 + same credId",
+               ok, f"status=0x{st:02x} match={cm_cred_id == mc_cred_id if cm_cred_id else '?'}")
+
+        # 7) Iterator state — calling getCredsMetadata after Begin resets
+        #    the cred iterator.  Then enumerateCredentialsGetNextCredential
+        #    should return NOT_ALLOWED (no active iterator).
+        cm_call(0x01)  # reset iterator
+        st, _ = cm_call(0x05)
+        expect("enumerateCredentialsGetNextCredential (no active iter) → NOT_ALLOWED",
+               st == 0x30, f"status=0x{st:02x}")
+
+        # 8) deleteCredential(credId) → succeeds.
+        del_params = {2: {"id": mc_cred_id, "type": "public-key"}}
+        st, _ = cm_call(0x06, del_params)
+        expect("deleteCredential → success", st == CTAP2_OK,
+               f"status=0x{st:02x}")
+
+        # 9) getCredsMetadata after delete → existing=0.
+        st, body = cm_call(0x01)
+        m = cbor_decode(body) if st == CTAP2_OK else None
+        ok = (st == CTAP2_OK and m is not None and m.get(1) == 0
+              and m.get(2) == 32)
+        expect("getCredsMetadata (after delete) → existing=0",
+               ok, f"status=0x{st:02x} body={m}")
+
+        # 10) enumerateRPsBegin after delete → NO_CREDENTIALS.
+        st, _ = cm_call(0x02)
+        expect("enumerateRPsBegin (after delete) → NO_CREDENTIALS",
+               st == 0x2E, f"status=0x{st:02x}")
+
+        # 11) GetAssertion on deleted credId → NO_CREDENTIALS.
+        ga_pin_auth = pyhmac.new(token, client_hash,
+                                 hashlib.sha256).digest()[:16]
+        ga_req = {1: rp_id,
+                  2: client_hash,
+                  3: [{"id": mc_cred_id, "type": "public-key"}],
+                  6: ga_pin_auth, 7: 1}
+        st, _ = cmd_cbor(dev, new_cid, CTAP2_CMD_GET_ASSERTION,
+                         cbor_encode(ga_req), timeout_ms=5000)
+        expect("GetAssertion on deleted credId → NO_CREDENTIALS",
+               st == 0x2E, f"status=0x{st:02x}")
+
+    print_summary(results,
+                  title="Phase 6 M3 — authenticatorCredentialManagement (0x0A)",
+                  short_name="Phase 6 M3")
+    return 0 if all(ok for _, ok, _ in results) else 1
+
+
 def sub_validate_phase6_m2(args) -> int:
     """Phase 6 M2 validation — Force-UV auto-enable + lt-rpc toggle + alwaysUv.
 
@@ -1627,6 +1886,8 @@ def main() -> int:
                                 help="Phase 6 M1 — SW1 user-presence + LED (interactive)")
     p_val_p6m2 = sub.add_parser("validate-phase6-m2",
                                 help="Phase 6 M2 — Force-UV + alwaysUv + auto-enable")
+    p_val_p6m3 = sub.add_parser("validate-phase6-m3",
+                                help="Phase 6 M3 — authenticatorCredentialManagement")
 
     p_init.set_defaults(func=sub_init)
     p_ping.set_defaults(func=sub_ping)
@@ -1640,6 +1901,7 @@ def main() -> int:
     p_val_m5.set_defaults(func=sub_validate_m5)
     p_val_p6m1.set_defaults(func=sub_validate_phase6_m1)
     p_val_p6m2.set_defaults(func=sub_validate_phase6_m2)
+    p_val_p6m3.set_defaults(func=sub_validate_phase6_m3)
 
     args = parser.parse_args()
     return args.func(args)

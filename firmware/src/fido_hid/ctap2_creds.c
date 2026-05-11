@@ -119,7 +119,9 @@ static int parse_make_cred(const uint8_t *req, size_t req_len,
                            const uint8_t **out_rp_id, size_t *out_rp_id_len,
                            int *out_alg,
                            int *out_has_pin_auth, uint8_t out_pin_auth[16],
-                           int *out_pin_protocol)
+                           int *out_pin_protocol,
+                           const uint8_t **out_user_handle,
+                           size_t *out_user_handle_len)
 {
     int alg_found = 0;
     int alg_pref  = 0;        /* selected COSE alg id */
@@ -127,6 +129,8 @@ static int parse_make_cred(const uint8_t *req, size_t req_len,
     int got_rpid  = 0;
     *out_has_pin_auth = 0;
     *out_pin_protocol = 0;
+    *out_user_handle     = NULL;
+    *out_user_handle_len = 0;
 
     cbor_reader_t r;
     cbor_reader_init(&r, req, req_len);
@@ -168,6 +172,31 @@ static int parse_make_cred(const uint8_t *req, size_t req_len,
                         return -(int) CTAP2_ERR_INVALID_CBOR;
                     }
                     got_rpid = 1;
+                } else {
+                    if (cbor_reader_skip(&r) < 0) {
+                        return -(int) CTAP2_ERR_INVALID_CBOR;
+                    }
+                }
+            }
+        } else if (key == 3u) {
+            /* user = { 1:id (bytes), 2:name (text)?, 3:displayName?, 4:icon? }.
+             * We persist only id (= user_handle) for Phase 6 M3 (used by
+             * authenticatorCredentialManagement enumerateCredentials).
+             * Name + displayName deferred to Phase 8. */
+            size_t mc;
+            if (cbor_reader_read_map_header(&r, &mc) < 0) {
+                return -(int) CTAP2_ERR_INVALID_CBOR;
+            }
+            for (size_t j = 0; j < mc; ++j) {
+                const uint8_t *kp; size_t kL;
+                if (cbor_reader_read_text(&r, &kp, &kL) < 0) {
+                    return -(int) CTAP2_ERR_INVALID_CBOR;
+                }
+                if (kL == 2u && memcmp(kp, "id", 2) == 0) {
+                    if (cbor_reader_read_bytes(&r, out_user_handle,
+                                               out_user_handle_len) < 0) {
+                        return -(int) CTAP2_ERR_INVALID_CBOR;
+                    }
                 } else {
                     if (cbor_reader_skip(&r) < 0) {
                         return -(int) CTAP2_ERR_INVALID_CBOR;
@@ -413,10 +442,13 @@ int ctap2_make_credential(const uint8_t *req, size_t req_len,
     int     has_pin_auth = 0;
     uint8_t pin_auth_in[16] = {0};
     int     pin_protocol = 0;
+    const uint8_t *user_handle_p = NULL;
+    size_t  user_handle_len = 0;
 
     int err = parse_make_cred(req, req_len, client_hash,
                               &rp_id_p, &rp_id_len, &alg,
-                              &has_pin_auth, pin_auth_in, &pin_protocol);
+                              &has_pin_auth, pin_auth_in, &pin_protocol,
+                              &user_handle_p, &user_handle_len);
     if (err < 0) {
         resp[0] = (uint8_t)(-err);
         return 1;
@@ -446,6 +478,16 @@ int ctap2_make_credential(const uint8_t *req, size_t req_len,
         resp[0] = CTAP2_ERR_PIN_REQUIRED; return 1;
     }
 
+    /* Phase 6 M3 (H2 defense): refuse if credstore is mid-mutation
+     * (concurrent credentialManagement deleteCredential or another
+     * MakeCred on a different CID).  CTAPHID layer typically serialises
+     * but a tud_task pump during this window could deliver a competing
+     * frame; bounce it cleanly rather than racing on the bitmap. */
+    if (credstore_is_mutating()) {
+        resp[0] = CTAP2_ERR_NOT_ALLOWED;
+        return 1;
+    }
+
     /* Phase 6 M1: real user-presence — replaces Phase 5 stub-true.
      * Placed BEFORE credstore_make so a refused/timed-out prompt does
      * not waste an ECC slot.  H5 sign-canary compare — `up != UP_OK`
@@ -465,7 +507,9 @@ int ctap2_make_credential(const uint8_t *req, size_t req_len,
     uint8_t pubkey[CREDSTORE_PUBKEY_LEN];
     uint8_t cred_id[CREDSTORE_CRED_ID_LEN];
     credstore_handle_t handle = CREDSTORE_INVALID_HANDLE;
-    int mk_rc = credstore_make(rp_id_hash, 8u, pubkey, cred_id, &handle);
+    int mk_rc = credstore_make(rp_id_hash, 8u,
+                               user_handle_p, user_handle_len,
+                               pubkey, cred_id, &handle);
     if (mk_rc == -1) {
         /* slots_alloc returned full */
         resp[0] = CTAP2_ERR_KEY_STORE_FULL;
@@ -582,6 +626,13 @@ int ctap2_get_assertion(const uint8_t *req, size_t req_len,
          * discovery (no allowList → "find any credential matching
          * rpId"); that's M3+. For now: NO_CREDENTIALS. */
         resp[0] = CTAP2_ERR_NO_CREDENTIALS;
+        return 1;
+    }
+
+    /* Phase 6 M3 (H2 defense): refuse if credstore is mid-mutation.
+     * Same rationale as MakeCred. */
+    if (credstore_is_mutating()) {
+        resp[0] = CTAP2_ERR_NOT_ALLOWED;
         return 1;
     }
 

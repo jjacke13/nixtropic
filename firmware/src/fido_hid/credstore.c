@@ -37,6 +37,12 @@
 
 static int s_initted;
 
+/* Phase 6 M3 (H2 defense): true while credstore_make / credstore_erase_slot
+ * is mid-flight.  MakeCred / GetAssertion check this and return BUSY to
+ * the host — keeps the (slots → ECC → R-mem) write sequence atomic from
+ * the FIDO surface's POV. */
+static volatile int s_credstore_mutating;
+
 /* ----- Init ----- */
 
 int credstore_init(void)
@@ -77,6 +83,7 @@ int credstore_init(void)
 
 int credstore_make(const uint8_t rp_id_hash[SLOTS_RP_ID_HASH_LEN],
                    uint8_t alg,
+                   const uint8_t *user_handle, size_t user_handle_len,
                    uint8_t out_pubkey[CREDSTORE_PUBKEY_LEN],
                    uint8_t out_cred_id[CREDSTORE_CRED_ID_LEN],
                    credstore_handle_t *out_handle)
@@ -93,9 +100,13 @@ int credstore_make(const uint8_t rp_id_hash[SLOTS_RP_ID_HASH_LEN],
         if (rc != 0) return rc;
     }
 
+    s_credstore_mutating = 1;
+
     int slot_idx = -1;
     uint8_t cred_id[CREDSTORE_CRED_ID_LEN];
-    if (slots_alloc(rp_id_hash, alg, cred_id, &slot_idx) != 0) {
+    if (slots_alloc(rp_id_hash, alg, user_handle, user_handle_len,
+                    cred_id, &slot_idx) != 0) {
+        s_credstore_mutating = 0;
         return -1;
     }
 
@@ -104,10 +115,12 @@ int credstore_make(const uint8_t rp_id_hash[SLOTS_RP_ID_HASH_LEN],
      * stays clean. */
     if (tropic_ecc_erase((uint8_t) slot_idx) != 0) {
         (void) slots_erase(slot_idx);
+        s_credstore_mutating = 0;
         return -2;
     }
     if (tropic_ecc_generate((uint8_t) slot_idx, CREDSTORE_CURVE_ED25519) != 0) {
         (void) slots_erase(slot_idx);
+        s_credstore_mutating = 0;
         return -2;
     }
     int got = tropic_ecc_pubkey_read((uint8_t) slot_idx,
@@ -115,12 +128,43 @@ int credstore_make(const uint8_t rp_id_hash[SLOTS_RP_ID_HASH_LEN],
     if (got != (int) CREDSTORE_PUBKEY_LEN) {
         (void) tropic_ecc_erase((uint8_t) slot_idx);
         (void) slots_erase(slot_idx);
+        s_credstore_mutating = 0;
         return -2;
     }
 
     memcpy(out_cred_id, cred_id, CREDSTORE_CRED_ID_LEN);
     *out_handle = (credstore_handle_t) slot_idx;
+    s_credstore_mutating = 0;
     return 0;
+}
+
+int credstore_get_pubkey(int slot_idx, uint8_t out_pubkey[CREDSTORE_PUBKEY_LEN])
+{
+    if (!out_pubkey || slot_idx < 0 || slot_idx >= (int) SLOTS_MAX) {
+        return -1;
+    }
+    int got = tropic_ecc_pubkey_read((uint8_t) slot_idx,
+                                     out_pubkey, CREDSTORE_PUBKEY_LEN);
+    return (got == (int) CREDSTORE_PUBKEY_LEN) ? 0 : -1;
+}
+
+int credstore_erase_slot(int slot_idx)
+{
+    if (slot_idx < 0 || slot_idx >= (int) SLOTS_MAX) {
+        return -1;
+    }
+    s_credstore_mutating = 1;
+    /* ECC slot first (destroys the chip-side private key), then R-mem
+     * metadata + bitmap clear (via slots_erase). */
+    (void) tropic_ecc_erase((uint8_t) slot_idx);
+    int rc = slots_erase(slot_idx);
+    s_credstore_mutating = 0;
+    return (rc == 0) ? 0 : -2;
+}
+
+int credstore_is_mutating(void)
+{
+    return s_credstore_mutating ? 1 : 0;
 }
 
 /* ----- GetAssertion ----- */

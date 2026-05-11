@@ -82,6 +82,7 @@ int credstore_init(void);
  */
 int credstore_make(const uint8_t rp_id_hash[SLOTS_RP_ID_HASH_LEN],
                    uint8_t alg,
+                   const uint8_t *user_handle, size_t user_handle_len,
                    uint8_t out_pubkey[CREDSTORE_PUBKEY_LEN],
                    uint8_t out_cred_id[CREDSTORE_CRED_ID_LEN],
                    credstore_handle_t *out_handle);
@@ -127,6 +128,29 @@ uint32_t credstore_peek_signcount(void);
  *        higher next time.
  */
 void credstore_commit_signcount(void);
+
+/* ===== Phase 6 M3: read + delete helpers for credentialManagement ===== */
+
+/**
+ * @brief Read public key for the credential in the given slot.
+ * @return 0 on success; -1 on chip error.
+ */
+int credstore_get_pubkey(int slot_idx,
+                         uint8_t out_pubkey[CREDSTORE_PUBKEY_LEN]);
+
+/**
+ * @brief Erase a single credential — ECC slot + R-mem slot, clear bitmap.
+ *        Uses the mutation-busy lock (see credstore_is_mutating).
+ * @return 0 on success; -1 on out-of-range; -2 on chip error.
+ */
+int credstore_erase_slot(int slot_idx);
+
+/**
+ * @brief True while a credstore-mutating operation is in flight (currently
+ *        only credstore_make and credstore_erase_slot raise it).  Used by
+ *        MakeCred/GetAssertion to refuse concurrent activity per H2.
+ */
+int credstore_is_mutating(void);
 
 /**
  * @brief Factory reset: wipe ALL credentials.

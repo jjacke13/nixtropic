@@ -775,6 +775,18 @@ int pin_verify_pinauth(const uint8_t pinauth_16[PIN_AUTH_LEN],
     return (rc == 0) ? 0 : -1;
 }
 
+int pin_verify_pinauth_data(const uint8_t pinauth_16[PIN_AUTH_LEN],
+                            const uint8_t *data, size_t data_len)
+{
+    if (!s_pin_token_valid) return -1;
+    if (!data && data_len > 0) return -1;
+    uint8_t expected[16];
+    pin_auth_compute(s_pin_token, data, data_len, expected);
+    int rc = ct_memcmp(expected, pinauth_16, 16);
+    memzero(expected, sizeof expected);
+    return (rc == 0) ? 0 : -1;
+}
+
 int pin_handle_cbor(const uint8_t *req, size_t req_len,
                     uint8_t *resp, size_t resp_max)
 {

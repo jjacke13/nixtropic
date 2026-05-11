@@ -162,7 +162,9 @@ static int handle_slots_alloc(const uint8_t *req, size_t req_len,
     if (resp_max < 1u + 18u) return -1;
     uint8_t cred_id[18];
     int idx = -1;
-    if (slots_alloc(req, 8u /* SLOTS_ALG_ED25519 */, cred_id, &idx) != 0) {
+    if (slots_alloc(req, 8u /* SLOTS_ALG_ED25519 */,
+                    NULL, 0u,    /* debug alloc — no user_handle */
+                    cred_id, &idx) != 0) {
         return -1;
     }
     resp[0] = (uint8_t) idx;

@@ -448,6 +448,20 @@ let
     '';
   };
 
+  # Phase 6 M3 — authenticatorCredentialManagement (CTAP2 cmd 0x0A).
+  # Interactive (1 SW1 press for MakeCred) + 11 automated checks of the
+  # 5 implemented sub-commands.  See docs/PHASE-6-PLAN.md §5 M3 HW checkpoint.
+  validate-phase6-m3 = writeShellApplication {
+    name = "nixtropic-validate-phase6-m3";
+    runtimeInputs = [ py usbutils coreutils gnugrep ];
+    text = ''
+      set -uo pipefail
+      export FIDO2_PY="${../tools/fido2_test.py}"
+      export LT_RPC_PY="${../tools/lt_rpc.py}"
+      exec ${../tools/validate-phase6-m3.sh} "$@"
+    '';
+  };
+
   # Phase 6 M2 — direct vendor commands for the Force-UV flag.
   # `force-uv-get` reads (unauthenticated).
   # `force-uv-set <0|1>` writes (requires active PIN session on device).
@@ -775,6 +789,59 @@ let
           export LT_RPC_PY="${../tools/lt_rpc.py}"
           export FIDO2_PY="${../tools/fido2_test.py}"
           exec ${../tools/validate-phase5.sh}
+        '';
+      };
+
+  # Phase 6 M3 — flash-and-validate-phase6-m3: DFU flash + interactive
+  # credMgmt test (1 SW1 press for the MakeCred step, then auto-checks).
+  flash-and-validate-phase6-m3 =
+    if firmware == null then
+      writeShellApplication {
+        name = "nixtropic-flash-and-validate-phase6-m3-placeholder";
+        text = ''echo "Custom firmware not available in this flake."; exit 1'';
+      }
+    else
+      writeShellApplication {
+        name = "nixtropic-flash-and-validate-phase6-m3";
+        runtimeInputs = [ dfu-util usbutils coreutils gnugrep py ];
+        text = ''
+          set -euo pipefail
+          FW_BIN="${firmware}/firmware.bin"
+
+          echo "═══════════════════════════════════════════════════════════════"
+          echo "  Phase 6 M3: flash-and-validate (credMgmt 0x0A)"
+          echo "═══════════════════════════════════════════════════════════════"
+
+          if ! lsusb | grep -q "0483:df11"; then
+            echo "ERROR: dongle not in DFU mode (0483:df11)." >&2
+            echo "       Hold SW1 while plugging USB to enter DFU." >&2
+            exit 1
+          fi
+
+          DFU_LOG=$(mktemp); trap 'rm -f "$DFU_LOG"' EXIT
+          echo "Step 1/2: DFU flash..."
+          dfu-util -a 0 -s 0x08000000:leave -D "$FW_BIN" 2>&1 | tee "$DFU_LOG" >/dev/null || true
+          DFU_EXIT="''${PIPESTATUS[0]}"
+          if [ "$DFU_EXIT" -ne 0 ] && ! grep -q "File downloaded successfully" "$DFU_LOG"; then
+            echo "✗ DFU flash FAILED."; exit 1
+          fi
+
+          echo "✓ Flash complete. Waiting for enumeration..."
+          for _ in $(seq 1 24); do
+            sleep 0.5
+            if lsusb | grep -q "cafe:4001"; then break; fi
+          done
+          if ! lsusb | grep -q "cafe:4001"; then
+            echo "✗ Enumeration failed." >&2; exit 1
+          fi
+          echo "✓ Enumerated. Settling 3 s..."
+          sleep 3
+
+          echo ""
+          echo "Step 2/2: M3 validation (1 SW1 press needed)..."
+          export FIDO2_PY="${../tools/fido2_test.py}"
+          export LT_RPC_PY="${../tools/lt_rpc.py}"
+          exec ${../tools/validate-phase6-m3.sh}
         '';
       };
 
@@ -1508,6 +1575,22 @@ in
       else
         "${flash-and-validate-phase6-m2}/bin/nixtropic-flash-and-validate-phase6-m2";
     meta.description = "DFU-flash open firmware + Phase 6 M2 Force-UV validation";
+  };
+
+  validate-phase6-m3 = {
+    type = "app";
+    program = "${validate-phase6-m3}/bin/nixtropic-validate-phase6-m3";
+    meta.description = "Phase 6 M3 — credentialManagement (1 SW1 press + 11 auto)";
+  };
+
+  flash-and-validate-phase6-m3 = {
+    type = "app";
+    program =
+      if firmware == null then
+        "${flash-and-validate-phase6-m3}/bin/nixtropic-flash-and-validate-phase6-m3-placeholder"
+      else
+        "${flash-and-validate-phase6-m3}/bin/nixtropic-flash-and-validate-phase6-m3";
+    meta.description = "DFU-flash open firmware + Phase 6 M3 credMgmt validation";
   };
 
   force-uv-get = {
