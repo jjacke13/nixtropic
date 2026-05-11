@@ -2,7 +2,7 @@
 
 > **Audience:** AI coding agents (Claude, Codex, etc.) working on this project across sessions.
 > **Status:** Living document. Update as decisions and facts evolve.
-> **Last updated:** 2026-05-11 (Phase 5 ✅ COMPLETE — all 5 milestones HW-validated; cpp-reviewer audit pass with 1 HIGH + 2 MEDIUMs fixed)
+> **Last updated:** 2026-05-11 (Phase 5 ✅ COMPLETE; §2 #3 amended for Phase 6 — SW1 (PH3/BOOT0) repurposable for user-presence, no daughter board needed)
 > **Read order:** This document first. Reference `research/` files for technical depth as needed (don't preload them — fetch by section when relevant).
 
 ---
@@ -25,7 +25,7 @@ Distribution: Nix flake (`nixtropic`) packaging the firmware build, the host too
 |---|---|---|---|
 | 1 | **Language: C** | libtropic is C; SoloKeys is C; ST drivers/CMSIS/TinyUSB primary API is C. Rust adds FFI overhead with no security upside (real crypto is on TROPIC01, not STM32). Mitigations: TrustZone-M, strict warnings, sanitizers in host tests, no malloc post-init. | 2026-05-10 |
 | 2 | **Phase 7 USB class: OpenPGP card via CCID** (not PIV) | User uses GnuPG daily for QtPass + SSH. PIV deferred to optional Phase 7b. | 2026-05-10 |
-| 3 | **Phase 5 user-presence: stub-true** | TS1302 has no button. Skip touch-to-confirm for FIDO2 MVP. Add via daughter board in Phase 6. Architecture: single `bool user_presence_check(uint32_t timeout_ms)` function gated by `CONFIG_USER_PRESENCE_REQUIRED` so Phase 6 is a localized change. | 2026-05-10 |
+| 3 | **Phase 5 user-presence: stub-true; Phase 6 reads SW1 (PH3)** | Original (2026-05-10): "TS1302 has no button. Skip touch-to-confirm for FIDO2 MVP. Add via daughter board in Phase 6." **Amended 2026-05-11 (Phase 6 entry):** TS1302 DOES have a button — SW1 wired to PH3, which is also BOOT0. PH3 is sampled by silicon only at reset (BOOT0 strap); after reset it is an ordinary GPIO input, free for runtime use as user-presence. No daughter board needed. Phase 6 M1 replaces stub with debounced PH3 read. **BOOT0 caveat:** user must NOT hold SW1 while plugging USB — that lands in factory DFU bootloader (documented as recovery affordance, `docs/RECOVERY.md`). Architecture unchanged: single `bool user_presence_check(uint32_t timeout_ms)` function so Phase 6 is a localized swap. | 2026-05-10 / 2026-05-11 |
 | 4 | **Execution: serial, no time pressure** | Each phase fully completes (with hardware-in-the-loop validation) before next begins. No parallel exploration. | 2026-05-10 |
 | 5 | **Commitment: yes, dongle is project-dedicated** | User got TS1302 free. Phase 0 establishes recovery path; reflashing is reversible. | 2026-05-10 |
 | 6 | **USB stack: TinyUSB (adapt U545 BSP for U535)** | U535 has no native TinyUSB BSP, but U545 (same FS controller, same PMA) port adapts trivially. Avoid ST USBX (proprietary leanings, heavier). | 2026-05-10 |
@@ -278,18 +278,18 @@ Each phase is **independently shippable**. Stop anywhere = useful artifact. Hard
 
 **Stop-here value:** Working open-source TROPIC01 FIDO2 dongle. World's first on TS1302.
 
-### Phase 6 — Production-grade UX (button + PIN lockout)
-**Goal:** Trustable as a daily-driver security key.
+### Phase 6 — Production-grade UX (button + Force-UV + credentialManagement)
+**Goal:** Trustable as a daily-driver security key. Scope narrowed 2026-05-11 — SW1/PH3 repurpose obviates daughter-board work, and ClientPIN ↔ MAC-and-Destroy already shipped in Phase 5 M4. See `docs/PHASE-6-PLAN.md` for the milestone breakdown.
 
 **Deliverables:**
-- User-presence button: daughter board design (PCB + BOM in `hardware/`) OR repurpose existing GPIO
-- `user_presence_check()` reads button + debounces
-- ClientPIN attempts wired through `lt_mac_and_destroy` for HW-enforced rate limiting
-- LED feedback (blink on incoming, solid on touch-confirm)
+- **SW1 user-presence (M1):** debounced PH3 read replaces `user_presence_check()` stub-true. LED state machine on PA9 (blink while awaiting touch; solid on confirm). 30 s spec timeout per CTAP2 §6.1.2.
+- **Force-UV (M2):** R-mem-backed `force_uv` flag — when set, MakeCred / GetAssertion refuse without `pinAuth` even when RP sends `userVerification: discouraged`. Advertised via `alwaysUv` option in GetInfo (CTAP2.1 §6.4). Settable via lt-rpc vendor command. Closes task #53.
+- **authenticatorCredentialManagement (M3):** CTAP2.1 cmd 0x0A — enumerate credentials, delete, update user info. Makes `fido2-token -L -r` and `fido2-token -D -i ...` work. Closes task #54.
+- **Audit + ship (M4):** cpp-reviewer audit on new files; `validate-phase6` HW test; STATUS/PROJECT/memory updates; AAGUID bump to `...000003` (behavior-relevant changes per `docs/WEBAUTHN-NOTES.md §3` policy).
 
-**Test:** N wrong PINs → MAC-and-Destroy slots count down → chip refuses → recovery (PIN reset). Touch required for every signature.
+**Test:** Plug dongle, register on `webauthn.io` — Firefox prompts for touch (LED blinks) → user presses SW1 → registration succeeds. Set Force-UV, log in with `uv: discouraged` → device still demands PIN. `fido2-token -L -r /dev/hidrawN` lists creds; `-D -i <id>` deletes one. Ignored MakeCred times out at 30 s.
 
-**Stop-here value:** Production-class security key.
+**Stop-here value:** Production-class security key with the three "real Yubikey" UX features (touch, always-PIN option, credential management).
 
 ### Phase 7 — CCID OpenPGP card
 **Goal:** GnuPG / SSH (via gpg-agent) / QtPass work natively without host glue.
@@ -399,8 +399,6 @@ nixtropic/
 │   └── tests/                 # Host-side unit tests (compile firmware crypto on Linux)
 ├── tools/
 │   └── nixtropic/             # Rust CLI source (Phase 8)
-├── hardware/
-│   └── button-daughter/       # Phase 6 button board (KiCad)
 ├── docs/
 │   ├── RECOVERY.md            # DFU recovery procedure
 │   ├── DEPLOYMENT.md          # Production-key replacement, lockdown
@@ -491,7 +489,7 @@ When you need depth, fetch these. Don't preload — they're large.
 | `LT_CERT_KIND_XXXX` semantics | Phase 5 (when verifying full chain) | App Note `ODN_TR01_app_003` |
 | TROPIC01 TRNG SP 800-90B compliance | Phase 8 (before public claims) | App Note `ODN_TR01_app_008` |
 | Whether Tropic Square has a TS1302 firmware roadmap of their own | Re-verify quarterly | `research/prior-art.md` re-check |
-| User-presence button hardware design (daughter board vs repurpose GPIO) | Phase 6 | Compare effort |
+| User-presence button hardware design (daughter board vs repurpose GPIO) | **Resolved 2026-05-11** | **Repurpose SW1 (PH3/BOOT0)**. No daughter board needed. See §2 decision #3 amendment + `docs/PHASE-6-PLAN.md` §4.1. |
 | Whether to also ship PIV (Phase 7b) | After Phase 7 ships | Decide based on uptake |
 | credProps extension (fixes "unknown discoverability" RP label) | Phase 5 M3 OR Phase 8 polish | ~30 LOC, see `docs/WEBAUTHN-NOTES.md §5` |
 | Brave/Chromium WebAuthn modal greys out our device on Linux | Phase 8 polish | libfido2 + Firefox work; Chromium FIDO HID detection differs. See `docs/WEBAUTHN-NOTES.md §8` |
