@@ -1,11 +1,12 @@
 /*
- * USB descriptors for nixtropic — Phase 4 composite (CDC + HID×2).
+ * USB descriptors for nixtropic — Phase 7 composite (CDC + HID×2 + CCID).
  *
  * Layout:
  *   Interface 0   CDC control (notification EP IN)
  *   Interface 1   CDC data    (bulk EP OUT/IN)
  *   Interface 2   HID #0      lt-rpc — vendor usage page 0xFF00, 64 B IN/OUT
  *   Interface 3   HID #1      FIDO2  — usage page 0xF1D0, 64 B IN/OUT
+ *   Interface 4   CCID        smart card — class 0x0B, bulk IN/OUT (Phase 7 M1)
  *
  * VID/PID stays `0xCAFE:0x4001` from Phase 2 (TinyUSB demo range, also
  * accepted by `nix run .#identify`). Real pid.codes allocation is a
@@ -15,6 +16,13 @@
  * surfaces as its own /dev/hidraw* and so libfido2's enumeration sees
  * exactly one FIDO interface (matching usage page 0xF1D0). lt-rpc stays
  * exactly as Phase 3 emitted it on instance 0.
+ *
+ * The CCID interface is the Phase 7 addition.  Class 0x0B identifies us
+ * as a smart card reader to pcsc-lite for plug-and-play enumeration.
+ * Functional descriptor (54 B, type 0x21) advertises T=1 protocol and
+ * short+extended APDU level exchange.  Bulk endpoints carry CCID
+ * messages (PC_to_RDR_* / RDR_to_PC_*) — see firmware/src/ccid/ +
+ * firmware/src/usb/usb_ccid.c.
  */
 
 #include "tusb.h"
@@ -126,6 +134,7 @@ enum {
     ITF_NUM_CDC_DATA,
     ITF_NUM_HID_LTRPC,
     ITF_NUM_HID_FIDO,
+    ITF_NUM_CCID,
     ITF_NUM_TOTAL
 };
 
@@ -136,8 +145,22 @@ enum {
 #define EPNUM_HID_LTRPC_IN   0x83  /* IN  EP3 — device → host HID lt-rpc */
 #define EPNUM_HID_FIDO_OUT   0x04  /* OUT EP4 — host → device HID FIDO */
 #define EPNUM_HID_FIDO_IN    0x84  /* IN  EP4 — device → host HID FIDO */
+#define EPNUM_CCID_OUT       0x05  /* OUT EP5 — host → device CCID bulk */
+#define EPNUM_CCID_IN        0x85  /* IN  EP5 — device → host CCID bulk */
 
-#define CONFIG_TOTAL_LEN  (TUD_CONFIG_DESC_LEN + TUD_CDC_DESC_LEN + 2 * TUD_HID_INOUT_DESC_LEN)
+/* Exposed for usb_ccid.c via extern in usb_ccid.h — single source of
+ * truth so the descriptor and the driver agree on EP addresses. */
+const uint8_t USB_CCID_EP_OUT = EPNUM_CCID_OUT;
+const uint8_t USB_CCID_EP_IN  = EPNUM_CCID_IN;
+
+/* Lengths used by CONFIG_TOTAL_LEN.  CCID interface descriptor block
+ * is hand-crafted (TinyUSB has no CCID macro): 9 B interface desc +
+ * 54 B class-specific CCID functional desc + 7 B bulk OUT EP desc +
+ * 7 B bulk IN EP desc = 77 B total. */
+#define TUD_CCID_DESC_LEN    (9u + 54u + 7u + 7u)
+
+#define CONFIG_TOTAL_LEN  (TUD_CONFIG_DESC_LEN + TUD_CDC_DESC_LEN \
+                           + 2 * TUD_HID_INOUT_DESC_LEN + TUD_CCID_DESC_LEN)
 
 uint8_t const desc_fs_configuration[] = {
     /* Config descriptor: 1 config, ITF_NUM_TOTAL interfaces, 100 mA bus-powered */
@@ -157,6 +180,64 @@ uint8_t const desc_fs_configuration[] = {
     TUD_HID_INOUT_DESCRIPTOR(ITF_NUM_HID_FIDO, 6, HID_ITF_PROTOCOL_NONE,
                              sizeof(desc_hid_report_fido),
                              EPNUM_HID_FIDO_OUT, EPNUM_HID_FIDO_IN, 64, 5),
+
+    /* CCID interface — Phase 7 M1.  Hand-crafted because TinyUSB has
+     * no CCID descriptor macro.  Class 0x0B + functional descriptor +
+     * 2 bulk endpoints.  See CCID spec rev 1.1 §5. */
+
+    /* Interface descriptor (9 bytes) */
+    9,                              /* bLength */
+    TUSB_DESC_INTERFACE,            /* bDescriptorType */
+    ITF_NUM_CCID,                   /* bInterfaceNumber */
+    0,                              /* bAlternateSetting */
+    2,                              /* bNumEndpoints — bulk OUT + bulk IN */
+    TUSB_CLASS_SMART_CARD,          /* bInterfaceClass = 0x0B */
+    0,                              /* bInterfaceSubClass */
+    0,                              /* bInterfaceProtocol (0=CCID-no-ICC, OK for ICCD) */
+    7,                              /* iInterface — STR_CCID_INTERFACE */
+
+    /* CCID class-specific functional descriptor (54 bytes, type 0x21) */
+    54,                             /* bLength */
+    0x21,                           /* bDescriptorType — CCID functional */
+    0x10, 0x01,                     /* bcdCCID = 1.10 LE */
+    0x00,                           /* bMaxSlotIndex = 0 (single slot) */
+    0x07,                           /* bVoltageSupport = 5V|3V|1.8V */
+    0x03, 0x00, 0x00, 0x00,         /* dwProtocols = T=0 | T=1 (LE) */
+    0xA0, 0x0F, 0x00, 0x00,         /* dwDefaultClock = 4000 kHz */
+    0xA0, 0x0F, 0x00, 0x00,         /* dwMaximumClock = 4000 kHz */
+    0x00,                           /* bNumClockSupported = 0 (default only) */
+    0x80, 0x25, 0x00, 0x00,         /* dwDataRate = 9600 bps */
+    0x80, 0x25, 0x00, 0x00,         /* dwMaxDataRate = 9600 bps */
+    0x00,                           /* bNumDataRatesSupported = 0 */
+    0xFE, 0x00, 0x00, 0x00,         /* dwMaxIFSD = 254 (T=1 max) */
+    0x00, 0x00, 0x00, 0x00,         /* dwSynchProtocols = 0 */
+    0x00, 0x00, 0x00, 0x00,         /* dwMechanical = 0 (no mechanical) */
+    0x40, 0x08, 0x04, 0x00,         /* dwFeatures = 0x00040840 LE:
+                                       0x00000040 auto param neg
+                                     | 0x00000800 auto IFSD exchange
+                                     | 0x00040000 short + extended APDU level */
+    0x10, 0x10, 0x00, 0x00,         /* dwMaxCCIDMessageLength = 4112 LE */
+    0xFF,                           /* bClassGetResponse — echo CLA */
+    0xFF,                           /* bClassEnvelope — echo CLA */
+    0x00, 0x00,                     /* wLcdLayout = 0 (no LCD) */
+    0x00,                           /* bPINSupport = 0 */
+    0x01,                           /* bMaxCCIDBusySlots = 1 */
+
+    /* Bulk OUT endpoint (7 bytes) */
+    7,                              /* bLength */
+    TUSB_DESC_ENDPOINT,             /* bDescriptorType */
+    EPNUM_CCID_OUT,                 /* bEndpointAddress */
+    TUSB_XFER_BULK,                 /* bmAttributes */
+    U16_TO_U8S_LE(64),              /* wMaxPacketSize = 64 */
+    0,                              /* bInterval (unused for bulk) */
+
+    /* Bulk IN endpoint (7 bytes) */
+    7,                              /* bLength */
+    TUSB_DESC_ENDPOINT,             /* bDescriptorType */
+    EPNUM_CCID_IN,                  /* bEndpointAddress */
+    TUSB_XFER_BULK,                 /* bmAttributes */
+    U16_TO_U8S_LE(64),              /* wMaxPacketSize = 64 */
+    0,                              /* bInterval */
 };
 
 uint8_t const *tud_descriptor_configuration_cb(uint8_t index)
@@ -175,16 +256,18 @@ enum {
     STR_CDC_INTERFACE,
     STR_HID_LTRPC_INTERFACE,
     STR_HID_FIDO_INTERFACE,
+    STR_CCID_INTERFACE,
 };
 
 static char const *string_desc_arr[] = {
     [STR_LANGID]              = (const char[]){0x09, 0x04},  /* en-US: 0x0409 LE */
     [STR_MANUFACTURER]        = "nixtropic",
-    [STR_PRODUCT]             = "nixtropic Phase 4",
+    [STR_PRODUCT]             = "nixtropic Phase 7",
     [STR_SERIAL]              = "0001",
     [STR_CDC_INTERFACE]       = "nixtropic CDC console",
     [STR_HID_LTRPC_INTERFACE] = "nixtropic HID lt-rpc",
     [STR_HID_FIDO_INTERFACE]  = "nixtropic FIDO2",
+    [STR_CCID_INTERFACE]      = "nixtropic CCID Reader",
 };
 
 static uint16_t _desc_str[32 + 1];  /* +1 for header word */

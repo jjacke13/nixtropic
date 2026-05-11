@@ -213,6 +213,8 @@ set(APP_SOURCES
     src/usb/usb.c
     src/usb/usb_descriptors.c
     src/usb/cdc_io.c
+    src/usb/usb_ccid.c
+    src/ccid/apdu_dispatch.c
     src/cdc_protocol/protocol.c
     src/cdc_protocol/parser.c
     src/cdc_protocol/hex.c

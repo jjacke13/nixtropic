@@ -7,10 +7,13 @@
  */
 
 #include "usb.h"
+#include "usb_ccid.h"
 #include "platform/board.h"
 
 #include "stm32u5xx_hal.h"
 #include "tusb.h"
+#include "device/usbd.h"
+#include "device/usbd_pvt.h"
 
 /* ----- USB clock (HSI48 + CRS) ----- */
 
@@ -117,4 +120,29 @@ int usb_init(void)
 void USB_IRQHandler(void)
 {
     tud_int_handler(0);
+}
+
+/* ----- Application class driver registration -----
+ *
+ * Phase 7 M1 adds USB CCID via a TinyUSB application class driver
+ * (TinyUSB upstream has no CCID class driver).  We supply the
+ * driver via this hook; TinyUSB iterates it alongside its built-in
+ * CDC/HID drivers when binding interfaces from the config descriptor.
+ *
+ * The driver's open() callback claims interfaces whose
+ * bInterfaceClass == TUSB_CLASS_SMART_CARD (0x0B). */
+static const usbd_class_driver_t s_app_drivers[] = {
+    /* index 0: CCID smart-card driver — usb_ccid.c */
+    /* Initialised at runtime — TinyUSB API not allowed at static init time. */
+    {0}
+};
+
+usbd_class_driver_t const *usbd_app_driver_get_cb(uint8_t *driver_count)
+{
+    /* Single CCID driver, defined in usb_ccid.c.  We return the
+     * address of the externed const struct.  driver_count = 1. */
+    static usbd_class_driver_t const *const drivers_ptr = &usb_ccid_driver;
+    (void) s_app_drivers;  /* placeholder kept for future expansion */
+    *driver_count = 1;
+    return drivers_ptr;
 }
