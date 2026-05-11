@@ -63,6 +63,23 @@
 #define OPENPGP_GENTIME_LEN          4u
 #define OPENPGP_SIG_COUNTER_LEN      3u   /* DO 93, BCD encoded */
 
+/* PIN hash storage — SHA-256(PIN)[:16].  Same convention as Phase 5's
+ * pin.c.  Stored in R-mem slot 1 at v2 layout offsets 132..179. */
+#define OPENPGP_PIN_HASH_LEN         16u
+
+/* PIN indices.  PW1.sig and PW1.dec/auth share the same hash + counter
+ * per OpenPGP spec §7.2.2. */
+#define OPENPGP_PIN_PW1              0
+#define OPENPGP_PIN_PW3              1
+#define OPENPGP_PIN_RC               2
+#define OPENPGP_PIN_COUNT            3
+
+/* PIN length constraints (spec §4.3). */
+#define OPENPGP_PW1_MIN_LEN          6u
+#define OPENPGP_PW3_MIN_LEN          8u
+#define OPENPGP_RC_MIN_LEN           8u
+#define OPENPGP_PIN_MAX_LEN          64u
+
 /**
  * @brief First-call init: ensure R-mem slot 1 has the PGP state magic.
  *        Idempotent — safe to call from openpgp_applet open hook.
@@ -142,5 +159,63 @@ int openpgp_state_lang_get(uint8_t out[OPENPGP_LANG_LEN]);
  * @brief Read 1 B sex (DO 5F35, ISO 5218).  Returns 0x39 ('9' — "not applicable") if unset.
  */
 uint8_t openpgp_state_sex_get(void);
+
+/* ---- M3 PIN hash storage + retry counter writers ---- */
+
+/**
+ * @brief Read PIN hash (16 B) for the given PIN index.  Returns 0 OK,
+ *        -1 bad index, -2 chip error.
+ */
+int openpgp_state_pin_hash_get(int which, uint8_t out[OPENPGP_PIN_HASH_LEN]);
+
+/**
+ * @brief Write PIN hash for the given PIN index.  Caller is responsible
+ *        for hashing the raw PIN (SHA-256[:16]).  Returns 0 OK, -1 bad
+ *        index, -2 chip error.
+ */
+int openpgp_state_pin_hash_set(int which,
+                               const uint8_t hash[OPENPGP_PIN_HASH_LEN]);
+
+/**
+ * @brief Set retry counter for one PIN.  Used by VERIFY (decrement on
+ *        wrong, reset to default on correct) and RESET RETRY COUNTER.
+ *        Returns 0 OK, -1 bad index, -2 chip error.
+ */
+int openpgp_state_pin_retries_set(int which, uint8_t v);
+
+/**
+ * @brief Get / set pgp_state_present flag.  Set to 1 on ACTIVATE FILE;
+ *        zeroed on TERMINATE DF (which wipes all PGP state).
+ */
+uint8_t openpgp_state_present_get(void);
+int     openpgp_state_present_set(uint8_t v);
+
+/* ---- M3 writable DO setters (PUT DATA) ---- */
+
+int openpgp_state_name_set(const uint8_t *data, size_t len);  /* DO 5B */
+int openpgp_state_lang_set(const uint8_t data[OPENPGP_LANG_LEN]);  /* DO 5F2D */
+int openpgp_state_sex_set(uint8_t v);  /* DO 5F35 */
+int openpgp_state_force_verify_set(uint8_t v);  /* DO C4 bit 0 */
+int openpgp_state_touch_required_set(uint8_t v);  /* aliases DO D6/D7/D8 */
+
+/* ---- TERMINATE DF / ACTIVATE FILE ---- */
+
+/**
+ * @brief Wipe all PGP state in R-mem slot 1 (PIN hashes, fingerprints,
+ *        cardholder data, etc).  Sets pgp_state_present = 0.  After
+ *        TERMINATE, the only valid INS is ACTIVATE FILE.
+ *        Does NOT erase chip ECC slots — that happens in M4 GENERATE
+ *        path (TERMINATE here also calls into pgp_keys later).
+ */
+int openpgp_state_terminate(void);
+
+/**
+ * @brief Re-init R-mem slot 1 with spec-default PINs ("123456" / "12345678" /
+ *        RC unset), default retry counters (3/3/0), touch_required=1,
+ *        force_verify=1, sex=0x39.  Sets pgp_state_present = 1.
+ *        Called from openpgp_state_init on first boot, AND from
+ *        ACTIVATE FILE after TERMINATE DF.
+ */
+int openpgp_state_activate(void);
 
 #endif /* NIXTROPIC_OPENPGP_STATE_H */

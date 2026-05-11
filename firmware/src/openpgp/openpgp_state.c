@@ -15,12 +15,27 @@
 #include <string.h>
 
 #include "tropic/tropic.h"
+#include "sha2.h"   /* trezor_crypto SHA-256 */
 
 /* Magic identifies our PGP state from an arbitrary R-mem slot — slot 1
  * has no a-priori relationship to OpenPGP.  Bump if/when v1 layout
  * grows incompatible fields. */
 static const uint8_t PGP_MAGIC[4]    = { 'P', 'G', '7', 'K' };
 #define PGP_SCHEMA_VERSION  1u
+
+/* pgp_state_present byte values (M3 — 3-state machine):
+ *   0 = factory fresh (never bootstrapped) — next init auto-activates
+ *   1 = Operational (PINs active, applet ready)
+ *   2 = Terminated (TERMINATE DF sent — awaiting ACTIVATE FILE)
+ */
+#define PGP_STATE_FRESH        0u
+#define PGP_STATE_OPERATIONAL  1u
+#define PGP_STATE_TERMINATED   2u
+
+/* Default OpenPGP card PINs per spec §4.3 — bootstrapped by activate().
+ * User must change via `gpg --card-edit → passwd`. */
+static const char PGP_DEFAULT_PW1[] = "123456";
+static const char PGP_DEFAULT_PW3[] = "12345678";
 
 /* Wire offsets (in R-mem slot 1 payload). */
 #define OFF_MAGIC               0
@@ -45,6 +60,12 @@ static const uint8_t PGP_MAGIC[4]    = { 'P', 'G', '7', 'K' };
 #define OFF_GENTIME_DEC      121
 #define OFF_GENTIME_AUT      125
 #define OFF_SIG_COUNTER      129   /* 3 B BCD */
+/* M3 — PIN hash storage.  v1 had these bytes reserved/zero, so old
+ * state migrates cleanly (PIN hash region reads as zero → bootstrap
+ * default PINs on first M3 boot). */
+#define OFF_PW1_HASH         132   /* 16 B — SHA-256("123456")[:16] default */
+#define OFF_PW3_HASH         148   /* 16 B — SHA-256("12345678")[:16] default */
+#define OFF_RC_HASH          164   /* 16 B — all-zero if RC unset */
 
 /* Read the full payload.  Returns 0 OK, -1 magic mismatch / unitialised,
  * -2 chip error. */
@@ -71,33 +92,80 @@ static int write_payload(const uint8_t buf[OPENPGP_RMEM_PRIMARY_SIZE])
                              OPENPGP_RMEM_PRIMARY_SIZE);
 }
 
+/* Write a fresh "Operational" state with defaults — PW1/PW3 default
+ * PINs hashed, retry counters at max, sex 0x39, force_verify + touch
+ * defaults on.  Used by both first-boot init and ACTIVATE FILE. */
+static int write_activated_defaults(void)
+{
+    uint8_t buf[OPENPGP_RMEM_PRIMARY_SIZE];
+    memset(buf, 0, sizeof buf);
+
+    memcpy(&buf[OFF_MAGIC], PGP_MAGIC, OFF_MAGIC_LEN);
+    buf[OFF_SCHEMA]            = 0;
+    buf[OFF_SCHEMA + 1]        = (uint8_t) PGP_SCHEMA_VERSION;
+    buf[OFF_PGP_STATE_PRESENT] = PGP_STATE_OPERATIONAL;
+    buf[OFF_PW1_RETRIES]       = OPENPGP_PW1_RETRIES_INITIAL;
+    buf[OFF_PW3_RETRIES]       = OPENPGP_PW3_RETRIES_INITIAL;
+    buf[OFF_RC_RETRIES]        = OPENPGP_RC_UNSET;
+    buf[OFF_FORCE_VERIFY]      = 1;
+    buf[OFF_TOUCH_REQUIRED]    = 1;
+    buf[OFF_SEX]               = 0x39;  /* ISO 5218 "not applicable" */
+
+    /* Hash default PINs into PW1 + PW3 slots.  SHA-256[:16] same
+     * convention as Phase 5 pin.c. */
+    uint8_t full[32];
+    sha256_Raw((const uint8_t *) PGP_DEFAULT_PW1, (uint32_t) strlen(PGP_DEFAULT_PW1), full);
+    memcpy(&buf[OFF_PW1_HASH], full, OPENPGP_PIN_HASH_LEN);
+    sha256_Raw((const uint8_t *) PGP_DEFAULT_PW3, (uint32_t) strlen(PGP_DEFAULT_PW3), full);
+    memcpy(&buf[OFF_PW3_HASH], full, OPENPGP_PIN_HASH_LEN);
+    memset(full, 0, sizeof full);
+    /* RC hash stays zero (RC unset). */
+
+    return (write_payload(buf) == 0) ? 0 : -1;
+}
+
 int openpgp_state_init(void)
 {
     uint8_t buf[OPENPGP_RMEM_PRIMARY_SIZE];
 
     int rc = read_payload(buf);
-    if (rc == 0) {
-        return 0;  /* already initialised */
-    }
     if (rc == -2) {
-        return -1;  /* chip error — don't paper over */
+        return -1;  /* chip error */
     }
 
-    /* Magic mismatch — first-boot init.  Zero-fill, then stamp magic
-     * + schema + defaults. */
+    if (rc == 0) {
+        /* Existing PGP state — respect pgp_state_present.
+         *   FRESH (0)        → bootstrap (M2 init wrote 0 too; legacy)
+         *   OPERATIONAL (1)  → done, applet ready
+         *   TERMINATED (2)   → respect; awaiting ACTIVATE FILE */
+        uint8_t st = buf[OFF_PGP_STATE_PRESENT];
+        if (st == PGP_STATE_OPERATIONAL || st == PGP_STATE_TERMINATED) {
+            return 0;
+        }
+        /* PGP_STATE_FRESH (0) → fall through to bootstrap */
+    }
+
+    /* First-boot init OR upgrade-from-M2-state — write defaults. */
+    return write_activated_defaults();
+}
+
+int openpgp_state_activate(void)
+{
+    return write_activated_defaults();
+}
+
+int openpgp_state_terminate(void)
+{
+    /* Wipe slot 1 — PIN hashes + cardholder + fingerprints + everything.
+     * Magic + schema + pgp_state_present = TERMINATED stay. */
+    uint8_t buf[OPENPGP_RMEM_PRIMARY_SIZE];
     memset(buf, 0, sizeof buf);
     memcpy(&buf[OFF_MAGIC], PGP_MAGIC, OFF_MAGIC_LEN);
-    buf[OFF_SCHEMA]               = 0;
-    buf[OFF_SCHEMA + 1]           = (uint8_t) PGP_SCHEMA_VERSION;
-    buf[OFF_PGP_STATE_PRESENT]    = 0;  /* not initialised by ACTIVATE FILE yet */
-    buf[OFF_PW1_RETRIES]          = OPENPGP_PW1_RETRIES_INITIAL;
-    buf[OFF_PW3_RETRIES]          = OPENPGP_PW3_RETRIES_INITIAL;
-    buf[OFF_RC_RETRIES]           = OPENPGP_RC_UNSET;
-    buf[OFF_FORCE_VERIFY]         = 1;  /* spec-recommended default */
-    buf[OFF_TOUCH_REQUIRED]       = 1;  /* single global flag — default ON */
-    /* Sex byte unset = ISO 5218 "9" (0x39, "not applicable"). */
-    buf[OFF_SEX]                  = 0x39;
-
+    buf[OFF_SCHEMA]            = 0;
+    buf[OFF_SCHEMA + 1]        = (uint8_t) PGP_SCHEMA_VERSION;
+    buf[OFF_PGP_STATE_PRESENT] = PGP_STATE_TERMINATED;
+    buf[OFF_RC_RETRIES]        = OPENPGP_RC_UNSET;
+    buf[OFF_SEX]               = 0x39;
     return (write_payload(buf) == 0) ? 0 : -1;
 }
 
@@ -209,4 +277,137 @@ uint8_t openpgp_state_sex_get(void)
     if (read_payload(buf) != 0) return 0x39;  /* "not applicable" */
     uint8_t sex = buf[OFF_SEX];
     return (sex == 0u) ? 0x39u : sex;
+}
+
+/* ---- M3 PIN hash + retry accessors ---- */
+
+static int pin_hash_offset(int which, size_t *out_off)
+{
+    switch (which) {
+    case OPENPGP_PIN_PW1: *out_off = OFF_PW1_HASH; return 0;
+    case OPENPGP_PIN_PW3: *out_off = OFF_PW3_HASH; return 0;
+    case OPENPGP_PIN_RC:  *out_off = OFF_RC_HASH;  return 0;
+    default: return -1;
+    }
+}
+
+static int pin_retries_offset(int which, size_t *out_off)
+{
+    switch (which) {
+    case OPENPGP_PIN_PW1: *out_off = OFF_PW1_RETRIES; return 0;
+    case OPENPGP_PIN_PW3: *out_off = OFF_PW3_RETRIES; return 0;
+    case OPENPGP_PIN_RC:  *out_off = OFF_RC_RETRIES;  return 0;
+    default: return -1;
+    }
+}
+
+int openpgp_state_pin_hash_get(int which, uint8_t out[OPENPGP_PIN_HASH_LEN])
+{
+    size_t off;
+    if (pin_hash_offset(which, &off) != 0 || out == NULL) return -1;
+    uint8_t buf[OPENPGP_RMEM_PRIMARY_SIZE];
+    if (read_payload(buf) != 0) return -2;
+    memcpy(out, &buf[off], OPENPGP_PIN_HASH_LEN);
+    return 0;
+}
+
+int openpgp_state_pin_hash_set(int which,
+                               const uint8_t hash[OPENPGP_PIN_HASH_LEN])
+{
+    size_t off;
+    if (pin_hash_offset(which, &off) != 0 || hash == NULL) return -1;
+    uint8_t buf[OPENPGP_RMEM_PRIMARY_SIZE];
+    if (read_payload(buf) != 0) return -2;
+    memcpy(&buf[off], hash, OPENPGP_PIN_HASH_LEN);
+    return (write_payload(buf) == 0) ? 0 : -2;
+}
+
+int openpgp_state_pin_retries_set(int which, uint8_t v)
+{
+    size_t off;
+    if (pin_retries_offset(which, &off) != 0) return -1;
+    uint8_t buf[OPENPGP_RMEM_PRIMARY_SIZE];
+    if (read_payload(buf) != 0) return -2;
+    buf[off] = v;
+    return (write_payload(buf) == 0) ? 0 : -2;
+}
+
+uint8_t openpgp_state_present_get(void)
+{
+    uint8_t buf[OPENPGP_RMEM_PRIMARY_SIZE];
+    if (read_payload(buf) != 0) return PGP_STATE_FRESH;
+    return buf[OFF_PGP_STATE_PRESENT];
+}
+
+int openpgp_state_present_set(uint8_t v)
+{
+    uint8_t buf[OPENPGP_RMEM_PRIMARY_SIZE];
+    if (read_payload(buf) != 0) return -2;
+    buf[OFF_PGP_STATE_PRESENT] = v;
+    return (write_payload(buf) == 0) ? 0 : -2;
+}
+
+/* ---- M3 writable DO setters (PUT DATA) ---- */
+
+int openpgp_state_name_set(const uint8_t *data, size_t len)
+{
+    if (len > OPENPGP_NAME_MAX) return -1;
+    uint8_t buf[OPENPGP_RMEM_PRIMARY_SIZE];
+    if (read_payload(buf) != 0) return -2;
+    buf[OFF_NAME_LEN] = (uint8_t) len;
+    if (len > 0u && data != NULL) {
+        memcpy(&buf[OFF_NAME_DATA], data, len);
+    }
+    /* Zero the rest of the name buffer (cosmetic — stale bytes
+     * shouldn't affect read_name_get since it honours the length byte,
+     * but keeps R-mem dumps tidy). */
+    if (len < OPENPGP_NAME_MAX) {
+        memset(&buf[OFF_NAME_DATA + len], 0,
+               (size_t)(OPENPGP_NAME_MAX - len));
+    }
+    return (write_payload(buf) == 0) ? 0 : -2;
+}
+
+int openpgp_state_lang_set(const uint8_t data[OPENPGP_LANG_LEN])
+{
+    if (data == NULL) return -1;
+    uint8_t buf[OPENPGP_RMEM_PRIMARY_SIZE];
+    if (read_payload(buf) != 0) return -2;
+    memcpy(&buf[OFF_LANG], data, OPENPGP_LANG_LEN);
+    return (write_payload(buf) == 0) ? 0 : -2;
+}
+
+int openpgp_state_sex_set(uint8_t v)
+{
+    /* Spec values: '1' (0x31) male, '2' (0x32) female, '9' (0x39) NA. */
+    if (v != 0x31u && v != 0x32u && v != 0x39u) return -1;
+    uint8_t buf[OPENPGP_RMEM_PRIMARY_SIZE];
+    if (read_payload(buf) != 0) return -2;
+    buf[OFF_SEX] = v;
+    return (write_payload(buf) == 0) ? 0 : -2;
+}
+
+int openpgp_state_force_verify_set(uint8_t v)
+{
+    uint8_t buf[OPENPGP_RMEM_PRIMARY_SIZE];
+    if (read_payload(buf) != 0) return -2;
+    buf[OFF_FORCE_VERIFY] = (v != 0u) ? 1u : 0u;
+    return (write_payload(buf) == 0) ? 0 : -2;
+}
+
+int openpgp_state_touch_required_set(uint8_t v)
+{
+    /* 0 = off, 1 = enabled, 2 = permanent.  Permanent should only be
+     * set via vendor command (Phase 8 polish); applet PUT DATA path
+     * accepts 0 / 1 only. */
+    if (v > 2u) return -1;
+    uint8_t buf[OPENPGP_RMEM_PRIMARY_SIZE];
+    if (read_payload(buf) != 0) return -2;
+    /* Refuse to UN-permanent (downgrade from 0x02) — only ACTIVATE FILE
+     * can clear it. */
+    if (buf[OFF_TOUCH_REQUIRED] == 2u && v != 2u) {
+        return -3;  /* SW_CONDITIONS_NOT_SATISFIED at caller */
+    }
+    buf[OFF_TOUCH_REQUIRED] = v;
+    return (write_payload(buf) == 0) ? 0 : -2;
 }

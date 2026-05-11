@@ -626,6 +626,70 @@ let
         '';
       };
 
+  # Phase 7 M3 — PIN handling (VERIFY/CHANGE/RESET RC) + PUT DATA +
+  # TERMINATE/ACTIVATE.  7 checks via opensc-tool + gpg --card-status.
+  # See docs/PHASE-7-PLAN.md §5 M3 HW checkpoint.
+  validate-phase7-m3 = writeShellApplication {
+    name = "nixtropic-validate-phase7-m3";
+    runtimeInputs = [ usbutils coreutils gnugrep pkgs.opensc pkgs.pcsc-tools pkgs.pcsclite pkgs.gnupg ];
+    text = ''
+      set -uo pipefail
+      exec ${../tools/validate-phase7-m3.sh} "$@"
+    '';
+  };
+
+  flash-and-validate-phase7-m3 =
+    if firmware == null then
+      writeShellApplication {
+        name = "nixtropic-flash-and-validate-phase7-m3-placeholder";
+        text = ''echo "Custom firmware not available in this flake."; exit 1'';
+      }
+    else
+      writeShellApplication {
+        name = "nixtropic-flash-and-validate-phase7-m3";
+        runtimeInputs = [ dfu-util usbutils coreutils gnugrep pkgs.opensc pkgs.pcsc-tools pkgs.pcsclite pkgs.gnupg ];
+        text = ''
+          set -euo pipefail
+          FW_BIN="${firmware}/firmware.bin"
+
+          echo "═══════════════════════════════════════════════════════════════"
+          echo "  Phase 7 M3: flash-and-validate (PIN + PUT DATA + TERMINATE)"
+          echo "═══════════════════════════════════════════════════════════════"
+
+          if ! lsusb | grep -q "0483:df11"; then
+            echo "ERROR: dongle not in DFU mode (0483:df11)." >&2
+            echo "       Hold SW1 while plugging USB to enter DFU." >&2
+            exit 1
+          fi
+
+          DFU_LOG=$(mktemp); trap 'rm -f "$DFU_LOG"' EXIT
+          echo "Step 1/2: DFU flash..."
+          dfu-util -a 0 -s 0x08000000:leave -D "$FW_BIN" 2>&1 | tee "$DFU_LOG" >/dev/null || true
+          DFU_EXIT="''${PIPESTATUS[0]}"
+          if [ "$DFU_EXIT" -ne 0 ] && ! grep -q "File downloaded successfully" "$DFU_LOG"; then
+            echo "✗ DFU flash FAILED."; exit 1
+          fi
+
+          echo "✓ Flash complete. Waiting for enumeration..."
+          for _ in $(seq 1 24); do
+            sleep 0.5
+            if lsusb | grep -q "cafe:4001"; then break; fi
+          done
+          if ! lsusb | grep -q "cafe:4001"; then
+            echo "✗ Enumeration failed." >&2; exit 1
+          fi
+          echo "✓ Enumerated. Settling 3 s..."
+          sleep 3
+
+          sudo systemctl restart pcscd 2>/dev/null || true
+          sleep 2
+
+          echo ""
+          echo "Step 2/2: Phase 7 M3 validation..."
+          exec ${../tools/validate-phase7-m3.sh}
+        '';
+      };
+
   # Phase 1 — flash-and-validate: orchestrates DFU flash + immediate validate.
   # Solves the "boot markers emit only once" gotcha: after flash, the
   # firmware re-boots fresh and emits its boot block; the validator captures
@@ -1848,6 +1912,22 @@ in
       else
         "${flash-and-validate-phase7-m2}/bin/nixtropic-flash-and-validate-phase7-m2";
     meta.description = "DFU-flash open firmware + Phase 7 M2 validation";
+  };
+
+  validate-phase7-m3 = {
+    type = "app";
+    program = "${validate-phase7-m3}/bin/nixtropic-validate-phase7-m3";
+    meta.description = "Phase 7 M3 — PIN handling + PUT DATA + TERMINATE/ACTIVATE (7 checks)";
+  };
+
+  flash-and-validate-phase7-m3 = {
+    type = "app";
+    program =
+      if firmware == null then
+        "${flash-and-validate-phase7-m3}/bin/nixtropic-flash-and-validate-phase7-m3-placeholder"
+      else
+        "${flash-and-validate-phase7-m3}/bin/nixtropic-flash-and-validate-phase7-m3";
+    meta.description = "DFU-flash open firmware + Phase 7 M3 validation";
   };
 
   identify = {

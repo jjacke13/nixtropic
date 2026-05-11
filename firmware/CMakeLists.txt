@@ -218,6 +218,7 @@ set(APP_SOURCES
     src/openpgp/openpgp_aid.c
     src/openpgp/openpgp_state.c
     src/openpgp/openpgp_applet.c
+    src/openpgp/pgp_pin.c
     src/cdc_protocol/protocol.c
     src/cdc_protocol/parser.c
     src/cdc_protocol/hex.c
