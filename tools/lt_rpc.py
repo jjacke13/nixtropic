@@ -61,6 +61,9 @@ CMD_SLOTS_ALLOC   = 0x11
 CMD_SLOTS_ERASE   = 0x12
 CMD_SLOTS_META    = 0x13
 CMD_SLOTS_RESET   = 0x14
+# Phase 6 M2 — Force-UV flag accessors
+CMD_FORCE_UV_GET  = 0x15
+CMD_FORCE_UV_SET  = 0x16
 CMD_ERROR         = 0x3F
 
 ERR_NAMES = {
@@ -219,6 +222,19 @@ class LtRpc:
 
     def slots_reset(self) -> None:
         self.transact(CMD_SLOTS_RESET, b"")
+
+    def force_uv_get(self) -> int:
+        """Read the Force-UV flag. Unauthenticated."""
+        resp = self.transact(CMD_FORCE_UV_GET, b"")
+        if len(resp) < 1:
+            raise RuntimeError(f"FORCE_UV_GET: short response {resp!r}")
+        return resp[0] & 0x01
+
+    def force_uv_set(self, value: int) -> None:
+        """Set / clear the Force-UV flag. Requires active pinUvAuthToken
+        session on the device (user has run CTAP2 getPinToken this boot)."""
+        payload = bytes([1 if value else 0])
+        self.transact(CMD_FORCE_UV_SET, payload)
 
 
 # ============================================================================
@@ -409,6 +425,36 @@ def cmd_slots_bitmap(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_force_uv_get(args: argparse.Namespace) -> int:
+    """Phase 6 M2 — read the Force-UV flag."""
+    rpc = LtRpc()
+    try:
+        v = rpc.force_uv_get()
+    finally:
+        rpc.close()
+    print(f"force_uv = {v}  ({'ON — alwaysUv enforced' if v else 'off — RP hint honoured'})")
+    return 0
+
+
+def cmd_force_uv_set(args: argparse.Namespace) -> int:
+    """Phase 6 M2 — set / clear the Force-UV flag.
+
+    Requires that the user has run CTAP2 getPinToken on this boot
+    (firmware checks s_pin_token_valid).  The firmware-side
+    bootstrap path (auto-enable on first setPIN) does NOT use this
+    RPC — it sets the flag directly from inside handle_set_pin.
+    Use this RPC to toggle Force-UV after the dongle is already
+    configured."""
+    rpc = LtRpc()
+    try:
+        rpc.force_uv_set(args.value)
+        v = rpc.force_uv_get()
+    finally:
+        rpc.close()
+    print(f"force_uv set to {args.value} → reads back as {v}")
+    return 0 if v == (1 if args.value else 0) else 1
+
+
 def cmd_slots_reset(args: argparse.Namespace) -> int:
     rpc = LtRpc()
     try:
@@ -567,6 +613,16 @@ def main() -> int:
 
     p_vm1 = sub.add_parser("validate-m1", help="(Phase 5 M1) run slot manager validation")
     p_vm1.set_defaults(fn=cmd_validate_m1)
+
+    p_fug = sub.add_parser("force-uv-get",
+                           help="(Phase 6 M2) read the Force-UV flag")
+    p_fug.set_defaults(fn=cmd_force_uv_get)
+
+    p_fus = sub.add_parser("force-uv-set",
+                           help="(Phase 6 M2) set/clear Force-UV (requires active PIN token)")
+    p_fus.add_argument("value", type=int, choices=[0, 1],
+                       help="0 = disable Force-UV, 1 = enable")
+    p_fus.set_defaults(fn=cmd_force_uv_set)
 
     args = p.parse_args()
     try:

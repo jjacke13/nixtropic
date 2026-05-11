@@ -27,6 +27,7 @@
 #include "platform/rng.h"
 #include "tropic/tropic.h"
 #include "fido_hid/slots.h"
+#include "fido_hid/pin.h"
 
 #include "stm32u5xx_hal.h"
 
@@ -200,6 +201,50 @@ static int handle_slots_reset(const uint8_t *req, size_t req_len,
     return 0;
 }
 
+/* Phase 6 M2 — Force-UV flag accessors.
+ *
+ * GET is unauthenticated: the same information is already public
+ * via `options.alwaysUv` in CTAP2 GetInfo, so a vendor-channel read
+ * leaks nothing new.
+ *
+ * SET is PIN-gated in BOTH directions: requires an active
+ * pinUvAuthToken (user has run CTAP2 getPinToken this boot).  An
+ * attacker with only USB access — but no PIN — cannot toggle
+ * Force-UV in either direction.  Symmetric gating prevents the
+ * "silently disable my defense" attack AND the "lock me out by
+ * enabling Force-UV before I set a PIN" attack.
+ *
+ * Bootstrap path (no PIN yet): the auto-enable in pin.c's setPIN
+ * handler fires when `was_pin_set == 0` AND setPIN succeeds, so the
+ * first-time user gets Force-UV implicitly without needing to call
+ * this RPC. */
+static int handle_force_uv_get(const uint8_t *req, size_t req_len,
+                               uint8_t *resp, size_t resp_max)
+{
+    (void) req; (void) req_len;
+    if (resp_max < 1u) return -1;
+    resp[0] = (uint8_t)(slots_force_uv_get() ? 1u : 0u);
+    return 1;
+}
+
+static int handle_force_uv_set(const uint8_t *req, size_t req_len,
+                               uint8_t *resp, size_t resp_max)
+{
+    (void) resp; (void) resp_max;
+    if (req_len < 1u) return -1;
+
+    /* PIN-gate: refuse if there is no active pinUvAuthToken session. */
+    if (!pin_token_is_valid()) {
+        return -1;
+    }
+
+    int value = (req[0] != 0u) ? 1 : 0;
+    if (slots_force_uv_set(value) != 0) {
+        return -1;
+    }
+    return 0;
+}
+
 /* ===== Table + lookup ===== */
 
 typedef struct {
@@ -220,6 +265,8 @@ static const rpc_entry_t HANDLERS[] = {
     { LT_RPC_CMD_SLOTS_ERASE,  handle_slots_erase },
     { LT_RPC_CMD_SLOTS_META,   handle_slots_meta },
     { LT_RPC_CMD_SLOTS_RESET,  handle_slots_reset },
+    { LT_RPC_CMD_FORCE_UV_GET, handle_force_uv_get },
+    { LT_RPC_CMD_FORCE_UV_SET, handle_force_uv_set },
     { 0, NULL },  /* sentinel */
 };
 

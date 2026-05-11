@@ -248,4 +248,33 @@ int slots_global_md_set(int active,
  */
 int slots_global_md_advance(uint8_t *out_new);
 
+/* ===== Phase 6 M2: Force-UV flag =====
+ *
+ * Persisted in R-mem slot 0 at offset 321 (just past the M&D ci[] array
+ * which ends at 320).  Schema v3 introduces this byte and bumps the
+ * global magic from "NX5K" → "NX6K".
+ *
+ * Semantics (docs/PHASE-6-PLAN.md §4.4):
+ *   0 = honour RP's `userVerification` hint (Phase 5 behaviour).
+ *   1 = always require pinAuth on MakeCred/GetAssertion, regardless
+ *       of RP hint.  GetInfo also advertises `options.alwaysUv=true`
+ *       so browsers proactively prompt for PIN.
+ *
+ * Auto-enabled on first `setPIN` (no-PIN → PIN-set transition).
+ * User can opt out via the lt-rpc `force-uv-set 0` vendor command,
+ * which is PIN-gated. */
+
+/**
+ * @brief Read the Force-UV flag.
+ * @return 1 if Force-UV is enabled, 0 otherwise.
+ */
+int slots_force_uv_get(void);
+
+/**
+ * @brief Set / clear the Force-UV flag and persist to R-mem.
+ * @param value  1 = enable, 0 = disable.
+ * @return 0 on success; -1 on chip error.
+ */
+int slots_force_uv_set(int value);
+
 #endif /* NIXTROPIC_FIDO_HID_SLOTS_H */

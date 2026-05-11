@@ -1113,6 +1113,248 @@ def sub_validate_m3(args) -> int:
     return 0 if all(ok for _, ok, _ in results) else 1
 
 
+def sub_validate_phase6_m2(args) -> int:
+    """Phase 6 M2 validation — Force-UV auto-enable + lt-rpc toggle + alwaysUv.
+
+    Exercises docs/PHASE-6-PLAN.md §4.4 + §5 M2:
+
+      1) factory_reset baseline — GetInfo `alwaysUv=false`, `clientPin=false`.
+      2) lt-rpc `force-uv-get` reads 0 initially.
+      3) lt-rpc `force-uv-set 1` BEFORE PIN — refused (no PIN session).
+      4) Set PIN via CTAP2 (P-256 ECDH + AES-CBC).
+      5) GetInfo: `alwaysUv=true` (auto-enabled on first setPIN), `clientPin=true`.
+      6) lt-rpc `force-uv-get` reads 1.
+      7) lt-rpc `force-uv-set 0` BEFORE getPinToken — refused (token invalidated
+         by setPIN; user has not run getPinToken since).
+      8) getPinToken → pin_token_valid flips to true on the device.
+      9) lt-rpc `force-uv-set 0` succeeds; GetInfo reflects `alwaysUv=false`.
+     10) lt-rpc `force-uv-set 1` succeeds; GetInfo reflects `alwaysUv=true`.
+
+    Does NOT cover: H1 Reset-with-SW1 gating (interactive, deferred to
+    validate-phase6 M4 full chain).  H4 schema-downgrade test (manual:
+    flash old firmware, observe loud factory_reset).
+
+    Requires `cryptography` (P-256 ECDH on the host side) and sudo
+    (lt-rpc HID interface is root-only per nixos/tropic.nix udev).
+    """
+    import hashlib
+    import hmac as pyhmac
+    import subprocess
+    import shutil
+    from cryptography.hazmat.primitives.asymmetric import ec
+
+    from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+
+    LT_RPC = os.environ.get("LT_RPC_PY", os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "lt_rpc.py"))
+
+    def lt(cmd: str, *extra: str) -> tuple[int, str]:
+        """Invoke lt_rpc.py CMD; return (rc, stdout)."""
+        py = shutil.which("python3") or "python3"
+        proc = subprocess.run([py, LT_RPC, cmd, *extra],
+                              capture_output=True, text=True)
+        return proc.returncode, (proc.stdout or "") + (proc.stderr or "")
+
+    def lt_force_uv_get() -> int:
+        rc, out = lt("force-uv-get")
+        if rc != 0:
+            raise RuntimeError(f"force-uv-get rc={rc}: {out.strip()}")
+        # output like "force_uv = 1  (...)"
+        for line in out.splitlines():
+            if line.startswith("force_uv ="):
+                return int(line.split("=")[1].strip().split()[0])
+        raise RuntimeError(f"force-uv-get output unparseable: {out!r}")
+
+    # P-256 helpers (mirror sub_validate_m3)
+    def gen_platform_p256():
+        sk = ec.generate_private_key(ec.SECP256R1())
+        nums = sk.public_key().public_numbers()
+        return sk, nums.x.to_bytes(32, "big"), nums.y.to_bytes(32, "big")
+
+    def derive_shared(plat_priv, ax: bytes, ay: bytes) -> bytes:
+        peer = ec.EllipticCurvePublicNumbers(
+            int.from_bytes(ax, "big"), int.from_bytes(ay, "big"),
+            ec.SECP256R1()).public_key()
+        return hashlib.sha256(plat_priv.exchange(ec.ECDH(), peer)).digest()
+
+    def aes_cbc_enc(key: bytes, pt: bytes) -> bytes:
+        c = Cipher(algorithms.AES(key), modes.CBC(b"\x00" * 16))
+        e = c.encryptor()
+        return e.update(pt) + e.finalize()
+
+    def aes_cbc_dec(key: bytes, ct: bytes) -> bytes:
+        c = Cipher(algorithms.AES(key), modes.CBC(b"\x00" * 16))
+        d = c.decryptor()
+        return d.update(ct) + d.finalize()
+
+    def pin_auth(key: bytes, msg: bytes) -> bytes:
+        return pyhmac.new(key, msg, hashlib.sha256).digest()[:16]
+
+    def cose_p256_pub(x: bytes, y: bytes) -> dict:
+        return {1: 2, 3: -25, -1: 1, -2: x, -3: y}
+
+    def pad_pin(p: bytes) -> bytes:
+        if len(p) > 63: raise ValueError("PIN too long")
+        return p + b"\x00" * (64 - len(p))
+
+    def get_info(dev, cid) -> dict:
+        st, body = cmd_cbor(dev, cid, CTAP2_CMD_GET_INFO)
+        if st != CTAP2_OK:
+            raise RuntimeError(f"GetInfo status 0x{st:02x}")
+        return cbor_decode(body)
+
+    def get_key_agreement(dev, cid) -> tuple[bytes, bytes]:
+        st, body = cmd_cbor(dev, cid, 0x06, cbor_encode({1: 1, 2: 2}))
+        if st != CTAP2_OK:
+            raise RuntimeError(f"getKeyAgreement status 0x{st:02x}")
+        ka = cbor_decode(body)[1]
+        return ka[-2], ka[-3]
+
+    path = find_fido_path()
+    print(f"FIDO HID @ {path}  (lt-rpc via {LT_RPC})")
+    results: list[tuple[str, bool, str]] = []
+
+    def expect(label: str, cond: bool, detail: str = ""):
+        results.append((label, cond, detail))
+
+    # Pre-step — wipe state so we start clean.  Tolerate failure (device
+    # may already be clean).
+    rc, out = lt("slots-reset")
+    if rc != 0:
+        print(f"  (slots-reset rc={rc}; continuing: {out.strip()})")
+
+    with open_dev(path) as dev:
+        new_cid, _ = cmd_init(dev)
+
+        # 1) Baseline GetInfo — alwaysUv must be false (force_uv default 0).
+        try:
+            info = get_info(dev, new_cid)
+            opts = info.get(4, {})
+            cond = (opts.get("alwaysUv") is False
+                    and opts.get("clientPin") is False
+                    and opts.get("up") is True)
+            expect("Baseline GetInfo: alwaysUv=false, clientPin=false, up=true",
+                   cond, f"opts={opts}")
+        except Exception as e:
+            expect("Baseline GetInfo", False, f"{type(e).__name__}: {e}")
+
+        # 2) Initial lt-rpc force-uv-get reads 0.
+        try:
+            v = lt_force_uv_get()
+            expect("Initial lt-rpc force-uv-get == 0", v == 0, f"got {v}")
+        except Exception as e:
+            expect("Initial lt-rpc force-uv-get", False,
+                   f"{type(e).__name__}: {e}")
+
+        # 3) force-uv-set 1 BEFORE PIN — refused.
+        rc, out = lt("force-uv-set", "1")
+        expect("force-uv-set 1 without PIN session → refused",
+               rc != 0,
+               f"rc={rc} stdout={out.strip()[:120]}")
+
+        # 4) Set PIN via CTAP2 (P-256 ECDH).
+        try:
+            auth_x, auth_y = get_key_agreement(dev, new_cid)
+            sk, px, py = gen_platform_p256()
+            shared = derive_shared(sk, auth_x, auth_y)
+            plat_cose = cose_p256_pub(px, py)
+
+            pin = b"1234"
+            new_pin_enc = aes_cbc_enc(shared, pad_pin(pin))
+            req = {1: 1, 2: 3, 3: plat_cose,
+                   4: pin_auth(shared, new_pin_enc), 5: new_pin_enc}
+            st, _ = cmd_cbor(dev, new_cid, 0x06, cbor_encode(req))
+            expect("SetPin '1234' via CTAP2", st == CTAP2_OK,
+                   f"status=0x{st:02x}")
+        except Exception as e:
+            expect("SetPin", False, f"{type(e).__name__}: {e}")
+            print_summary(results,
+                          title="Phase 6 M2 — Force-UV + alwaysUv + auto-enable",
+                          short_name="Phase 6 M2")
+            return 1
+
+        # 5) GetInfo after setPin — alwaysUv=true (auto-enabled!), clientPin=true.
+        try:
+            info = get_info(dev, new_cid)
+            opts = info.get(4, {})
+            cond = (opts.get("alwaysUv") is True
+                    and opts.get("clientPin") is True)
+            expect("GetInfo after setPin: alwaysUv=true (auto-enabled), clientPin=true",
+                   cond, f"opts={opts}")
+        except Exception as e:
+            expect("GetInfo after setPin", False,
+                   f"{type(e).__name__}: {e}")
+
+        # 6) lt-rpc force-uv-get reads 1.
+        try:
+            v = lt_force_uv_get()
+            expect("force-uv-get == 1 after auto-enable", v == 1, f"got {v}")
+        except Exception as e:
+            expect("force-uv-get after auto-enable", False,
+                   f"{type(e).__name__}: {e}")
+
+        # 7) force-uv-set BEFORE getPinToken — refused (token invalidated by setPin).
+        rc, out = lt("force-uv-set", "0")
+        expect("force-uv-set 0 before getPinToken → refused",
+               rc != 0,
+               f"rc={rc} stdout={out.strip()[:120]}")
+
+        # 8) getPinToken — makes pin_token_valid=true on device.
+        try:
+            # Fresh key agreement (firmware rotated keypair after setPin).
+            auth_x, auth_y = get_key_agreement(dev, new_cid)
+            sk, px, py = gen_platform_p256()
+            shared = derive_shared(sk, auth_x, auth_y)
+            plat_cose = cose_p256_pub(px, py)
+
+            pin_hash_16 = hashlib.sha256(b"1234").digest()[:16]
+            pin_hash_enc = aes_cbc_enc(shared, pin_hash_16)
+            req = {1: 1, 2: 5, 3: plat_cose, 6: pin_hash_enc}
+            st, body = cmd_cbor(dev, new_cid, 0x06, cbor_encode(req))
+            token_enc = cbor_decode(body).get(2) if st == CTAP2_OK else None
+            ok = (st == CTAP2_OK and isinstance(token_enc, bytes)
+                  and len(token_enc) == 32)
+            expect("getPinToken → 32 B token (activates PIN session)",
+                   ok, f"status=0x{st:02x}")
+        except Exception as e:
+            expect("getPinToken", False, f"{type(e).__name__}: {e}")
+
+        # 9) force-uv-set 0 — now succeeds.
+        rc, out = lt("force-uv-set", "0")
+        expect("force-uv-set 0 WITH PIN session → success",
+               rc == 0, f"rc={rc} stdout={out.strip()[:120]}")
+        try:
+            v = lt_force_uv_get()
+            info = get_info(dev, new_cid)
+            cond = (v == 0 and info.get(4, {}).get("alwaysUv") is False)
+            expect("After force-uv-set 0: GET=0 AND alwaysUv=false",
+                   cond,
+                   f"get={v} alwaysUv={info.get(4, {}).get('alwaysUv')}")
+        except Exception as e:
+            expect("Verify force_uv=0 state", False,
+                   f"{type(e).__name__}: {e}")
+
+        # 10) force-uv-set 1 — succeeds (token still valid).
+        rc, out = lt("force-uv-set", "1")
+        expect("force-uv-set 1 → toggle back on",
+               rc == 0, f"rc={rc} stdout={out.strip()[:120]}")
+        try:
+            v = lt_force_uv_get()
+            info = get_info(dev, new_cid)
+            cond = (v == 1 and info.get(4, {}).get("alwaysUv") is True)
+            expect("After force-uv-set 1: GET=1 AND alwaysUv=true",
+                   cond,
+                   f"get={v} alwaysUv={info.get(4, {}).get('alwaysUv')}")
+        except Exception as e:
+            expect("Verify force_uv=1 state", False,
+                   f"{type(e).__name__}: {e}")
+
+    print_summary(results,
+                  title="Phase 6 M2 — Force-UV + alwaysUv + auto-enable",
+                  short_name="Phase 6 M2")
+    return 0 if all(ok for _, ok, _ in results) else 1
+
+
 def sub_validate_phase6_m1(args) -> int:
     """Phase 6 M1 validation — real SW1 user-presence (interactive).
 
@@ -1383,6 +1625,8 @@ def main() -> int:
                                help="Phase 5 M5 — authenticatorReset (CTAP2 0x07)")
     p_val_p6m1 = sub.add_parser("validate-phase6-m1",
                                 help="Phase 6 M1 — SW1 user-presence + LED (interactive)")
+    p_val_p6m2 = sub.add_parser("validate-phase6-m2",
+                                help="Phase 6 M2 — Force-UV + alwaysUv + auto-enable")
 
     p_init.set_defaults(func=sub_init)
     p_ping.set_defaults(func=sub_ping)
@@ -1395,6 +1639,7 @@ def main() -> int:
     p_val_m3.set_defaults(func=sub_validate_m3)
     p_val_m5.set_defaults(func=sub_validate_m5)
     p_val_p6m1.set_defaults(func=sub_validate_phase6_m1)
+    p_val_p6m2.set_defaults(func=sub_validate_phase6_m2)
 
     args = parser.parse_args()
     return args.func(args)

@@ -51,6 +51,10 @@
 #define LT_RPC_CMD_SLOTS_META     0x13u  /* req: 1 B slot_idx; resp: 50 B (1 alg + 1 flags + 32 rpHash + 16 nonce) */
 #define LT_RPC_CMD_SLOTS_RESET    0x14u  /* req: empty;  resp: empty.  WIPES EVERYTHING. */
 
+/* Phase 6 M2 — Force-UV flag accessors. */
+#define LT_RPC_CMD_FORCE_UV_GET   0x15u  /* req: empty;  resp: 1 B (0=off, 1=on). */
+#define LT_RPC_CMD_FORCE_UV_SET   0x16u  /* req: 1 B (0|1);  resp: empty. */
+
 /* Reserved: device-emitted error response */
 #define LT_RPC_CMD_ERROR        0x3Fu
 

@@ -380,6 +380,10 @@ static int handle_set_pin(cbor_reader_t *r, size_t n_keys, uint8_t *resp, size_t
         return 1;
     }
 
+    /* Phase 6 M2 — capture pre-state for the "first setPIN" detection
+     * before slots_global_pin_set flips s_pin_set to 1. */
+    int was_pin_set = pin_is_set();
+
     /* Hash and store (M3 layer: SHA-256(PIN)[:16] in R-mem). */
     uint8_t pin_hash[32];
     sha256_Raw(pin_padded, (uint32_t) pin_len, pin_hash);
@@ -399,6 +403,16 @@ static int handle_set_pin(cbor_reader_t *r, size_t n_keys, uint8_t *resp, size_t
     if (md_rc != 0) {
         resp[0] = CTAP2_ERR_OTHER;
         return 1;
+    }
+
+    /* Phase 6 M2 — auto-enable Force-UV on the no-PIN → PIN-set
+     * transition.  Reasoning: a user who set a PIN signalled "I want
+     * PIN required"; honour that intent without making them run a
+     * separate vendor command.  More secure than Yubikey's default-off
+     * Force-UV.  User can still opt out via the lt-rpc `force-uv-set
+     * 0` vendor command (PIN-gated).  See docs/PHASE-6-PLAN.md §4.4. */
+    if (!was_pin_set) {
+        (void) slots_force_uv_set(1);
     }
 
     /* Forward secrecy: rotate ephemeral keypair. */

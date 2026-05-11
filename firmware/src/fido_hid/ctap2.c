@@ -18,6 +18,8 @@
 #include "proto.h"
 #include "pin.h"
 #include "credstore.h"
+#include "slots.h"
+#include "user_presence.h"
 
 #include <stdint.h>
 #include <stddef.h>
@@ -94,16 +96,23 @@ static int build_get_info(uint8_t *resp, size_t resp_max)
     cbor_write_uint(&w, 3);
     cbor_write_byte_string(&w, NIXTROPIC_AAGUID, sizeof NIXTROPIC_AAGUID);
 
-    /* key 4 → options. Canonical text-key order: rk, up, plat, clientPin */
+    /* key 4 → options.  CTAP2.1 canonical text-key order (length-then-lex
+     * on encoded bytes): rk (2), up (2), plat (4), alwaysUv (8),
+     * clientPin (9). */
     cbor_write_uint(&w, 4);
-    cbor_write_map_header(&w, 4);
+    cbor_write_map_header(&w, 5);
 
     cbor_write_text(&w, "rk");
     cbor_write_bool(&w, true);           /* Phase 5 M2: resident keys supported (TROPIC01 R-mem) */
     cbor_write_text(&w, "up");
-    cbor_write_bool(&w, true);           /* user-presence stubbed true (PROJECT.md decision #3) */
+    cbor_write_bool(&w, true);           /* Phase 6 M1: real user-presence via SW1 / PH3 */
     cbor_write_text(&w, "plat");
     cbor_write_bool(&w, false);          /* not a platform authenticator */
+    cbor_write_text(&w, "alwaysUv");
+    cbor_write_bool(&w, slots_force_uv_get() != 0);
+                                         /* Phase 6 M2: Force-UV — when true, signing ops require
+                                          * pinAuth regardless of RP's `userVerification` hint.
+                                          * Auto-enabled on first setPIN; togglable via lt-rpc. */
     cbor_write_text(&w, "clientPin");
     cbor_write_bool(&w, pin_is_set());   /* Phase 5 M3: PIN protocol supported; "true" = PIN currently set */
 
@@ -180,23 +189,37 @@ int fido_hid_cbor_dispatch(const uint8_t *req, size_t req_len,
     case CTAP2_CMD_CLIENT_PIN:
         return pin_handle_cbor(&req[1], req_len - 1u, resp, resp_max);
     case CTAP2_CMD_RESET: {
-        /* CTAP2.1 §6.8: authenticatorReset must be issued within 10
-         * seconds of power-up. After that window, refuse.
+        /* CTAP2.1 §6.8 + Phase 6 M2 tightening (docs/PHASE-6-PLAN.md
+         * §4.7, H1 defense).
          *
-         * HAL_GetTick() returns ms since SysTick reset (boot). It
-         * monotonically increases until rollover at ~49.7 days — well
-         * beyond our 10 s window check.
+         * Three gates depending on device state:
          *
-         * User-presence is stub-true per PROJECT.md §2 decision #3
-         * (TS1302 has no button). Phase 6 daughter board will gate
-         * Reset on a real touch event.
+         *   1. 10-second post-boot window (always — primary host-software
+         *      protection per spec).
+         *   2. If any state exists (PIN set OR ≥1 credential registered),
+         *      additionally require a fresh SW1 press within 10 s.  This
+         *      is the anti-passive-physical gate: an attacker who briefly
+         *      gets your unplugged dongle can no longer Reset it just by
+         *      replugging within the 10 s window — they'd need to also
+         *      hold it long enough to press the button.
+         *   3. Virgin device (no PIN, no creds) skips the SW1 requirement
+         *      because there's nothing to defend.  This avoids forcing
+         *      first-time users to press SW1 just to bootstrap.
          *
-         * The reset wipes ALL credentials, PIN state, and M&D state.
-         * Recovery from RP side: the user must re-register all
-         * credentials. */
+         * Reset wipes ALL credentials, PIN state, M&D state, AND the
+         * Force-UV flag.  Recovery from RP side: user re-registers
+         * all credentials. */
         if (HAL_GetTick() > RESET_WINDOW_MS) {
             resp[0] = CTAP2_ERR_NOT_ALLOWED;
             return 1;
+        }
+        int state_exists = pin_is_set() || (slots_count_used() > 0);
+        if (state_exists) {
+            up_result_t up = user_presence_check(10000u);
+            if (up != UP_OK) {
+                resp[0] = CTAP2_ERR_OPERATION_DENIED;
+                return 1;
+            }
         }
         if (credstore_factory_reset() != 0) {
             resp[0] = CTAP2_ERR_OTHER;

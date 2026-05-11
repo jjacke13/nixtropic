@@ -44,6 +44,11 @@
 #define GLOBAL_MD_TAG_OFF        33   /* 32 B */
 #define GLOBAL_MD_CI_OFF         65   /* 256 B */
 #define GLOBAL_MD_END_OFF       (GLOBAL_MD_CI_OFF + SLOTS_MD_CI_LEN)  /* 321 */
+/* Force-UV flag (Phase 6 M2).  Placed past v2's M&D end so v2 firmware
+ * cannot accidentally misinterpret this byte as part of the M&D ci[]
+ * array — coupled with the magic bump below, downgrade attempts fail
+ * loudly (factory_reset) rather than silently corrupting. */
+#define GLOBAL_FORCE_UV_OFF     321
 
 #define CRED_MAGIC_OFF            0
 #define CRED_MAGIC_LEN            4
@@ -53,15 +58,33 @@
 #define CRED_RP_HASH_OFF          8
 #define CRED_NONCE_OFF            40
 
-/* Magic byte values. */
-static const uint8_t GLOBAL_MAGIC[GLOBAL_MAGIC_LEN] = { 'N', 'X', '5', 'K' };
-static const uint8_t CRED_MAGIC[CRED_MAGIC_LEN]     = { 'N', 'X', 'C', 'R' };
+/* Magic byte values.
+ *
+ * Phase 6 M2 bumps the global magic from "NX5K" → "NX6K".  Rationale
+ * (docs/PHASE-6-PLAN.md §4.3 H4 defense):
+ *
+ *   - Phase 5 firmware reading Phase 6 R-mem sees "NX6K", does NOT
+ *     recognise it, falls into the first-boot path → factory_reset.
+ *     Loud failure ("device was wiped") instead of silently misreading
+ *     the new force_uv byte as M&D ci[].
+ *   - Phase 6 firmware reading Phase 5 R-mem sees "NX5K", recognises
+ *     it as the legacy v2 magic, migrates in-RAM (preserving PIN +
+ *     M&D state + credentials), writes back with the new magic.
+ *
+ * Per-credential magic is unchanged across the upgrade — cred slots
+ * (R-mem 1..32) didn't grow. */
+static const uint8_t GLOBAL_MAGIC[GLOBAL_MAGIC_LEN]        = { 'N', 'X', '6', 'K' };
+static const uint8_t GLOBAL_MAGIC_LEGACY[GLOBAL_MAGIC_LEN] = { 'N', 'X', '5', 'K' };
+static const uint8_t CRED_MAGIC[CRED_MAGIC_LEN]            = { 'N', 'X', 'C', 'R' };
 
 /* schema_version 1 = M1/M3 (256 B layout, no M&D fields)
- * schema_version 2 = M4 (384 B layout, M&D state at offsets 31..320) */
-#define SLOTS_SCHEMA_VERSION      2u
-/* M4 grew global payload from 256 → 384 to fit M&D fields. */
-#define SLOTS_GLOBAL_PAYLOAD_LEN  384u
+ * schema_version 2 = M4 (384 B layout, M&D state at offsets 31..320)
+ * schema_version 3 = Phase 6 M2 (392 B layout, +1 B force_uv at 321) */
+#define SLOTS_SCHEMA_VERSION      3u
+#define SLOTS_SCHEMA_VERSION_V2   2u
+/* Phase 6 M2 grew global payload from 384 → 392 (rounded to 8-byte
+ * alignment past the new force_uv byte at offset 321). */
+#define SLOTS_GLOBAL_PAYLOAD_LEN  392u
 #define SLOTS_CRED_PAYLOAD_LEN    SLOTS_RMEM_PER_CRED_SIZE
 
 /* Cached state — populated in slots_init from R-mem slot 0. */
@@ -106,11 +129,13 @@ static uint8_t  s_md_active;
 static uint8_t  s_md_next_slot;
 static uint8_t  s_md_tag[SLOTS_MD_TAG_LEN];
 static uint8_t  s_md_ci[SLOTS_MD_CI_LEN];
+/* M2 (Phase 6) Force-UV flag. */
+static uint8_t  s_force_uv;
 
-/* Write the global-state buffer back to R-mem slot 0. Always writes the
- * full 384 B (bumped from 256 in M4 for the M&D ci[] array) for layout
- * stability across firmware revisions. The buffer mirrors the cached
- * state in s_pin_* and s_md_*. */
+/* Write the global-state buffer back to R-mem slot 0.  Always writes
+ * the full 392 B (Phase 6 M2 layout, bumped from 384 in v2 to add the
+ * force_uv byte at offset 321).  The buffer mirrors the cached state
+ * in s_pin_*, s_md_*, and s_force_uv. */
 static int write_global(uint32_t bitmap)
 {
     uint8_t buf[SLOTS_GLOBAL_PAYLOAD_LEN];
@@ -133,15 +158,24 @@ static int write_global(uint32_t bitmap)
     memcpy(&buf[GLOBAL_MD_TAG_OFF], s_md_tag, SLOTS_MD_TAG_LEN);
     memcpy(&buf[GLOBAL_MD_CI_OFF],  s_md_ci,  SLOTS_MD_CI_LEN);
 
+    /* Force-UV flag (Phase 6 M2). */
+    buf[GLOBAL_FORCE_UV_OFF] = (s_force_uv != 0u) ? 1u : 0u;
+
     /* Erase before write — R-mem slots are write-once until erased. */
     (void) tropic_rmem_erase(SLOTS_RMEM_GLOBAL_SLOT);
     return tropic_rmem_write(SLOTS_RMEM_GLOBAL_SLOT, buf, sizeof buf);
 }
 
-/* Read & validate the global-state slot. Returns 0 and populates
- * *out_bitmap on success; -1 if magic mismatch (caller should treat as
- * first boot); -2 on chip read error; -3 if schema is older than M4
- * (caller should factory_reset to migrate). */
+/* Read & validate the global-state slot.  Returns:
+ *   0  = success, schema v3 ("NX6K"), nothing to do.
+ *   1  = success, legacy v2 ("NX5K") — caller MUST write_global() to
+ *        migrate to v3 layout before returning to user code.  In-RAM
+ *        state is already populated; v2 had no force_uv byte so the
+ *        flag defaults to 0.
+ *  -1  = magic mismatch (caller should treat as first boot).
+ *  -2  = chip read error.
+ *  -3  = recognised magic but unsupported schema (caller should
+ *        factory_reset to migrate; e.g. very old v1 firmware state). */
 static int read_global(uint32_t *out_bitmap)
 {
     uint8_t  buf[SLOTS_GLOBAL_PAYLOAD_LEN];
@@ -151,16 +185,29 @@ static int read_global(uint32_t *out_bitmap)
     if (rc != 0 || got < (GLOBAL_PIN_RETRIES_OFF + 4u)) {
         return -2;
     }
-    if (memcmp(&buf[GLOBAL_MAGIC_OFF], GLOBAL_MAGIC, GLOBAL_MAGIC_LEN) != 0) {
+
+    int is_legacy_v2 = 0;
+    if (memcmp(&buf[GLOBAL_MAGIC_OFF], GLOBAL_MAGIC, GLOBAL_MAGIC_LEN) == 0) {
+        /* Current v3 magic. */
+    } else if (memcmp(&buf[GLOBAL_MAGIC_OFF], GLOBAL_MAGIC_LEGACY,
+                      GLOBAL_MAGIC_LEN) == 0) {
+        /* Phase 5 v2 magic — accept and migrate.  Preserves user's PIN
+         * + M&D state + credentials across the Phase 6 upgrade. */
+        is_legacy_v2 = 1;
+    } else {
         return -1;
     }
 
-    /* Schema version check. M4 requires schema >= 2 (M&D fields at
-     * offsets 31..320). Older schemas are migrated by factory_reset. */
     uint16_t schema = ((uint16_t) buf[GLOBAL_SCHEMA_OFF] << 8) |
                        (uint16_t) buf[GLOBAL_SCHEMA_OFF + 1];
-    if (schema < 2u) {
-        return -3;
+    if (is_legacy_v2) {
+        if (schema != SLOTS_SCHEMA_VERSION_V2) {
+            return -3;  /* unknown schema under legacy magic */
+        }
+    } else {
+        if (schema != SLOTS_SCHEMA_VERSION) {
+            return -3;  /* future schema we don't know how to read */
+        }
     }
 
     *out_bitmap = be32_load(&buf[GLOBAL_BITMAP_OFF]);
@@ -170,7 +217,7 @@ static int read_global(uint32_t *out_bitmap)
     memcpy(s_pin_hash, &buf[GLOBAL_PIN_HASH_OFF], SLOTS_PIN_HASH_LEN);
     s_pin_retries = be32_load(&buf[GLOBAL_PIN_RETRIES_OFF]);
 
-    /* M&D state (M4+). Only valid if schema >= 2 AND we read enough bytes. */
+    /* M&D state (M4+). Only valid if we read enough bytes. */
     if (got >= GLOBAL_MD_END_OFF) {
         s_md_active    = buf[GLOBAL_MD_ACTIVE_OFF] & 0x01u;
         s_md_next_slot = buf[GLOBAL_MD_NEXT_SLOT_OFF];
@@ -183,7 +230,14 @@ static int read_global(uint32_t *out_bitmap)
         memset(s_md_ci,  0, SLOTS_MD_CI_LEN);
     }
 
-    return 0;
+    /* Force-UV (Phase 6 M2+).  v2 layout has no such byte; default 0. */
+    if (is_legacy_v2 || got <= GLOBAL_FORCE_UV_OFF) {
+        s_force_uv = 0u;
+    } else {
+        s_force_uv = (buf[GLOBAL_FORCE_UV_OFF] != 0u) ? 1u : 0u;
+    }
+
+    return is_legacy_v2 ? 1 : 0;
 }
 
 /* Write a fully-formed per-credential R-mem entry. */
@@ -275,9 +329,9 @@ int slots_init(void)
         }
         bitmap = 0;
     } else if (rc == -3) {
-        /* Old schema (M1/M3 wrote schema=1). Migration: factory_reset to
-         * fresh M4 layout. Existing PIN is lost — acceptable in Phase 5
-         * dev (user re-sets via fido2-token -S). */
+        /* Recognised magic but unsupported schema (e.g. very old M1/M3
+         * v1 state, or an unknown future v4).  Force factory_reset to
+         * the current layout.  Existing PIN is lost — acceptable. */
         if (write_global(0) != 0) {
             return -3;
         }
@@ -289,8 +343,20 @@ int slots_init(void)
         s_md_next_slot = 0;
         memset(s_md_tag, 0, sizeof s_md_tag);
         memset(s_md_ci,  0, sizeof s_md_ci);
+        s_force_uv = 0;
+    } else if (rc == 1) {
+        /* Phase 5 v2 layout — migrate IN PLACE to v3 (preserve PIN +
+         * M&D + creds + bitmap; force_uv defaults to 0 because v2 had
+         * no such concept).  Orphan-scrub before the migration write so
+         * stale bitmap bits don't survive into v3. */
+        uint32_t scrubbed = bitmap;
+        orphan_scrub(&scrubbed);
+        if (write_global(scrubbed) != 0) {
+            return -4;
+        }
+        bitmap = scrubbed;
     } else {
-        /* Existing state — orphan-scrub. */
+        /* Existing v3 state — orphan-scrub. */
         uint32_t scrubbed = bitmap;
         orphan_scrub(&scrubbed);
         if (scrubbed != bitmap) {
@@ -465,8 +531,12 @@ int slots_factory_reset(void)
     for (uint16_t i = 1u; i <= SLOTS_MAX; ++i) {
         (void) tropic_rmem_erase(i);
     }
-    /* Reset cached PIN + M&D state to defaults BEFORE write_global so
-     * the persisted layout reflects "no PIN, no M&D". */
+    /* Reset cached PIN + M&D + Force-UV state to defaults BEFORE
+     * write_global so the persisted layout reflects "no PIN, no M&D,
+     * Force-UV off".  Force-UV-after-Reset = off is intentional: Reset
+     * wipes the device to a factory state; the user can re-enable
+     * Force-UV by setting a PIN again (auto-enable fires) or via the
+     * lt-rpc vendor command. */
     s_pin_set = 0;
     memset(s_pin_hash, 0, sizeof s_pin_hash);
     s_pin_retries = 0;
@@ -474,6 +544,7 @@ int slots_factory_reset(void)
     s_md_next_slot = 0;
     memset(s_md_tag, 0, sizeof s_md_tag);
     memset(s_md_ci,  0, sizeof s_md_ci);
+    s_force_uv = 0;
     if (write_global(0) != 0) {
         s_bitmap = 0;
         s_initted = 0;
@@ -575,5 +646,24 @@ int slots_global_pin_reset_retries(void)
         if (slots_init() != 0) return -1;
     }
     s_pin_retries = SLOTS_PIN_RETRIES_INITIAL;
+    return write_global(s_bitmap);
+}
+
+/* ===== Force-UV accessors (Phase 6 M2) ===== */
+
+int slots_force_uv_get(void)
+{
+    if (!s_initted) {
+        if (slots_init() != 0) return 0;
+    }
+    return (s_force_uv != 0u) ? 1 : 0;
+}
+
+int slots_force_uv_set(int value)
+{
+    if (!s_initted) {
+        if (slots_init() != 0) return -1;
+    }
+    s_force_uv = (value != 0) ? 1u : 0u;
     return write_global(s_bitmap);
 }
