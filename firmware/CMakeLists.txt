@@ -215,6 +215,9 @@ set(APP_SOURCES
     src/usb/cdc_io.c
     src/usb/usb_ccid.c
     src/ccid/apdu_dispatch.c
+    src/openpgp/openpgp_aid.c
+    src/openpgp/openpgp_state.c
+    src/openpgp/openpgp_applet.c
     src/cdc_protocol/protocol.c
     src/cdc_protocol/parser.c
     src/cdc_protocol/hex.c
