@@ -721,12 +721,16 @@ def sub_validate_m5(args) -> int:
                   "validate-phase5-m5 within 10 s of boot.")
             results.append(("authenticatorReset within 10 s window",
                             False, f"status=0x{status:02x} (window expired)"))
-            print_summary(results)
+            print_summary(results,
+                          title="Phase 5 M5 — authenticatorReset (CTAP2 cmd 0x07)",
+                          short_name="Phase 5 M5")
             return 1
         results.append(("authenticatorReset succeeded (within 10 s window)",
                         ok_reset, f"status=0x{status:02x}"))
         if not ok_reset:
-            print_summary(results)
+            print_summary(results,
+                          title="Phase 5 M5 — authenticatorReset (CTAP2 cmd 0x07)",
+                          short_name="Phase 5 M5")
             return 1
 
         # 2) GetInfo: clientPin == false (Reset wiped the PIN)
@@ -744,7 +748,9 @@ def sub_validate_m5(args) -> int:
         results.append(("After Reset: GetKeyAgreement still works", ok,
                         f"status=0x{status:02x}"))
         if not ok:
-            print_summary(results)
+            print_summary(results,
+                          title="Phase 5 M5 — authenticatorReset (CTAP2 cmd 0x07)",
+                          short_name="Phase 5 M5")
             return 1
 
         # 4) setPin works (proves M&D slots are re-initializable after reset)
@@ -783,22 +789,10 @@ def sub_validate_m5(args) -> int:
                         info.get(4, {}).get("clientPin") is True,
                         f"clientPin={info.get(4, {}).get('clientPin')!r}"))
 
-    print()
-    print("═" * 63)
-    print("  Phase 5 M5 — authenticatorReset (CTAP2 cmd 0x07)")
-    print("═" * 63)
-    n_ok = 0
-    for i, (name, ok, detail) in enumerate(results, 1):
-        verdict = "PASS" if ok else "FAIL"
-        print(f"[{i}/{len(results)}] {name:<56s} {verdict}")
-        if not ok and detail:
-            print(f"        {detail}")
-        else:
-            n_ok += 1
-    print()
-    print(f"{n_ok}/{len(results)} PASS — Phase 5 M5 "
-          f"{'validated' if n_ok == len(results) else 'FAILED'}.")
-    return 0 if n_ok == len(results) else 1
+    print_summary(results,
+                  title="Phase 5 M5 — authenticatorReset (CTAP2 cmd 0x07)",
+                  short_name="Phase 5 M5")
+    return 0 if all(ok for _, ok, _ in results) else 1
 
 
 def sub_validate_m3(args) -> int:
@@ -1112,10 +1106,12 @@ def sub_validate_m3(args) -> int:
     return 0 if all(ok for _, ok, _ in results) else 1
 
 
-def print_summary(results):
+def print_summary(results,
+                  title: str = "Phase 5 M3 — ClientPIN protocol v1 (P-256 + AES-CBC + HMAC)",
+                  short_name: str = "Phase 5 M3"):
     print()
     print("═" * 63)
-    print("  Phase 5 M3 — ClientPIN protocol v1 (P-256 + AES-CBC + HMAC)")
+    print(f"  {title}")
     print("═" * 63)
     n_ok = 0
     for i, (name, ok, detail) in enumerate(results, 1):
@@ -1126,7 +1122,7 @@ def print_summary(results):
         else:
             n_ok += 1
     print()
-    print(f"{n_ok}/{len(results)} PASS — Phase 5 M3 "
+    print(f"{n_ok}/{len(results)} PASS — {short_name} "
           f"{'validated' if n_ok == len(results) else 'FAILED'}.")
 
 
