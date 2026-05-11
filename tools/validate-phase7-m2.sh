@@ -94,11 +94,19 @@ echo "6/6  gpg --card-status (end-to-end via scdaemon + pcscd)..."
 if ! command -v gpg >/dev/null 2>&1; then
   echo "  ⚠ gpg not in PATH; skipping (install gnupg to enable this check)"
 else
-  GPG_OUT=$(timeout 10 gpg --card-status 2>&1 || true)
+  # Run gpg as the original (non-root) user so it picks up their
+  # ~/.gnupg/scdaemon.conf instead of writing a fresh /root/.gnupg.
+  # The user is presumed to have `disable-ccid` set there so scdaemon
+  # uses pcsc-lite (which sees our reader) rather than its built-in
+  # USB CCID driver (which doesn't know cafe:4001).
+  GPG_AS_USER=""
+  if [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != "root" ]; then
+    GPG_AS_USER="sudo -u $SUDO_USER -E"
+  fi
+
+  GPG_OUT=$(timeout 10 $GPG_AS_USER gpg --card-status 2>&1 || true)
   if echo "$GPG_OUT" | grep -qiE "D27600012401.*4E58|application id.*d27600012401"; then
     echo "  ✓ gpg --card-status sees our card (AID D276000124010304 4E58)"
-    # Algorithm attributes — best-effort grep; not failing if missing
-    # since gpg formatting varies across versions.
     if echo "$GPG_OUT" | grep -qi "ed25519"; then
       echo "  ✓ algorithm attributes show ed25519"
     fi
@@ -108,6 +116,17 @@ else
   else
     echo "  ✗ gpg --card-status doesn't see our card."
     echo "$GPG_OUT" | sed 's/^/      /'
+    echo ""
+    echo "  Diagnostic — most likely cause:"
+    echo "    scdaemon is using its INTERNAL CCID driver (which doesn't"
+    echo "    know about cafe:4001) instead of pcsc-lite (which does)."
+    echo ""
+    echo "  Fix: add the following to ~/.gnupg/scdaemon.conf:"
+    echo ""
+    echo "      disable-ccid"
+    echo "      pcsc-shared"
+    echo ""
+    echo "  Then: gpgconf --reload scdaemon  AND re-run validate."
     overall_rc=8
   fi
 fi
