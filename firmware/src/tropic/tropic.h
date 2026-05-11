@@ -154,4 +154,17 @@ int tropic_mcounter_update(uint8_t idx);
  */
 int tropic_mcounter_get(uint8_t idx, uint32_t *out_value);
 
+/**
+ * @brief Execute one MAC-and-Destroy probe on slot `idx` (0..127).
+ *        See docs/PHASE-5-M4-DESIGN.md for semantics — a slot must be
+ *        called 3 times during init (init/consume/re-init), and exactly
+ *        once on a wrong-PIN attempt (consume → permanently destroyed).
+ *
+ * @param idx       M&D slot index (0..127)
+ * @param data_out  Input to chip (32 B)
+ * @param data_in   Output from chip (32 B) — caller-allocated
+ * @return 0 on success; negative libtropic error code otherwise.
+ */
+int tropic_mac_and_destroy(uint8_t idx, const uint8_t *data_out, uint8_t *data_in);
+
 #endif /* NIXTROPIC_TROPIC_H */

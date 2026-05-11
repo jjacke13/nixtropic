@@ -192,4 +192,60 @@ int slots_global_pin_dec_retries(uint32_t *out_new);
  */
 int slots_global_pin_reset_retries(void);
 
+/* ===== Phase 5 M4: MAC-and-Destroy state =====
+ *
+ * Layout in R-mem slot 0 (extends M3 PIN state). See
+ * docs/PHASE-5-M4-DESIGN.md §"R-mem slot 0 layout (M4 extension)".
+ *
+ *   [31]      md_active (0 = not initialized, 1 = active)
+ *   [32]      md_next_slot (0..7) — next slot index to consume
+ *   [33..64]  md_tag (32 B) — verification tag
+ *   [65..320] md_ci (8 * 32 B = 256 B) — encrypted master_secret per slot
+ *
+ * Schema version 2 (was 1 in M1/M3). Old schema=1 state is migrated by
+ * factory_reset (acceptable in Phase 5 dev — user re-sets PIN). */
+
+#define SLOTS_MD_ROUNDS              8u
+#define SLOTS_MD_SLOT_SIZE          32u
+#define SLOTS_MD_CI_LEN            (SLOTS_MD_ROUNDS * SLOTS_MD_SLOT_SIZE)
+#define SLOTS_MD_TAG_LEN            32u
+
+/**
+ * @brief Read M&D state.
+ *
+ * @param out_active        1 = M&D slots are initialized (PIN set), 0 = not.
+ * @param out_next_slot     Next slot to consume on attempt (0..ROUNDS).
+ *                          When equal to ROUNDS, no slots remaining
+ *                          (PIN exhausted at HW level — needs factory_reset).
+ * @param out_tag           32 B verification tag.
+ * @param out_ci            256 B encrypted secrets array.
+ * @return 0 on success; -1 on chip error.
+ */
+int slots_global_md_get(int *out_active,
+                        uint8_t *out_next_slot,
+                        uint8_t out_tag[SLOTS_MD_TAG_LEN],
+                        uint8_t out_ci[SLOTS_MD_CI_LEN]);
+
+/**
+ * @brief Persist M&D state to R-mem slot 0.
+ *
+ * @param active      1 = M&D active.
+ * @param next_slot   Next slot pointer (0..ROUNDS).
+ * @param tag         Verification tag.
+ * @param ci          256 B encrypted secrets array.
+ * @return 0 on success; -1 on chip error.
+ */
+int slots_global_md_set(int active,
+                        uint8_t next_slot,
+                        const uint8_t tag[SLOTS_MD_TAG_LEN],
+                        const uint8_t ci[SLOTS_MD_CI_LEN]);
+
+/**
+ * @brief Advance the M&D next-slot pointer by one (commit attempt
+ *        BEFORE doing the M&D op — power-loss-safe). Writes R-mem.
+ *        Sets *out_new to the value AFTER increment.
+ * @return 0 on success; -1 on chip error.
+ */
+int slots_global_md_advance(uint8_t *out_new);
+
 #endif /* NIXTROPIC_FIDO_HID_SLOTS_H */

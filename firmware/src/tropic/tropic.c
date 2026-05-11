@@ -304,6 +304,16 @@ int tropic_mcounter_get(uint8_t idx, uint32_t *out_value)
     return (r == LT_OK) ? 0 : -(int) r;
 }
 
+int tropic_mac_and_destroy(uint8_t idx, const uint8_t *data_out, uint8_t *data_in)
+{
+    if (idx > 127u || data_out == NULL || data_in == NULL) return -1;
+    if (tropic_l3_session_ensure() != 0) return -1;
+    lt_ret_t r = lt_mac_and_destroy(&s_handle,
+                                    (lt_mac_and_destroy_slot_t) idx,
+                                    data_out, data_in);
+    return (r == LT_OK) ? 0 : -(int) r;
+}
+
 /* ----- L2 sweep ----- */
 
 static int read_chip_id(void)

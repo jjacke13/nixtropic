@@ -387,6 +387,21 @@ let
     '';
   };
 
+  # Phase 5 M4 — MAC-and-Destroy-backed PIN retry counter. M4 is
+  # internal hardening (TROPIC01 hardware enforces 8-attempt limit
+  # via M&D slot consumption). CTAP2 surface unchanged; validate-m4
+  # runs validate-m3 as regression + stress-tests re-setPin.
+  validate-phase5-m4 = writeShellApplication {
+    name = "nixtropic-validate-phase5-m4";
+    runtimeInputs = [ py usbutils coreutils gnugrep ];
+    text = ''
+      set -uo pipefail
+      export LT_RPC_PY="${../tools/lt_rpc.py}"
+      export FIDO2_PY="${../tools/fido2_test.py}"
+      exec ${../tools/validate-phase5-m4.sh} "$@"
+    '';
+  };
+
   # Phase 1 — flash-and-validate: orchestrates DFU flash + immediate validate.
   # Solves the "boot markers emit only once" gotcha: after flash, the
   # firmware re-boots fresh and emits its boot block; the validator captures
@@ -640,6 +655,57 @@ let
           echo ""
           export LT_RPC_PY="${../tools/lt_rpc.py}"
           exec ${../tools/validate-phase3.sh}
+        '';
+      };
+
+  # Phase 5 M4 — flash-and-validate-phase5-m4: DFU flash + M4 regression suite.
+  flash-and-validate-phase5-m4 =
+    if firmware == null then
+      writeShellApplication {
+        name = "nixtropic-flash-and-validate-phase5-m4-placeholder";
+        text = ''echo "Custom firmware not available in this flake."; exit 1'';
+      }
+    else
+      writeShellApplication {
+        name = "nixtropic-flash-and-validate-phase5-m4";
+        runtimeInputs = [ dfu-util usbutils coreutils gnugrep py ];
+        text = ''
+          set -euo pipefail
+          FW_BIN="${firmware}/firmware.bin"
+
+          echo "═══════════════════════════════════════════════════════════════"
+          echo "  Phase 5 M4: flash-and-validate (M&D retry counter)"
+          echo "═══════════════════════════════════════════════════════════════"
+
+          if ! lsusb | grep -q "0483:df11"; then
+            echo "ERROR: dongle not in DFU mode (0483:df11)." >&2
+            exit 1
+          fi
+
+          DFU_LOG=$(mktemp); trap 'rm -f "$DFU_LOG"' EXIT
+          echo "Step 1/2: DFU flash..."
+          dfu-util -a 0 -s 0x08000000:leave -D "$FW_BIN" 2>&1 | tee "$DFU_LOG" >/dev/null || true
+          DFU_EXIT="''${PIPESTATUS[0]}"
+          if [ "$DFU_EXIT" -ne 0 ] && ! grep -q "File downloaded successfully" "$DFU_LOG"; then
+            echo "✗ DFU flash FAILED."; exit 1
+          fi
+
+          echo "✓ Flash complete. Waiting..."
+          for _ in $(seq 1 24); do
+            sleep 0.5
+            if lsusb | grep -q "cafe:4001"; then break; fi
+          done
+          if ! lsusb | grep -q "cafe:4001"; then
+            echo "✗ Enumeration failed." >&2; exit 1
+          fi
+          echo "✓ Enumerated. Settling 3 s..."
+          sleep 3
+
+          echo ""
+          echo "Step 2/2: M4 regression suite..."
+          export LT_RPC_PY="${../tools/lt_rpc.py}"
+          export FIDO2_PY="${../tools/fido2_test.py}"
+          exec ${../tools/validate-phase5-m4.sh}
         '';
       };
 
@@ -1151,6 +1217,22 @@ in
       else
         "${flash-and-validate-phase5-m3}/bin/nixtropic-flash-and-validate-phase5-m3";
     meta.description = "DFU-flash open firmware + Phase 5 M3 ClientPIN validation";
+  };
+
+  validate-phase5-m4 = {
+    type = "app";
+    program = "${validate-phase5-m4}/bin/nixtropic-validate-phase5-m4";
+    meta.description = "Phase 5 M4 — MAC-and-Destroy PIN retry counter regression";
+  };
+
+  flash-and-validate-phase5-m4 = {
+    type = "app";
+    program =
+      if firmware == null then
+        "${flash-and-validate-phase5-m4}/bin/nixtropic-flash-and-validate-phase5-m4-placeholder"
+      else
+        "${flash-and-validate-phase5-m4}/bin/nixtropic-flash-and-validate-phase5-m4";
+    meta.description = "DFU-flash open firmware + Phase 5 M4 regression validation";
   };
 
   identify = {

@@ -25,6 +25,7 @@
  */
 
 #include "pin.h"
+#include "pin_md.h"
 #include "ctap2.h"
 #include "cbor.h"
 #include "slots.h"
@@ -379,13 +380,23 @@ static int handle_set_pin(cbor_reader_t *r, size_t n_keys, uint8_t *resp, size_t
         return 1;
     }
 
-    /* Hash and store. */
+    /* Hash and store (M3 layer: SHA-256(PIN)[:16] in R-mem). */
     uint8_t pin_hash[32];
     sha256_Raw(pin_padded, (uint32_t) pin_len, pin_hash);
     memzero(pin_padded, sizeof pin_padded);
     int rc = slots_global_pin_set(pin_hash);
-    memzero(pin_hash, sizeof pin_hash);
     if (rc != 0) {
+        memzero(pin_hash, sizeof pin_hash);
+        resp[0] = CTAP2_ERR_OTHER;
+        return 1;
+    }
+
+    /* M4: initialize hardware-enforced M&D retry counter using the same
+     * 16 B pin material (consistent with what the platform sends in
+     * pinHashEnc for subsequent getPinToken calls). */
+    int md_rc = pin_md_setup(pin_hash);
+    memzero(pin_hash, sizeof pin_hash);
+    if (md_rc != 0) {
         resp[0] = CTAP2_ERR_OTHER;
         return 1;
     }
@@ -495,14 +506,29 @@ static int handle_change_pin(cbor_reader_t *r, size_t n_keys, uint8_t *resp, siz
         resp[0] = CTAP2_ERR_OTHER; return 1;
     }
 
-    /* Constant-time compare against stored hash. */
-    if (ct_memcmp(submitted_hash, expected_old_hash, PIN_HASH_LEN) != 0) {
-        /* Wrong old-PIN. Update RAM consec_fails. */
-        memzero(submitted_hash, sizeof submitted_hash);
+    /* Two-layer PIN check:
+     *   (1) M3 ct_memcmp against stored hash (fast).
+     *   (2) M4 pin_md_verify (hardware-enforced — consumes M&D slot).
+     * If EITHER layer rejects, return PIN_INVALID. M&D must always be
+     * run when M3 says OK because firmware compromise could bypass
+     * the ct_memcmp; M&D is the ground truth. */
+    int m3_ok = (ct_memcmp(submitted_hash, expected_old_hash, PIN_HASH_LEN) == 0);
+    int md_correct = 0;
+    int md_rc = pin_md_verify(submitted_hash, &md_correct);
+    memzero(submitted_hash, sizeof submitted_hash);
+
+    if (md_rc == -2) {
+        /* HW-enforced lockout from M&D side. */
+        memzero(shared_key, sizeof shared_key);
+        (void) regen_eph();
+        resp[0] = CTAP2_ERR_PIN_BLOCKED;
+        return 1;
+    }
+    if (md_rc != 0 || !m3_ok || !md_correct) {
+        /* Wrong old-PIN. M&D slot was consumed regardless. */
         memzero(shared_key, sizeof shared_key);
         s_consec_fails++;
         if (s_consec_fails >= PIN_AUTH_BLOCKED_CONSEC) s_auth_blocked = 1;
-        /* Rotate keypair so a leaked shared_key can't be reused. */
         (void) regen_eph();
         if (new_retries == 0u) {
             resp[0] = CTAP2_ERR_PIN_BLOCKED;
@@ -513,7 +539,6 @@ static int handle_change_pin(cbor_reader_t *r, size_t n_keys, uint8_t *resp, siz
         }
         return 1;
     }
-    memzero(submitted_hash, sizeof submitted_hash);
 
     /* Correct old-PIN. Decrypt newPinEnc and install. */
     uint8_t pin_padded[PIN_ENC_BUF_LEN];
@@ -534,8 +559,17 @@ static int handle_change_pin(cbor_reader_t *r, size_t n_keys, uint8_t *resp, siz
     memzero(pin_padded, sizeof pin_padded);
 
     int rc = slots_global_pin_set(new_pin_hash);
-    memzero(new_pin_hash, sizeof new_pin_hash);
     if (rc != 0) {
+        memzero(new_pin_hash, sizeof new_pin_hash);
+        resp[0] = CTAP2_ERR_OTHER; return 1;
+    }
+
+    /* M4: re-initialize M&D state with the new PIN. The old M&D slots
+     * are reset by pin_md_verify above (it re-initialized them on
+     * successful match); pin_md_setup overwrites with new keying. */
+    int md_setup_rc = pin_md_setup(new_pin_hash);
+    memzero(new_pin_hash, sizeof new_pin_hash);
+    if (md_setup_rc != 0) {
         resp[0] = CTAP2_ERR_OTHER; return 1;
     }
 
@@ -609,14 +643,27 @@ static int handle_get_pin_token(cbor_reader_t *r, size_t n_keys,
     uint32_t new_retries = 0;
     (void) slots_global_pin_dec_retries(&new_retries);
 
-    /* Decrypt + constant-time-compare. */
+    /* Decrypt submitted hash; then defense-in-depth two-layer check
+     * (M3 R-mem hash + M4 hardware-enforced M&D slot consumption). */
     uint8_t submitted_hash[PIN_HASH_LEN];
     if (aes_cbc_dec_iv0(shared_key, pin_hash_enc, 16, submitted_hash) != 0) {
         memzero(shared_key, sizeof shared_key);
         resp[0] = CTAP2_ERR_OTHER; return 1;
     }
-    if (ct_memcmp(submitted_hash, stored_hash, PIN_HASH_LEN) != 0) {
-        memzero(submitted_hash, sizeof submitted_hash);
+
+    int m3_ok = (ct_memcmp(submitted_hash, stored_hash, PIN_HASH_LEN) == 0);
+    int md_correct = 0;
+    int md_rc = pin_md_verify(submitted_hash, &md_correct);
+    memzero(submitted_hash, sizeof submitted_hash);
+
+    if (md_rc == -2) {
+        /* HW lockout — all 8 slots consumed. Needs factory_reset. */
+        memzero(shared_key, sizeof shared_key);
+        (void) regen_eph();
+        resp[0] = CTAP2_ERR_PIN_BLOCKED;
+        return 1;
+    }
+    if (md_rc != 0 || !m3_ok || !md_correct) {
         memzero(shared_key, sizeof shared_key);
         s_consec_fails++;
         if (s_consec_fails >= PIN_AUTH_BLOCKED_CONSEC) s_auth_blocked = 1;
@@ -630,7 +677,6 @@ static int handle_get_pin_token(cbor_reader_t *r, size_t n_keys,
         }
         return 1;
     }
-    memzero(submitted_hash, sizeof submitted_hash);
 
     /* Correct PIN. Reset retries, generate new pinUvAuthToken, encrypt. */
     (void) slots_global_pin_reset_retries();
