@@ -96,7 +96,9 @@ echo "5/5  APDU loopback (SELECT no-AID → SW=9000)..."
 # (we don't match any of opensc's known applet ATR profiles yet — that
 # arrives in M2 when SELECT for the OpenPGP AID is wired up).
 APDU_OUT=$(timeout 5 opensc-tool --card-driver default --send-apdu "00:A4:04:00:00" 2>&1 | tail -5 || true)
-if echo "$APDU_OUT" | grep -qiE "9000|sw1=90.*sw2=00"; then
+# opensc-tool output is "Received (SW1=0x90, SW2=0x00)" — match the
+# actual emitted form including the 0x prefix.
+if echo "$APDU_OUT" | grep -qiE "received.*0x90.*0x00|9000|sw1=0x90.{0,20}sw2=0x00"; then
   echo "  ✓ SW=9000 (M1 echo)"
 else
   echo "  ✗ APDU echo failed."
