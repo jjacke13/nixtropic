@@ -72,6 +72,13 @@
  * pin.c.  Stored in R-mem slot 1 at v2 layout offsets 132..179. */
 #define OPENPGP_PIN_HASH_LEN         16u
 
+/* M5 — X25519 private key for the dec slot.  TROPIC01 doesn't expose
+ * ECDH; the priv key lives in R-mem and STM32 does curve25519_donna
+ * scalarmult in software (trezor_crypto).  Trust model: priv is plain
+ * here (readable by anyone with SH0 + L3 session).  M6 audit + close
+ * wraps with M&D-gated KEK derived from PW1 (Trezor Safe 7 pattern). */
+#define OPENPGP_DEC_PRIV_LEN         32u
+
 /* PIN indices.  PW1.sig and PW1.dec/auth share the same hash + counter
  * per OpenPGP spec §7.2.2. */
 #define OPENPGP_PIN_PW1              0
@@ -237,6 +244,22 @@ int openpgp_state_sig_counter_increment(void);
  *        path (TERMINATE here also calls into pgp_keys later).
  */
 int openpgp_state_terminate(void);
+
+/* ---- M5 dec key X25519 priv storage ---- */
+
+/**
+ * @brief Read the 32-byte X25519 private key for the dec slot.
+ *        Returns 0 OK, -2 chip error.  Caller must zero `out`
+ *        after use.
+ */
+int openpgp_state_dec_priv_get(uint8_t out[OPENPGP_DEC_PRIV_LEN]);
+
+/**
+ * @brief Write the 32-byte X25519 private key for the dec slot.
+ *        Caller must clamp (RFC 7748 §5) before passing in.
+ *        Returns 0 OK, -2 chip error.
+ */
+int openpgp_state_dec_priv_set(const uint8_t key[OPENPGP_DEC_PRIV_LEN]);
 
 /**
  * @brief Re-init R-mem slot 1 with spec-default PINs ("123456" / "12345678" /

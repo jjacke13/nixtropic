@@ -268,10 +268,7 @@ static int build_do_73(uint8_t *out, size_t out_max, size_t *off)
 {
     if (emit_tlv(out, out_max, off, 0x00C0, EXT_CAPS, sizeof EXT_CAPS) < 0) return -1;
     if (emit_tlv(out, out_max, off, 0x00C1, ALGO_ED25519, sizeof ALGO_ED25519) < 0) return -1;
-    /* M5a stub: dec slot is chip-side Ed25519, not Cv25519.  See the
-     * C2 case in handle_get_data + pgp_keys.h header for the rationale.
-     * Real X25519 wire-up is M5b polish. */
-    if (emit_tlv(out, out_max, off, 0x00C2, ALGO_ED25519, sizeof ALGO_ED25519) < 0) return -1;
+    if (emit_tlv(out, out_max, off, 0x00C2, ALGO_CV25519, sizeof ALGO_CV25519) < 0) return -1;
     if (emit_tlv(out, out_max, off, 0x00C3, ALGO_ED25519, sizeof ALGO_ED25519) < 0) return -1;
 
     uint8_t pw_status[7];
@@ -367,15 +364,10 @@ static int handle_get_data(uint16_t tag, uint8_t *out, size_t out_max, size_t *o
         off += sizeof ALGO_ED25519;
         break;
 
-    case 0x00C2:   /* Algorithm attributes — dec
-                    * M5a stub: chip-side Ed25519 (not Cv25519) so DO C2
-                    * matches the actual pubkey returned by GENERATE B8.
-                    * Encryption (PSO:DEC) won't work until M5b wires
-                    * up real X25519; SSH auth (which uses sig+aut) is
-                    * unaffected. */
-        if (off + sizeof ALGO_ED25519 > out_max) return emit_sw(SW_WRONG_LENGTH, out, out_max, out_len);
-        memcpy(&out[off], ALGO_ED25519, sizeof ALGO_ED25519);
-        off += sizeof ALGO_ED25519;
+    case 0x00C2:   /* Algorithm attributes — dec (real X25519/Cv25519 in M5) */
+        if (off + sizeof ALGO_CV25519 > out_max) return emit_sw(SW_WRONG_LENGTH, out, out_max, out_len);
+        memcpy(&out[off], ALGO_CV25519, sizeof ALGO_CV25519);
+        off += sizeof ALGO_CV25519;
         break;
 
     case 0x00C4: { /* PW status */
@@ -888,12 +880,91 @@ static int handle_generate(uint8_t p1, uint8_t p2,
 
 /* ===== M4 — PERFORM SECURITY OPERATION : Compute Digital Signature ===== */
 
+/* Parse the PSO:DEC body — gpg sends a constructed TLV per OpenPGP card
+ * spec §7.2.10 ECDH input form:
+ *
+ *   A6 <len_A6>                              outer "Cipher DO"
+ *     7F 49 <len_7F49>                       "Public Key DO"
+ *       86 20                                "External Public Key" tag, 32 bytes
+ *         <32 B peer ephemeral pubkey>
+ *
+ * Returns 0 OK with `*peer_out` pointing at the 32 B pubkey, or -1 on
+ * malformed input.  Tolerates short or 1-byte-length encodings (BER). */
+static int parse_pso_dec_body(const uint8_t *body, size_t body_len,
+                               const uint8_t **peer_out)
+{
+    if (body == NULL || peer_out == NULL) return -1;
+    if (body_len < 5u) return -1;
+
+    /* Outer tag A6 + length */
+    if (body[0] != 0xA6u) return -1;
+    size_t off = 1;
+    size_t a6_len;
+    if (body[off] < 0x80u)       { a6_len = body[off]; off += 1; }
+    else if (body[off] == 0x81u) { if (body_len < off + 2u) return -1; a6_len = body[off + 1u]; off += 2; }
+    else if (body[off] == 0x82u) { if (body_len < off + 3u) return -1; a6_len = ((size_t) body[off + 1u] << 8) | body[off + 2u]; off += 3; }
+    else return -1;
+    if (off + a6_len > body_len) return -1;
+
+    /* Inner tag 7F 49 + length */
+    if (off + 2u > body_len) return -1;
+    if (body[off] != 0x7Fu || body[off + 1u] != 0x49u) return -1;
+    off += 2;
+    size_t inner_len;
+    if (body[off] < 0x80u)       { inner_len = body[off]; off += 1; }
+    else if (body[off] == 0x81u) { if (body_len < off + 2u) return -1; inner_len = body[off + 1u]; off += 2; }
+    else if (body[off] == 0x82u) { if (body_len < off + 3u) return -1; inner_len = ((size_t) body[off + 1u] << 8) | body[off + 2u]; off += 3; }
+    else return -1;
+    if (off + inner_len > body_len) return -1;
+
+    /* Pubkey tag 86 [32] */
+    if (off + 2u > body_len) return -1;
+    if (body[off] != 0x86u) return -1;
+    off += 1;
+    if (body[off] != 0x20u) return -1;  /* length must be 32 for X25519 */
+    off += 1;
+    if (off + 32u > body_len) return -1;
+    *peer_out = &body[off];
+    return 0;
+}
+
 static int handle_pso(uint8_t p1, uint8_t p2,
                        const uint8_t *body, size_t body_len,
                        uint8_t *out, size_t out_max, size_t *out_len)
 {
-    /* Only PSO:CDS (P1=9E, P2=9A) is implemented in M4.
-     * PSO:DEC (P1=80, P2=86) and INT_AUT come in M5. */
+    /* PSO:DEC (P1=80, P2=86) — X25519 ECDH (M5).
+     * PSO:CDS (P1=9E, P2=9A) — Ed25519 sign (M4). */
+
+    /* PSO:DEC branch */
+    if (p1 == 0x80u && p2 == 0x86u) {
+        /* PW1.82 (decrypt/auth) must be session-verified.  M3 doesn't
+         * distinguish PW1.81 vs PW1.82; accept any PW1 verified. */
+        if (!pgp_pin_is_verified(OPENPGP_PIN_PW1)) {
+            return emit_sw(SW_SECURITY_NOT_SATISFIED, out, out_max, out_len);
+        }
+
+        const uint8_t *peer = NULL;
+        if (parse_pso_dec_body(body, body_len, &peer) != 0) {
+            return emit_sw(SW_WRONG_LENGTH, out, out_max, out_len);
+        }
+
+        uint8_t shared[PGP_KEYS_PUBKEY_LEN];
+        int rc = pgp_keys_ecdh_dec(peer, shared);
+        if (rc == PGP_KEYS_NO_KEY) {
+            return emit_sw(SW_REF_DATA_NOT_FOUND, out, out_max, out_len);
+        }
+        if (rc != PGP_KEYS_OK) {
+            return emit_sw(SW_UNKNOWN_ERROR, out, out_max, out_len);
+        }
+        if (out_max < PGP_KEYS_PUBKEY_LEN + 2u) {
+            return emit_sw(SW_WRONG_LENGTH, out, out_max, out_len);
+        }
+        memcpy(out, shared, PGP_KEYS_PUBKEY_LEN);
+        *out_len = PGP_KEYS_PUBKEY_LEN;
+        return emit_sw(SW_OK, out, out_max, out_len);
+    }
+
+    /* PSO:CDS branch (existing M4 path) */
     if (p1 != 0x9Eu || p2 != 0x9Au) {
         return emit_sw(SW_INCORRECT_P1P2, out, out_max, out_len);
     }

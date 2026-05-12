@@ -72,6 +72,7 @@ static const char PGP_DEFAULT_PW3[] = "12345678";
 #define OFF_PW1_HASH         132   /* 16 B — SHA-256("123456")[:16] default */
 #define OFF_PW3_HASH         148   /* 16 B — SHA-256("12345678")[:16] default */
 #define OFF_RC_HASH          164   /* 16 B — all-zero if RC unset */
+#define OFF_DEC_PRIV         180   /* 32 B — X25519 priv key, all-zero if no dec key yet */
 
 /* Read the full payload.
  *
@@ -472,6 +473,24 @@ int openpgp_state_gentime_set(int slot_idx,
     uint8_t buf[OPENPGP_RMEM_PRIMARY_SIZE];
     if (read_payload(buf) != 0) return -2;
     memcpy(&buf[off], gt, OPENPGP_GENTIME_LEN);
+    return (write_payload(buf) == 0) ? 0 : -2;
+}
+
+int openpgp_state_dec_priv_get(uint8_t out[OPENPGP_DEC_PRIV_LEN])
+{
+    if (out == NULL) return -1;
+    uint8_t buf[OPENPGP_RMEM_PRIMARY_SIZE];
+    if (read_payload(buf) != 0) return -2;
+    memcpy(out, &buf[OFF_DEC_PRIV], OPENPGP_DEC_PRIV_LEN);
+    return 0;
+}
+
+int openpgp_state_dec_priv_set(const uint8_t key[OPENPGP_DEC_PRIV_LEN])
+{
+    if (key == NULL) return -1;
+    uint8_t buf[OPENPGP_RMEM_PRIMARY_SIZE];
+    if (read_payload(buf) != 0) return -2;
+    memcpy(&buf[OFF_DEC_PRIV], key, OPENPGP_DEC_PRIV_LEN);
     return (write_payload(buf) == 0) ? 0 : -2;
 }
 

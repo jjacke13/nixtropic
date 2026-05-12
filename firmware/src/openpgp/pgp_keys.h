@@ -89,34 +89,31 @@ int pgp_keys_erase_sig(void);
 
 /* ===== M5 — DEC (encryption) + AUT (authentication) keys ===== */
 
-/* IMPORTANT M5 NOTE on the dec slot:
+/* M5 dec slot — X25519 (Curve25519 ECDH), host-side compute.
  *
- * The OpenPGP spec wants Curve25519 (X25519) for the dec key, used for
- * ECDH-based decryption (PSO:DEC).  TROPIC01 doesn't natively support
- * X25519 — its ECC slot interface is Ed25519 or P-256.  Doing X25519
- * properly requires either a separate R-mem-stored private key with
- * STM32-side scalarmult, OR reusing Ed25519's underlying scalar via
- * the well-known Ed25519↔X25519 conversion (Bernstein).
+ * TROPIC01 doesn't expose ECDH at the user-key level (confirmed by
+ * libtropic API audit + TropicSquare's own docs; see TROPIC01.md
+ * line 32 "no exposed ECDH").  X25519 hardware exists on-die but is
+ * wired exclusively to the L3 secure-channel Noise handshake.
  *
- * M5a (this milestone) implements the dec slot as a CHIP-SIDE Ed25519
- * key (same path as sig + aut).  The pubkey returned is Ed25519, not
- * Cv25519.  We ALSO change DO C2 (algorithm attributes for dec) to
- * advertise Ed25519 to match.
+ * Following the Trezor Safe 7 pattern: priv lives in R-mem (chip-
+ * persistent), STM32 does curve25519_donna scalarmult in software
+ * via trezor_crypto's curve25519-donna (already linked from Phase 3).
  *
- * Consequence: `gpg --card-edit → generate` walks all three slots
- * cleanly, all fingerprints get written, SIG and AUT keys are fully
- * usable (git commit -S works, ssh via gpg-agent works).  But the
- * dec slot uses Ed25519 — which gpg cannot use for ECDH decryption.
- * `gpg --encrypt` operations targeting this card key will fail.
+ * Trust model M5 ship: priv key plain in R-mem, readable by anyone
+ * with SH0 + L3 session — same trust level as PIN hashes today.
+ * Acceptable for daily-driver since SH0 is the dev public key and a
+ * wire-level attacker can't establish L3 without the chip.
  *
- * M5b polish (later) replaces the dec stub with a proper X25519
- * implementation using R-mem-stored private key + trezor_crypto's
- * curve25519 functions.  Tracked as Phase 7 follow-up; daily-driver
- * priority is SSH (aut) which we have, not encryption.
- */
+ * M6 audit + close hardens: wraps dec priv with M&D-gated KEK derived
+ * from PW1, mirroring Trezor's PIN-encrypted-seed design.  Same M&D
+ * framework that hardens PW1/PW3/RC retry counters (Phase 7 plan §3
+ * H6, deferred from M3). */
 
 int pgp_keys_generate_dec(uint8_t pubkey_out[PGP_KEYS_PUBKEY_LEN]);
 int pgp_keys_read_dec_pubkey(uint8_t pubkey_out[PGP_KEYS_PUBKEY_LEN]);
+int pgp_keys_ecdh_dec(const uint8_t peer_pubkey[PGP_KEYS_PUBKEY_LEN],
+                      uint8_t shared_out[PGP_KEYS_PUBKEY_LEN]);
 int pgp_keys_erase_dec(void);
 
 int pgp_keys_generate_aut(uint8_t pubkey_out[PGP_KEYS_PUBKEY_LEN]);
