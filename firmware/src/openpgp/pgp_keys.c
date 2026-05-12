@@ -99,3 +99,95 @@ int pgp_keys_erase_sig(void)
     int rc = tropic_ecc_erase(PGP_KEYS_SIG_SLOT);
     return (rc == 0) ? PGP_KEYS_OK : PGP_KEYS_CHIP_ERR;
 }
+
+/* ===== M5 — DEC slot (stub: chip-side Ed25519, NOT real X25519) ===== */
+
+int pgp_keys_generate_dec(uint8_t pubkey_out[PGP_KEYS_PUBKEY_LEN])
+{
+    if (pubkey_out == NULL) return PGP_KEYS_BAD_PARAM;
+    (void) tropic_ecc_erase(PGP_KEYS_DEC_SLOT);
+    int rc = tropic_ecc_generate(PGP_KEYS_DEC_SLOT, CURVE_ED25519);
+    if (rc != 0) {
+        pgp_keys_last_chip_rc = rc;
+        pgp_keys_last_chip_stage = 1;
+        return PGP_KEYS_CHIP_ERR;
+    }
+    rc = tropic_ecc_pubkey_read(PGP_KEYS_DEC_SLOT, pubkey_out,
+                                 PGP_KEYS_PUBKEY_LEN);
+    if (rc < 0) {
+        pgp_keys_last_chip_rc = rc;
+        pgp_keys_last_chip_stage = 2;
+        return PGP_KEYS_CHIP_ERR;
+    }
+    return PGP_KEYS_OK;
+}
+
+int pgp_keys_read_dec_pubkey(uint8_t pubkey_out[PGP_KEYS_PUBKEY_LEN])
+{
+    if (pubkey_out == NULL) return PGP_KEYS_BAD_PARAM;
+    int rc = tropic_ecc_pubkey_read(PGP_KEYS_DEC_SLOT, pubkey_out,
+                                     PGP_KEYS_PUBKEY_LEN);
+    if (rc < 0) {
+        memset(pubkey_out, 0, PGP_KEYS_PUBKEY_LEN);
+        return PGP_KEYS_NO_KEY;
+    }
+    return PGP_KEYS_OK;
+}
+
+int pgp_keys_erase_dec(void)
+{
+    int rc = tropic_ecc_erase(PGP_KEYS_DEC_SLOT);
+    return (rc == 0) ? PGP_KEYS_OK : PGP_KEYS_CHIP_ERR;
+}
+
+/* ===== M5 — AUT slot (chip-side Ed25519, full implementation) ===== */
+
+int pgp_keys_generate_aut(uint8_t pubkey_out[PGP_KEYS_PUBKEY_LEN])
+{
+    if (pubkey_out == NULL) return PGP_KEYS_BAD_PARAM;
+    (void) tropic_ecc_erase(PGP_KEYS_AUT_SLOT);
+    int rc = tropic_ecc_generate(PGP_KEYS_AUT_SLOT, CURVE_ED25519);
+    if (rc != 0) {
+        pgp_keys_last_chip_rc = rc;
+        pgp_keys_last_chip_stage = 1;
+        return PGP_KEYS_CHIP_ERR;
+    }
+    rc = tropic_ecc_pubkey_read(PGP_KEYS_AUT_SLOT, pubkey_out,
+                                 PGP_KEYS_PUBKEY_LEN);
+    if (rc < 0) {
+        pgp_keys_last_chip_rc = rc;
+        pgp_keys_last_chip_stage = 2;
+        return PGP_KEYS_CHIP_ERR;
+    }
+    return PGP_KEYS_OK;
+}
+
+int pgp_keys_read_aut_pubkey(uint8_t pubkey_out[PGP_KEYS_PUBKEY_LEN])
+{
+    if (pubkey_out == NULL) return PGP_KEYS_BAD_PARAM;
+    int rc = tropic_ecc_pubkey_read(PGP_KEYS_AUT_SLOT, pubkey_out,
+                                     PGP_KEYS_PUBKEY_LEN);
+    if (rc < 0) {
+        memset(pubkey_out, 0, PGP_KEYS_PUBKEY_LEN);
+        return PGP_KEYS_NO_KEY;
+    }
+    return PGP_KEYS_OK;
+}
+
+int pgp_keys_sign_with_aut(const uint8_t *msg, size_t msg_len,
+                            uint8_t sig_out[PGP_KEYS_SIG_LEN])
+{
+    if (msg == NULL || sig_out == NULL) return PGP_KEYS_BAD_PARAM;
+    if (msg_len == 0u) return PGP_KEYS_BAD_PARAM;
+    int rc = tropic_ecc_eddsa_sign(PGP_KEYS_AUT_SLOT, msg, msg_len,
+                                    sig_out, PGP_KEYS_SIG_LEN);
+    if (rc < 0) return PGP_KEYS_CHIP_ERR;
+    if (rc != (int) PGP_KEYS_SIG_LEN) return PGP_KEYS_CHIP_ERR;
+    return PGP_KEYS_OK;
+}
+
+int pgp_keys_erase_aut(void)
+{
+    int rc = tropic_ecc_erase(PGP_KEYS_AUT_SLOT);
+    return (rc == 0) ? PGP_KEYS_OK : PGP_KEYS_CHIP_ERR;
+}

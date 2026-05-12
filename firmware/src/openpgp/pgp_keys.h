@@ -87,4 +87,42 @@ int pgp_keys_sign_with_sig(const uint8_t *msg, size_t msg_len,
  */
 int pgp_keys_erase_sig(void);
 
+/* ===== M5 — DEC (encryption) + AUT (authentication) keys ===== */
+
+/* IMPORTANT M5 NOTE on the dec slot:
+ *
+ * The OpenPGP spec wants Curve25519 (X25519) for the dec key, used for
+ * ECDH-based decryption (PSO:DEC).  TROPIC01 doesn't natively support
+ * X25519 — its ECC slot interface is Ed25519 or P-256.  Doing X25519
+ * properly requires either a separate R-mem-stored private key with
+ * STM32-side scalarmult, OR reusing Ed25519's underlying scalar via
+ * the well-known Ed25519↔X25519 conversion (Bernstein).
+ *
+ * M5a (this milestone) implements the dec slot as a CHIP-SIDE Ed25519
+ * key (same path as sig + aut).  The pubkey returned is Ed25519, not
+ * Cv25519.  We ALSO change DO C2 (algorithm attributes for dec) to
+ * advertise Ed25519 to match.
+ *
+ * Consequence: `gpg --card-edit → generate` walks all three slots
+ * cleanly, all fingerprints get written, SIG and AUT keys are fully
+ * usable (git commit -S works, ssh via gpg-agent works).  But the
+ * dec slot uses Ed25519 — which gpg cannot use for ECDH decryption.
+ * `gpg --encrypt` operations targeting this card key will fail.
+ *
+ * M5b polish (later) replaces the dec stub with a proper X25519
+ * implementation using R-mem-stored private key + trezor_crypto's
+ * curve25519 functions.  Tracked as Phase 7 follow-up; daily-driver
+ * priority is SSH (aut) which we have, not encryption.
+ */
+
+int pgp_keys_generate_dec(uint8_t pubkey_out[PGP_KEYS_PUBKEY_LEN]);
+int pgp_keys_read_dec_pubkey(uint8_t pubkey_out[PGP_KEYS_PUBKEY_LEN]);
+int pgp_keys_erase_dec(void);
+
+int pgp_keys_generate_aut(uint8_t pubkey_out[PGP_KEYS_PUBKEY_LEN]);
+int pgp_keys_read_aut_pubkey(uint8_t pubkey_out[PGP_KEYS_PUBKEY_LEN]);
+int pgp_keys_sign_with_aut(const uint8_t *msg, size_t msg_len,
+                            uint8_t sig_out[PGP_KEYS_SIG_LEN]);
+int pgp_keys_erase_aut(void);
+
 #endif /* NIXTROPIC_OPENPGP_PGP_KEYS_H */

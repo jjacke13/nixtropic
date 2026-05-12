@@ -33,6 +33,7 @@
 #define INS_ACTIVATE_FILE  0x44
 #define INS_GENERATE       0x47   /* GENERATE ASYMMETRIC KEY PAIR — M4 */
 #define INS_PSO            0x2A   /* PERFORM SECURITY OPERATION — M4+M5 */
+#define INS_INTERNAL_AUT   0x88   /* INTERNAL AUTHENTICATE — M5 (SSH) */
 
 /* ===== Algorithm-attribute byte sequences (DO C1/C2/C3) =====
  *
@@ -267,7 +268,10 @@ static int build_do_73(uint8_t *out, size_t out_max, size_t *off)
 {
     if (emit_tlv(out, out_max, off, 0x00C0, EXT_CAPS, sizeof EXT_CAPS) < 0) return -1;
     if (emit_tlv(out, out_max, off, 0x00C1, ALGO_ED25519, sizeof ALGO_ED25519) < 0) return -1;
-    if (emit_tlv(out, out_max, off, 0x00C2, ALGO_CV25519, sizeof ALGO_CV25519) < 0) return -1;
+    /* M5a stub: dec slot is chip-side Ed25519, not Cv25519.  See the
+     * C2 case in handle_get_data + pgp_keys.h header for the rationale.
+     * Real X25519 wire-up is M5b polish. */
+    if (emit_tlv(out, out_max, off, 0x00C2, ALGO_ED25519, sizeof ALGO_ED25519) < 0) return -1;
     if (emit_tlv(out, out_max, off, 0x00C3, ALGO_ED25519, sizeof ALGO_ED25519) < 0) return -1;
 
     uint8_t pw_status[7];
@@ -363,10 +367,15 @@ static int handle_get_data(uint16_t tag, uint8_t *out, size_t out_max, size_t *o
         off += sizeof ALGO_ED25519;
         break;
 
-    case 0x00C2:   /* Algorithm attributes — dec (Cv25519) */
-        if (off + sizeof ALGO_CV25519 > out_max) return emit_sw(SW_WRONG_LENGTH, out, out_max, out_len);
-        memcpy(&out[off], ALGO_CV25519, sizeof ALGO_CV25519);
-        off += sizeof ALGO_CV25519;
+    case 0x00C2:   /* Algorithm attributes — dec
+                    * M5a stub: chip-side Ed25519 (not Cv25519) so DO C2
+                    * matches the actual pubkey returned by GENERATE B8.
+                    * Encryption (PSO:DEC) won't work until M5b wires
+                    * up real X25519; SSH auth (which uses sig+aut) is
+                    * unaffected. */
+        if (off + sizeof ALGO_ED25519 > out_max) return emit_sw(SW_WRONG_LENGTH, out, out_max, out_len);
+        memcpy(&out[off], ALGO_ED25519, sizeof ALGO_ED25519);
+        off += sizeof ALGO_ED25519;
         break;
 
     case 0x00C4: { /* PW status */
@@ -809,20 +818,15 @@ static int handle_generate(uint8_t p1, uint8_t p2,
                       : pgp_keys_read_sig_pubkey(pubkey);
         break;
 
-    case 0xB8u:  /* Decryption key — deferred to M5 */
-    case 0xA4u:  /* Authentication key — deferred to M5 */
-        /* For P1=81 (read pubkey): tell gpg the key isn't configured
-         * yet (REF_DATA_NOT_FOUND = 0x6A88).  Returning
-         * CONDITIONS_NOT_SATISFIED (0x6985) here was the M4 HW debug
-         * bug 2026-05-12 — scdaemon's LEARN does READ PUBLIC KEY for
-         * ALL three slots, and 0x6985 made it bail with the user-facing
-         * "Conditions of use not satisfied".  0x6A88 lets gpg see the
-         * card as "sig key set up, dec+aut not yet" and proceed.
-         *
-         * For P1=80 (generate): 0x6A88 too — same semantic: function
-         * not supported for this CRT yet.  M5 wires up the real DEC +
-         * AUT generation. */
-        return emit_sw(SW_REF_DATA_NOT_FOUND, out, out_max, out_len);
+    case 0xB8u:  /* Decryption key (M5 stub: chip-side Ed25519) */
+        rc = generate ? pgp_keys_generate_dec(pubkey)
+                      : pgp_keys_read_dec_pubkey(pubkey);
+        break;
+
+    case 0xA4u:  /* Authentication key (M5: chip-side Ed25519, full) */
+        rc = generate ? pgp_keys_generate_aut(pubkey)
+                      : pgp_keys_read_aut_pubkey(pubkey);
+        break;
 
     default:
         return emit_sw(SW_REF_DATA_NOT_FOUND, out, out_max, out_len);
@@ -1088,6 +1092,37 @@ int openpgp_applet_dispatch(const uint8_t *in, size_t in_len,
 
     case INS_PSO:
         return handle_pso(p1, p2, body, body_len, out, out_max, out_len);
+
+    case INS_INTERNAL_AUT: {
+        /* INTERNAL AUTHENTICATE: P1=P2=0, body = challenge to sign.
+         * Returns Ed25519 signature using the aut-slot key.
+         * Gated on PW1.82 (decrypt/auth PIN).  Phase 5 FIDO has the
+         * same Ed25519 sign primitive — well-tested chip-side path. */
+        if (p1 != 0x00u || p2 != 0x00u) {
+            return emit_sw(SW_INCORRECT_P1P2, out, out_max, out_len);
+        }
+        if (!pgp_pin_is_verified(OPENPGP_PIN_PW1)) {
+            return emit_sw(SW_SECURITY_NOT_SATISFIED, out, out_max, out_len);
+        }
+        if (body == NULL || body_len == 0u) {
+            return emit_sw(SW_WRONG_LENGTH, out, out_max, out_len);
+        }
+
+        uint8_t sig[PGP_KEYS_SIG_LEN];
+        int rc = pgp_keys_sign_with_aut(body, body_len, sig);
+        if (rc == PGP_KEYS_NO_KEY) {
+            return emit_sw(SW_REF_DATA_NOT_FOUND, out, out_max, out_len);
+        }
+        if (rc != PGP_KEYS_OK) {
+            return emit_sw(SW_UNKNOWN_ERROR, out, out_max, out_len);
+        }
+        if (out_max < PGP_KEYS_SIG_LEN + 2u) {
+            return emit_sw(SW_WRONG_LENGTH, out, out_max, out_len);
+        }
+        memcpy(out, sig, PGP_KEYS_SIG_LEN);
+        *out_len = PGP_KEYS_SIG_LEN;
+        return emit_sw(SW_OK, out, out_max, out_len);
+    }
 
     default:
         return emit_sw(SW_INS_NOT_SUPPORTED, out, out_max, out_len);
