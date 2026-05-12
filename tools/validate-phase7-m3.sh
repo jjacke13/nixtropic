@@ -27,12 +27,27 @@ if ! lsusb 2>/dev/null | grep -q "cafe:4001"; then
   echo "  ✗ cafe:4001 not enumerated."
   exit 3
 fi
-if ! pgrep -x pcscd > /dev/null 2>&1; then
-  sudo systemctl start pcscd 2>/dev/null || true
+# pcscd auto-exits when idle, so we may need to (re)start it and give
+# it time to scan via libudev.  Retry up to 3× with progressively
+# longer waits — fresh-pcscd enumeration can take 5+ seconds.
+PCSC_FOUND=0
+PCSC_LAST=""
+for attempt in 1 2 3; do
+  if ! pgrep -x pcscd > /dev/null 2>&1; then
+    sudo systemctl restart pcscd 2>/dev/null || true
+    sleep 3
+  fi
+  PCSC_LAST=$(timeout 10 pcsc_scan -n 2>&1 | head -20 || true)
+  if echo "$PCSC_LAST" | grep -qi "nixtropic"; then
+    PCSC_FOUND=1
+    break
+  fi
   sleep 2
-fi
-if ! timeout 5 pcsc_scan -n 2>&1 | grep -qi "nixtropic"; then
-  echo "  ✗ pcsc-lite doesn't see the reader."
+done
+if [ "$PCSC_FOUND" -ne 1 ]; then
+  echo "  ✗ pcsc-lite doesn't see the reader after 3 attempts."
+  echo "    Last pcsc_scan output:"
+  echo "$PCSC_LAST" | sed 's/^/      /'
   exit 4
 fi
 echo "  ✓ cafe:4001 + pcsc-lite reader"
