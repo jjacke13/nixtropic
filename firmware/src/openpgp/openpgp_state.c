@@ -22,7 +22,11 @@
  * at Phase 7 M3 HW debug (2026-05-12) to force re-init after the
  * 475-byte writes left slot 1 in an inconsistent state.  Bump again
  * if/when v1 layout grows incompatible fields. */
-static const uint8_t PGP_MAGIC[4]    = { 'P', 'G', '7', 'L' };
+/* Bumped 'PG7L' → 'PG7M' at Phase 7 M5a flash 2026-05-12 — the prior
+ * M4 state had a corrupted PW3 hash (or retry counter at 0) of unknown
+ * cause; cleanest recovery is to force re-bootstrap via magic mismatch.
+ * Any future state-shape change should bump this byte. */
+static const uint8_t PGP_MAGIC[4]    = { 'P', 'G', '7', 'M' };
 #define PGP_SCHEMA_VERSION  1u
 
 /* pgp_state_present byte values (M3 — 3-state machine):
