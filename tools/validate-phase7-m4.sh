@@ -55,7 +55,7 @@ echo ""
 echo "2/8  SELECT OpenPGP AID..."
 SELECT_OUT=$(timeout 5 opensc-tool --reader 0 --card-driver default --send-apdu \
   "00:A4:04:00:06:D2:76:00:01:24:01" 2>&1 | tail -3 || true)
-if echo "$SELECT_OUT" | tail -2 2>/dev/null | grep -qiE "0x90.{0,8}0x00|sw1=0x90.{0,20}sw2=0x00"; then
+if echo "$SELECT_OUT" | grep -E "^[[:space:]]*Received \(SW1=" | tail -1 | grep -qiE "SW1=0x90.{0,20}SW2=0x00"; then
   echo "  ✓ SELECT → SW=9000"
 else
   echo "  ✗ SELECT failed:"
@@ -69,7 +69,7 @@ echo "3/8  VERIFY PW3 default '12345678'..."
 VERIFY3=$(timeout 5 opensc-tool --reader 0 --card-driver default \
   --send-apdu "00:A4:04:00:06:D2:76:00:01:24:01" \
   --send-apdu "00:20:00:83:08:31:32:33:34:35:36:37:38" 2>&1 | tail -5 || true)
-if echo "$VERIFY3" | tail -2 2>/dev/null | grep -qiE "0x90.{0,8}0x00|sw1=0x90.{0,20}sw2=0x00"; then
+if echo "$VERIFY3" | grep -E "^[[:space:]]*Received \(SW1=" | tail -1 | grep -qiE "SW1=0x90.{0,20}SW2=0x00"; then
   echo "  ✓ VERIFY PW3 → SW=9000"
 else
   echo "  ✗ VERIFY PW3 failed:"
@@ -126,7 +126,7 @@ PUT_OUT=$(timeout 5 opensc-tool --reader 0 --card-driver default \
   --send-apdu "00:A4:04:00:06:D2:76:00:01:24:01" \
   --send-apdu "00:20:00:83:08:31:32:33:34:35:36:37:38" \
   --send-apdu "00:DA:00:C7:14:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00" 2>&1 | tail -5 || true)
-if echo "$PUT_OUT" | tail -2 2>/dev/null | grep -qiE "0x90.{0,8}0x00|sw1=0x90.{0,20}sw2=0x00"; then
+if echo "$PUT_OUT" | grep -E "^[[:space:]]*Received \(SW1=" | tail -1 | grep -qiE "SW1=0x90.{0,20}SW2=0x00"; then
   echo "  ✓ PUT DATA C7 → SW=9000"
 else
   echo "  ✗ PUT DATA C7 failed:"
@@ -152,7 +152,7 @@ SIGN_OUT=$(timeout 10 opensc-tool --reader 0 --card-driver default \
   --send-apdu "00:2A:9E:9A:40:${MSG}:00" 2>&1 | tail -10 || true)
 # Expect a 64-byte response + SW=9000.  Look for SW=9000 after several
 # bytes printed (signature is 64B = lots of hex).
-if echo "$SIGN_OUT" | tail -2 2>/dev/null | grep -qiE "0x90.{0,8}0x00|sw1=0x90.{0,20}sw2=0x00"; then
+if echo "$SIGN_OUT" | grep -E "^[[:space:]]*Received \(SW1=" | tail -1 | grep -qiE "SW1=0x90.{0,20}SW2=0x00"; then
   echo "  ✓ PSO:CDS returned signature + SW=9000"
 else
   echo "  ✗ PSO:CDS failed:"
