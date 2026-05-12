@@ -40,12 +40,19 @@
 #include "openpgp_state.h"   /* OPENPGP_PIN_PW1 / PW3 / RC etc. */
 
 /* Return codes shared with applet so caller can map to SW. */
-#define PGP_PIN_OK             0
-#define PGP_PIN_BAD            -1   /* wrong PIN, counter decremented */
-#define PGP_PIN_BLOCKED        -2   /* counter at 0 — needs reset */
-#define PGP_PIN_NOT_SET        -3   /* RC only — not configured */
-#define PGP_PIN_BAD_LEN        -4
-#define PGP_PIN_CHIP_ERR       -5
+#define PGP_PIN_OK                       0
+#define PGP_PIN_BAD                      -1   /* wrong PIN, counter decremented */
+#define PGP_PIN_BLOCKED                  -2   /* counter at 0 — needs reset */
+#define PGP_PIN_NOT_SET                  -3   /* RC only — not configured */
+#define PGP_PIN_BAD_LEN                  -4
+#define PGP_PIN_CHIP_ERR                 -5   /* generic */
+/* DEBUG sub-codes — pinpoint which R-mem op failed.  Mapped to
+ * distinct SW values by pgp_pin_rc_to_sw so we can diagnose without
+ * UART/CDC logging. */
+#define PGP_PIN_CHIP_ERR_HASH_GET        -6
+#define PGP_PIN_CHIP_ERR_RETRIES_MATCH   -7
+#define PGP_PIN_CHIP_ERR_RETRIES_BAD     -8
+#define PGP_PIN_CHIP_ERR_HASH_SET        -9
 
 /**
  * @brief Verify a PIN against its stored hash.  Decrements retry on

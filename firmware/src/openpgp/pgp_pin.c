@@ -91,7 +91,7 @@ int pgp_pin_verify(int which, const uint8_t *pin, size_t len)
     uint8_t stored[OPENPGP_PIN_HASH_LEN];
     if (openpgp_state_pin_hash_get(which, stored) != 0) {
         memzero(submitted, sizeof submitted);
-        return PGP_PIN_CHIP_ERR;
+        return PGP_PIN_CHIP_ERR_HASH_GET;
     }
 
     int match = ct_eq(submitted, stored, OPENPGP_PIN_HASH_LEN);
@@ -101,7 +101,7 @@ int pgp_pin_verify(int which, const uint8_t *pin, size_t len)
     if (match) {
         /* Reset counter + flag session-verified. */
         if (openpgp_state_pin_retries_set(which, initial_retries(which)) != 0) {
-            return PGP_PIN_CHIP_ERR;
+            return PGP_PIN_CHIP_ERR_RETRIES_MATCH;
         }
         s_verified[which] = 1;
         return PGP_PIN_OK;
@@ -111,7 +111,7 @@ int pgp_pin_verify(int which, const uint8_t *pin, size_t len)
     s_verified[which] = 0;
     uint8_t new_count = (uint8_t)(cur - 1u);
     if (openpgp_state_pin_retries_set(which, new_count) != 0) {
-        return PGP_PIN_CHIP_ERR;
+        return PGP_PIN_CHIP_ERR_RETRIES_BAD;
     }
     return (new_count == 0u) ? PGP_PIN_BLOCKED : PGP_PIN_BAD;
 }

@@ -507,11 +507,15 @@ static uint16_t pgp_pin_rc_to_sw(int rc, int which)
         }
         return (uint16_t)(0x63C0 | (rem & 0x0F));
     }
-    case PGP_PIN_BLOCKED:      return SW_AUTH_BLOCKED;        /* 0x6983 */
-    case PGP_PIN_NOT_SET:      return SW_REF_DATA_NOT_FOUND;  /* 0x6A88 */
-    case PGP_PIN_BAD_LEN:      return SW_WRONG_LENGTH;        /* 0x6700 */
-    case PGP_PIN_CHIP_ERR:     return SW_UNKNOWN_ERROR;       /* 0x6F00 */
-    default:                   return SW_UNKNOWN_ERROR;
+    case PGP_PIN_BLOCKED:                  return SW_AUTH_BLOCKED;        /* 0x6983 */
+    case PGP_PIN_NOT_SET:                  return SW_REF_DATA_NOT_FOUND;  /* 0x6A88 */
+    case PGP_PIN_BAD_LEN:                  return SW_WRONG_LENGTH;        /* 0x6700 */
+    case PGP_PIN_CHIP_ERR:                 return 0x6F00;                 /* generic */
+    case PGP_PIN_CHIP_ERR_HASH_GET:        return 0x6F01;                 /* pin_hash_get  */
+    case PGP_PIN_CHIP_ERR_RETRIES_MATCH:   return 0x6F02;                 /* retries_set (match path) */
+    case PGP_PIN_CHIP_ERR_RETRIES_BAD:     return 0x6F03;                 /* retries_set (mismatch path) */
+    case PGP_PIN_CHIP_ERR_HASH_SET:        return 0x6F04;                 /* pin_hash_set */
+    default:                               return SW_UNKNOWN_ERROR;
     }
 }
 
