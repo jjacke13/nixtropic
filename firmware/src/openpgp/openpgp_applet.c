@@ -10,8 +10,8 @@
 #include "openpgp_state.h"
 #include "pgp_pin.h"
 #include "pgp_keys.h"
-#include "tropic/tropic.h"   /* tropic_last_rconfig_* diagnostics */
 #include "ccid/ccid_proto.h"
+#include "memzero.h"   /* M6 audit M1 — zeroize ECDH shared secret on stack */
 
 #include <stdint.h>
 #include <stddef.h>
@@ -562,64 +562,35 @@ static int handle_change_ref(uint8_t p1, uint8_t p2,
         return emit_sw(SW_INCORRECT_P1P2, out, out_max, out_len);
     }
 
-    /* Body = old_pin || new_pin.  Length partition is "old is the
-     * stored-length, rest is new" — but we don't know stored length
-     * exactly (PIN length isn't fixed).  Spec §7.2.3 says the host
-     * KNOWS the old length (or assumes the stored PW1/PW3 default).
-     * Common convention: scdaemon sends in fixed-length-min form,
-     * else uses Le=0 with explicit Lc.  We use the convention from
-     * GnuPG: old PIN takes the FIRST stored-PIN-length bytes; new
-     * takes the rest.  For software-counter M3 we don't know stored
-     * length without re-hashing — fall back to: try old at every
-     * possible split point.  Too lazy.
+    /* M6 audit H2 — split body = old_pin || new_pin at the CANONICAL
+     * boundary recorded in R-mem (OFF_PW1_LEN / OFF_PW3_LEN, written
+     * by every successful PIN-setting op).  Per OpenPGP card v3.4.1
+     * §7.2.6, the card is authoritative for the old PIN's length.
      *
-     * Simpler: scdaemon ALWAYS sends current default-length+padded
-     * for both old and new.  In practice we test by trying old =
-     * body[0..k] for k in [min, body_len-min].  For now adopt the
-     * pragmatic split: old = first half (rounded), new = rest.
-     * If the split doesn't match, verify fails → 0x6982 — user
-     * retries with right boundary.
-     *
-     * Actually the canonical approach: try old as body[0..body_len-min_new]
-     * for the smallest plausible new — but this is overcomplicated.
-     *
-     * What scdaemon does (looking at GnuPG source app-openpgp.c):
-     * sends old || new with sizes determined by the host.  The card
-     * implementation that ships in real Yubikeys / Nitrokeys uses
-     * the convention that BOTH are exactly the stored PW1/PW3 length
-     * — but a card doesn't know that without trying.
-     *
-     * For pragmatism: assume the simpler convention where old is
-     * "exactly the previous stored hash compute length" — but since
-     * we don't store length, try k starting from the spec minimum
-     * up to body_len - min_new_length.  First successful verify wins.
-     */
+     * The earlier split-search loop tried every plausible boundary
+     * and each wrong split consumed a retry — a single hostile APDU
+     * could exhaust the PW1 (or PW3) retry counter and lock the PIN
+     * without the user ever entering a wrong PIN.  Single-attempt
+     * matches Yubikey/Nitrokey behaviour. */
     size_t min_len = (which == OPENPGP_PIN_PW1) ? OPENPGP_PW1_MIN_LEN
                                                  : OPENPGP_PW3_MIN_LEN;
-    if (body_len < 2u * min_len) {
+
+    uint8_t old_len_b = 0;
+    if (openpgp_state_pin_len_get(which, &old_len_b) != 0) {
+        return emit_sw(SW_UNKNOWN_ERROR, out, out_max, out_len);
+    }
+    size_t old_len = (size_t) old_len_b;
+    if (old_len < min_len || old_len > OPENPGP_PIN_MAX_LEN) {
+        /* State corruption — caller can recover via TERMINATE+ACTIVATE. */
+        return emit_sw(SW_UNKNOWN_ERROR, out, out_max, out_len);
+    }
+    if (body_len < old_len + min_len) {
         return emit_sw(SW_WRONG_LENGTH, out, out_max, out_len);
     }
 
-    /* Try every plausible split point.  Most cards & host stacks use
-     * EXACT old length; the loop is a safety net for unusual host
-     * implementations.  PW1 / PW3 verify is cheap (SHA-256 + memcmp). */
-    int last_rc = PGP_PIN_BAD;
-    for (size_t k = min_len; k + min_len <= body_len; k++) {
-        last_rc = pgp_pin_change(which, body, k,
-                                  body + k, body_len - k);
-        if (last_rc == PGP_PIN_OK) {
-            return emit_sw(SW_OK, out, out_max, out_len);
-        }
-        if (last_rc == PGP_PIN_BLOCKED || last_rc == PGP_PIN_CHIP_ERR) {
-            return emit_sw(pgp_pin_rc_to_sw(last_rc, which),
-                           out, out_max, out_len);
-        }
-        /* Otherwise wrong-old; loop tries next k.  CAVEAT: each
-         * try consumes a retry on wrong-old.  Limit iterations
-         * implicitly via retry counter (we'll hit BLOCKED before
-         * exhausting the loop in pathological cases). */
-    }
-    return emit_sw(pgp_pin_rc_to_sw(last_rc, which), out, out_max, out_len);
+    int rc = pgp_pin_change(which, body, old_len,
+                             body + old_len, body_len - old_len);
+    return emit_sw(pgp_pin_rc_to_sw(rc, which), out, out_max, out_len);
 }
 
 static int handle_reset_rc(uint8_t p1, uint8_t p2,
@@ -629,26 +600,30 @@ static int handle_reset_rc(uint8_t p1, uint8_t p2,
     if (p2 != 0x81u) return emit_sw(SW_INCORRECT_P1P2, out, out_max, out_len);
 
     if (p1 == 0x00u) {
-        /* Body = RC || new_PW1.  Same split-search as CHANGE. */
-        if (body_len < OPENPGP_RC_MIN_LEN + OPENPGP_PW1_MIN_LEN) {
+        /* M6 audit H2 — single-attempt split at stored RC length.
+         * If RC was never set (len == 0), the verify path returns
+         * PGP_PIN_NOT_SET which maps to SW_CONDITIONS_NOT_SATISFIED. */
+        uint8_t rc_len_b = 0;
+        if (openpgp_state_pin_len_get(OPENPGP_PIN_RC, &rc_len_b) != 0) {
+            return emit_sw(SW_UNKNOWN_ERROR, out, out_max, out_len);
+        }
+        if (rc_len_b == 0u) {
+            /* RC unset — body has no canonical split point. */
+            return emit_sw(SW_CONDITIONS_NOT_SATISFIED,
+                           out, out_max, out_len);
+        }
+        size_t rc_len_s = (size_t) rc_len_b;
+        if (rc_len_s < OPENPGP_RC_MIN_LEN ||
+            rc_len_s > OPENPGP_PIN_MAX_LEN) {
+            return emit_sw(SW_UNKNOWN_ERROR, out, out_max, out_len);
+        }
+        if (body_len < rc_len_s + OPENPGP_PW1_MIN_LEN) {
             return emit_sw(SW_WRONG_LENGTH, out, out_max, out_len);
         }
-        int last_rc = PGP_PIN_BAD;
-        for (size_t k = OPENPGP_RC_MIN_LEN;
-             k + OPENPGP_PW1_MIN_LEN <= body_len; k++) {
-            last_rc = pgp_pin_reset_pw1_via_rc(body, k,
-                                                body + k, body_len - k);
-            if (last_rc == PGP_PIN_OK) {
-                return emit_sw(SW_OK, out, out_max, out_len);
-            }
-            if (last_rc == PGP_PIN_BLOCKED ||
-                last_rc == PGP_PIN_CHIP_ERR ||
-                last_rc == PGP_PIN_NOT_SET) {
-                return emit_sw(pgp_pin_rc_to_sw(last_rc, OPENPGP_PIN_RC),
-                               out, out_max, out_len);
-            }
-        }
-        return emit_sw(pgp_pin_rc_to_sw(last_rc, OPENPGP_PIN_RC),
+        int rc = pgp_pin_reset_pw1_via_rc(body, rc_len_s,
+                                           body + rc_len_s,
+                                           body_len - rc_len_s);
+        return emit_sw(pgp_pin_rc_to_sw(rc, OPENPGP_PIN_RC),
                        out, out_max, out_len);
     } else if (p1 == 0x02u) {
         /* Body = new_PW1.  PW3 must already be verified. */
@@ -829,45 +804,15 @@ static int handle_generate(uint8_t p1, uint8_t p2,
         return emit_sw(SW_REF_DATA_NOT_FOUND, out, out_max, out_len);
     }
     if (rc != PGP_KEYS_OK) {
-        /* M4 HW debug — encode raw lt_ret_t in SW low byte.  Stage
-         * code chooses the SW prefix:
-         *   stage 1 (generate failed)        → 0x6Fxx
-         *   stage 2 (pubkey_read failed)     → 0x6Exx
-         *   stage 3 (R-config READ failed)   → 0x6Dxx
-         *   stage 4 (R-config WRITE failed)  → 0x6Cxx
-         *
-         * For stage 3/4 we ALSO emit the failing register addr + the
-         * read value in the response body (8 bytes) so we can see
-         * the actual chip R-config state on the wire. */
-        int err = pgp_keys_last_chip_rc;
-        if (err < 0) err = -err;
-        if (err > (int) 0xFFu) err = 0xFF;
-
-        uint16_t base;
-        switch (pgp_keys_last_chip_stage) {
-        case 1:  base = 0x6F00u; break;
-        case 2:  base = 0x6E00u; break;
-        case 3:  base = 0x6D00u; break;
-        case 4:  base = 0x6C00u; break;
-        default: base = 0x6F00u; break;
-        }
-
-        /* Always dump the last R-config state in the response body on
-         * ANY error so we can see what the chip actually thinks the
-         * UAP state is. */
-        if (out_max >= 8u) {
-            out[0] = (uint8_t)(tropic_last_rconfig_addr >> 8);
-            out[1] = (uint8_t)(tropic_last_rconfig_addr & 0xFFu);
-            out[2] = (uint8_t) pgp_keys_last_chip_stage;
-            out[3] = (uint8_t) tropic_last_ensure_step;
-            out[4] = (uint8_t)(tropic_last_rconfig_value >> 24);
-            out[5] = (uint8_t)(tropic_last_rconfig_value >> 16);
-            out[6] = (uint8_t)(tropic_last_rconfig_value >> 8);
-            out[7] = (uint8_t)(tropic_last_rconfig_value & 0xFFu);
-            *out_len = 8;
-        }
-        return emit_sw((uint16_t)(base | (uint8_t) err),
-                        out, out_max, out_len);
+        /* M6 audit M2 + L1 — collapse all chip failure paths to a
+         * single SW_UNKNOWN_ERROR.  The earlier per-stage SW + 8-byte
+         * R-config dump leaked chip-internal access-control state to
+         * any unauthenticated READ PUBLIC KEY caller (P1=0x81 has no
+         * PIN gate per spec §7.2.14), which is a reconnaissance oracle.
+         * Chip FW 2.0.0 is stable; the diagnostic dump is no longer
+         * needed.  pgp_keys_last_chip_rc/stage globals remain for
+         * firmware-side debugging via UART. */
+        return emit_sw(SW_UNKNOWN_ERROR, out, out_max, out_len);
     }
 
     size_t off = 0;
@@ -957,9 +902,16 @@ static int handle_pso(uint8_t p1, uint8_t p2,
             return emit_sw(SW_UNKNOWN_ERROR, out, out_max, out_len);
         }
         if (out_max < PGP_KEYS_PUBKEY_LEN + 2u) {
+            memzero(shared, sizeof shared);
             return emit_sw(SW_WRONG_LENGTH, out, out_max, out_len);
         }
         memcpy(out, shared, PGP_KEYS_PUBKEY_LEN);
+        /* M6 audit M1 — zeroize the ECDH shared secret on the stack
+         * after it's been copied into the response buffer.  The shared
+         * secret has the same sensitivity as the priv key (full ECDH
+         * compromise once leaked) and pgp_keys.c already zeroes priv;
+         * mirror that pattern at the applet layer for consistency. */
+        memzero(shared, sizeof shared);
         *out_len = PGP_KEYS_PUBKEY_LEN;
         return emit_sw(SW_OK, out, out_max, out_len);
     }
@@ -1013,6 +965,19 @@ static int handle_terminate_df(uint8_t p1, uint8_t p2,
      * keeps it simple — PW3-only. */
     if (!pgp_pin_is_verified(OPENPGP_PIN_PW3)) {
         return emit_sw(SW_SECURITY_NOT_SATISFIED, out, out_max, out_len);
+    }
+    /* M6 audit H1 — destroy chip-side ECC keys BEFORE wiping R-mem.
+     * openpgp_state_terminate() wipes the dec priv at byte 180-211 but
+     * sig (slot 29) + aut (slot 31) live on the chip and would survive
+     * a TERMINATE+ACTIVATE cycle, leaving the original keypairs usable
+     * by anyone who knows the default PIN.  Spec §7.2.16 requires
+     * TERMINATE to invalidate all key material.  Erase failures are
+     * fatal — partial erase is unsafe. */
+    if (pgp_keys_erase_sig() != PGP_KEYS_OK) {
+        return emit_sw(SW_UNKNOWN_ERROR, out, out_max, out_len);
+    }
+    if (pgp_keys_erase_aut() != PGP_KEYS_OK) {
+        return emit_sw(SW_UNKNOWN_ERROR, out, out_max, out_len);
     }
     if (openpgp_state_terminate() != 0) {
         return emit_sw(SW_UNKNOWN_ERROR, out, out_max, out_len);

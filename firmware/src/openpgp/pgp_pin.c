@@ -144,6 +144,11 @@ int pgp_pin_change(int which,
     memzero(new_hash, sizeof new_hash);
 
     if (store_rc != 0) return PGP_PIN_CHIP_ERR;
+    /* M6 audit H2 — record new PIN length so the next CHANGE REF can
+     * split at the canonical boundary without a search loop. */
+    if (openpgp_state_pin_len_set(which, (uint8_t) new_len) != 0) {
+        return PGP_PIN_CHIP_ERR;
+    }
     /* Counter already reset by successful verify; session flag set too. */
     return PGP_PIN_OK;
 }
@@ -162,6 +167,10 @@ int pgp_pin_reset_pw1_via_rc(const uint8_t *rc_bytes, size_t rc_len,
     memzero(new_hash, sizeof new_hash);
     if (store_rc != 0) return PGP_PIN_CHIP_ERR;
 
+    /* M6 audit H2 — record new PW1 length. */
+    if (openpgp_state_pin_len_set(OPENPGP_PIN_PW1, (uint8_t) new_pw1_len) != 0) {
+        return PGP_PIN_CHIP_ERR;
+    }
     if (openpgp_state_pin_retries_set(OPENPGP_PIN_PW1,
                                        OPENPGP_PW1_RETRIES_INITIAL) != 0) {
         return PGP_PIN_CHIP_ERR;
@@ -183,6 +192,10 @@ int pgp_pin_reset_pw1_via_pw3(const uint8_t *new_pw1, size_t new_pw1_len)
     memzero(new_hash, sizeof new_hash);
     if (store_rc != 0) return PGP_PIN_CHIP_ERR;
 
+    /* M6 audit H2 — record new PW1 length. */
+    if (openpgp_state_pin_len_set(OPENPGP_PIN_PW1, (uint8_t) new_pw1_len) != 0) {
+        return PGP_PIN_CHIP_ERR;
+    }
     if (openpgp_state_pin_retries_set(OPENPGP_PIN_PW1,
                                        OPENPGP_PW1_RETRIES_INITIAL) != 0) {
         return PGP_PIN_CHIP_ERR;
@@ -205,6 +218,10 @@ int pgp_pin_set_rc(const uint8_t *rc_bytes, size_t rc_len)
                                           OPENPGP_RC_UNSET) != 0) {
             return PGP_PIN_CHIP_ERR;
         }
+        /* M6 audit H2 — RC length 0 = unset sentinel. */
+        if (openpgp_state_pin_len_set(OPENPGP_PIN_RC, 0u) != 0) {
+            return PGP_PIN_CHIP_ERR;
+        }
         return PGP_PIN_OK;
     }
 
@@ -216,6 +233,10 @@ int pgp_pin_set_rc(const uint8_t *rc_bytes, size_t rc_len)
     memzero(new_hash, sizeof new_hash);
     if (store_rc != 0) return PGP_PIN_CHIP_ERR;
 
+    /* M6 audit H2 — record new RC length. */
+    if (openpgp_state_pin_len_set(OPENPGP_PIN_RC, (uint8_t) rc_len) != 0) {
+        return PGP_PIN_CHIP_ERR;
+    }
     if (openpgp_state_pin_retries_set(OPENPGP_PIN_RC,
                                        OPENPGP_PW3_RETRIES_INITIAL) != 0) {
         return PGP_PIN_CHIP_ERR;

@@ -26,8 +26,14 @@
  * M4 state had a corrupted PW3 hash (or retry counter at 0) of unknown
  * cause; cleanest recovery is to force re-bootstrap via magic mismatch.
  * Any future state-shape change should bump this byte. */
-static const uint8_t PGP_MAGIC[4]    = { 'P', 'G', '7', 'M' };
-#define PGP_SCHEMA_VERSION  1u
+/* Bumped 'PG7M' → 'PG7N' at M6 audit H2 fix 2026-05-12 — schema now
+ * stores PIN lengths at offsets 212-214 so CHANGE REFERENCE DATA /
+ * RESET RETRY COUNTER can split the APDU body at the canonical
+ * boundary (OpenPGP card v3.4.1 §7.2.6) without an exhaustive search
+ * that would consume the retry counter in a single APDU.  Existing
+ * PG7M state is wiped: user re-enters default PINs after upgrade. */
+static const uint8_t PGP_MAGIC[4]    = { 'P', 'G', '7', 'N' };
+#define PGP_SCHEMA_VERSION  2u
 
 /* pgp_state_present byte values (M3 — 3-state machine):
  *   0 = factory fresh (never bootstrapped) — next init auto-activates
@@ -73,6 +79,13 @@ static const char PGP_DEFAULT_PW3[] = "12345678";
 #define OFF_PW3_HASH         148   /* 16 B — SHA-256("12345678")[:16] default */
 #define OFF_RC_HASH          164   /* 16 B — all-zero if RC unset */
 #define OFF_DEC_PRIV         180   /* 32 B — X25519 priv key, all-zero if no dec key yet */
+/* M6 audit H2 fix — PIN length storage.  Schema v2 (PG7N) adds these
+ * so CHANGE REF / RESET RC split the APDU body at the canonical
+ * boundary instead of looping over plausible splits (which would
+ * consume the retry counter on every wrong split in a single APDU). */
+#define OFF_PW1_LEN          212   /* 1 B — actual byte length of current PW1 */
+#define OFF_PW3_LEN          213   /* 1 B — actual byte length of current PW3 */
+#define OFF_RC_LEN           214   /* 1 B — actual byte length of current RC, 0 if unset */
 
 /* Read the full payload.
  *
@@ -130,12 +143,20 @@ static int write_activated_defaults(void)
     /* Hash default PINs into PW1 + PW3 slots.  SHA-256[:16] same
      * convention as Phase 5 pin.c. */
     uint8_t full[32];
-    sha256_Raw((const uint8_t *) PGP_DEFAULT_PW1, (uint32_t) strlen(PGP_DEFAULT_PW1), full);
+    size_t pw1_len = strlen(PGP_DEFAULT_PW1);
+    size_t pw3_len = strlen(PGP_DEFAULT_PW3);
+    sha256_Raw((const uint8_t *) PGP_DEFAULT_PW1, (uint32_t) pw1_len, full);
     memcpy(&buf[OFF_PW1_HASH], full, OPENPGP_PIN_HASH_LEN);
-    sha256_Raw((const uint8_t *) PGP_DEFAULT_PW3, (uint32_t) strlen(PGP_DEFAULT_PW3), full);
+    sha256_Raw((const uint8_t *) PGP_DEFAULT_PW3, (uint32_t) pw3_len, full);
     memcpy(&buf[OFF_PW3_HASH], full, OPENPGP_PIN_HASH_LEN);
     memset(full, 0, sizeof full);
     /* RC hash stays zero (RC unset). */
+
+    /* M6 audit H2 — record PIN lengths so CHANGE REF can split the
+     * body at the canonical boundary on a single attempt. */
+    buf[OFF_PW1_LEN] = (uint8_t) pw1_len;
+    buf[OFF_PW3_LEN] = (uint8_t) pw3_len;
+    buf[OFF_RC_LEN]  = 0u;  /* RC unset */
 
     return (write_payload(buf) == 0) ? 0 : -1;
 }
@@ -145,8 +166,13 @@ int openpgp_state_init(void)
     uint8_t buf[OPENPGP_RMEM_PRIMARY_SIZE];
 
     int rc = read_payload(buf);
-    if (rc == -2) {
-        return -1;  /* chip error */
+    /* M6 audit M3 — only magic mismatch (-1) falls through to write
+     * defaults.  Chip read errors (-3) or short reads (-4) must NOT
+     * trigger a silent re-init: that would factory-wipe state on any
+     * transient TROPIC01 communication glitch.  read_payload never
+     * returns -2 (legacy dead branch removed). */
+    if (rc == -3 || rc == -4) {
+        return -1;  /* chip error — applet returns SW=6F00 on dispatch */
     }
 
     if (rc == 0) {
@@ -317,6 +343,16 @@ static int pin_retries_offset(int which, size_t *out_off)
     }
 }
 
+static int pin_len_offset(int which, size_t *out_off)
+{
+    switch (which) {
+    case OPENPGP_PIN_PW1: *out_off = OFF_PW1_LEN; return 0;
+    case OPENPGP_PIN_PW3: *out_off = OFF_PW3_LEN; return 0;
+    case OPENPGP_PIN_RC:  *out_off = OFF_RC_LEN;  return 0;
+    default: return -1;
+    }
+}
+
 int openpgp_state_pin_hash_get(int which, uint8_t out[OPENPGP_PIN_HASH_LEN])
 {
     size_t off;
@@ -346,6 +382,27 @@ int openpgp_state_pin_retries_set(int which, uint8_t v)
 {
     size_t off;
     if (pin_retries_offset(which, &off) != 0) return -1;
+    uint8_t buf[OPENPGP_RMEM_PRIMARY_SIZE];
+    if (read_payload(buf) != 0) return -2;
+    buf[off] = v;
+    return (write_payload(buf) == 0) ? 0 : -2;
+}
+
+int openpgp_state_pin_len_get(int which, uint8_t *out)
+{
+    if (out == NULL) return -1;
+    size_t off;
+    if (pin_len_offset(which, &off) != 0) return -1;
+    uint8_t buf[OPENPGP_RMEM_PRIMARY_SIZE];
+    if (read_payload(buf) != 0) return -2;
+    *out = buf[off];
+    return 0;
+}
+
+int openpgp_state_pin_len_set(int which, uint8_t v)
+{
+    size_t off;
+    if (pin_len_offset(which, &off) != 0) return -1;
     uint8_t buf[OPENPGP_RMEM_PRIMARY_SIZE];
     if (read_payload(buf) != 0) return -2;
     buf[off] = v;

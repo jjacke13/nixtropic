@@ -196,6 +196,17 @@ int openpgp_state_pin_hash_set(int which,
 int openpgp_state_pin_retries_set(int which, uint8_t v);
 
 /**
+ * @brief Get/set the recorded length of a PIN (M6 audit H2 fix —
+ *        schema v2 PG7N).  Used by CHANGE REFERENCE DATA / RESET
+ *        RETRY COUNTER to split the APDU body at the canonical
+ *        old/new boundary on a single verify attempt.
+ *        Returns 0 OK, -1 bad index, -2 chip error.
+ *        For RC, length 0 means "unset".
+ */
+int openpgp_state_pin_len_get(int which, uint8_t *out);
+int openpgp_state_pin_len_set(int which, uint8_t v);
+
+/**
  * @brief Get / set pgp_state_present flag.  Set to 1 on ACTIVATE FILE;
  *        zeroed on TERMINATE DF (which wipes all PGP state).
  */
