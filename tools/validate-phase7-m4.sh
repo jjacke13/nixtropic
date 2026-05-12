@@ -113,14 +113,19 @@ else
 fi
 
 # --- 6. PUT DATA C7 (sig fingerprint) ---
-# 20 bytes arbitrary test fingerprint: AA BB CC DD ... × 20
-# APDU: 00 DA 00 C7 14 AA BB CC DD EE FF 00 11 22 33 44 55 66 77 88 99 AA BB CC DD
+# Real gpg-driven flow writes SHA-1(public-key-packet) as the fingerprint
+# after a successful GENERATE.  We can't compute that in shell easily, so
+# we just exercise the PUT DATA path with 20 zero bytes — semantically
+# "no fingerprint set yet", which gpg --card-status (step 8) accepts.
+# Writing a NON-zero junk fingerprint when a real key exists makes gpg
+# fail step 8 with "Conditions of use not satisfied" — gpg cross-checks
+# the stored fingerprint against what it can derive from the pubkey.
 echo ""
-echo "6/8  PUT DATA C7 (sig fingerprint, PW3 verified)..."
+echo "6/8  PUT DATA C7 (sig fingerprint = 20 zero bytes, PW3 verified)..."
 PUT_OUT=$(timeout 5 opensc-tool --reader 0 --card-driver default \
   --send-apdu "00:A4:04:00:06:D2:76:00:01:24:01" \
   --send-apdu "00:20:00:83:08:31:32:33:34:35:36:37:38" \
-  --send-apdu "00:DA:00:C7:14:AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD" 2>&1 | tail -5 || true)
+  --send-apdu "00:DA:00:C7:14:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00" 2>&1 | tail -5 || true)
 if echo "$PUT_OUT" | grep -qiE "0x90.{0,8}0x00|sw1=0x90.{0,20}sw2=0x00"; then
   echo "  ✓ PUT DATA C7 → SW=9000"
 else
