@@ -27,62 +27,32 @@ int pgp_keys_generate_sig(uint8_t pubkey_out[PGP_KEYS_PUBKEY_LEN])
 {
     if (pubkey_out == NULL) return PGP_KEYS_BAD_PARAM;
 
-    /* TROPIC01 R-config gates — should be no-op on factory-virgin chip. */
-    int rc = tropic_ecc_ensure_slot_authorized(PGP_KEYS_SIG_SLOT);
-    if (rc != 0) {
-        pgp_keys_last_chip_rc = rc;
-        pgp_keys_last_chip_stage = (tropic_last_ensure_step == 2) ? 4 : 3;
-        return PGP_KEYS_CHIP_ERR;
-    }
+    /* On TROPIC01 App FW 2.0.0+ (after running `nix run .#fw-update-chip`)
+     * chip-side keygen via lt_ecc_key_generate + lt_ecc_key_read works
+     * cleanly on slot 29.  The earlier host-side workaround (host-derive
+     * seed → ed25519_publickey → lt_ecc_key_store) was a 0.3.1
+     * engineering-FW quirk; reverted now that we're on supported FW.
+     *
+     * This restores plan §4.6: private key material never leaves the
+     * secure element — same model Phase 5 FIDO uses. */
 
-    /* HOST-SIDE KEYGEN PATH (M4 2026-05-12)
-     *
-     * lt_ecc_key_read on our specific dongle's chip-firmware build
-     * returns LT_L2_RESP_DISABLED (32) — the L2 opcode is feature-
-     * gated off (like FW_LOG_EN; see libtropic_functional_tests.h:368).
-     * UAP-bitmap denials would surface as LT_L3_UNAUTHORIZED at L3
-     * level instead, which is NOT what we're seeing.
-     *
-     * Workaround: host-side generate the Ed25519 seed (32 B from
-     * chip TRNG), derive pubkey via trezor_crypto ed25519_publickey(),
-     * then store the seed on chip via lt_ecc_key_store.  Chip-side
-     * EDDSA_SIGN still works (Phase 5 FIDO uses it on slots 0..28
-     * successfully — same opcode, no FW gating).
-     *
-     * SECURITY NOTE: the 32-byte seed transiently exists in STM32
-     * RAM (the `seed` array below).  We zero it before return.  This
-     * matches Phase 5's FIDO credential-key path (host-derives the
-     * credential KDF seed, stores on chip).  An attacker with full
-     * STM32 RAM access during the ~milliseconds between seed-gen
-     * and memzero could extract — addressed at the same level as
-     * Phase 5 (i.e., not at all in M4; M6 audit may suggest specific
-     * mitigations).
-     */
-
-    /* Erase any existing key first.  Store also requires empty slot. */
+    /* Erase any existing key first.  lt_ecc_key_generate doesn't auto-
+     * overwrite; libtropic wrapper coerces "already empty" to success
+     * so calling unconditionally is safe. */
     (void) tropic_ecc_erase(PGP_KEYS_SIG_SLOT);
 
-    uint8_t seed[32];
-    rc = tropic_random(seed, sizeof seed);
+    int rc = tropic_ecc_generate(PGP_KEYS_SIG_SLOT, CURVE_ED25519);
     if (rc != 0) {
         pgp_keys_last_chip_rc = rc;
-        pgp_keys_last_chip_stage = 5;  /* TRNG */
-        memzero(seed, sizeof seed);
+        pgp_keys_last_chip_stage = 1;  /* generate */
         return PGP_KEYS_CHIP_ERR;
     }
 
-    /* Derive pubkey from seed.  trezor_crypto's ed25519_publickey
-     * implements RFC 8032 §5.1.5 — SHA-512(seed) → scalar derive,
-     * scalar*B → pubkey. */
-    ed25519_publickey(seed, pubkey_out);
-
-    /* Store the seed on chip.  Future signs use lt_ecc_eddsa_sign which
-     * re-derives the scalar from the stored seed (same RFC 8032 step). */
-    rc = tropic_ecc_store(PGP_KEYS_SIG_SLOT, CURVE_ED25519, seed);
-    memzero(seed, sizeof seed);
-    if (rc != 0) {
+    rc = tropic_ecc_pubkey_read(PGP_KEYS_SIG_SLOT, pubkey_out,
+                                 PGP_KEYS_PUBKEY_LEN);
+    if (rc < 0) {
         pgp_keys_last_chip_rc = rc;
-        pgp_keys_last_chip_stage = 6;  /* STORE */
+        pgp_keys_last_chip_stage = 2;  /* pubkey_read */
         return PGP_KEYS_CHIP_ERR;
     }
 
@@ -94,16 +64,15 @@ int pgp_keys_generate_sig(uint8_t pubkey_out[PGP_KEYS_PUBKEY_LEN])
 int pgp_keys_read_sig_pubkey(uint8_t pubkey_out[PGP_KEYS_PUBKEY_LEN])
 {
     if (pubkey_out == NULL) return PGP_KEYS_BAD_PARAM;
-    /* M4 HW debug: lt_ecc_key_read is feature-disabled on our chip
-     * (returns LT_L2_RESP_DISABLED).  GENERATE-then-RE-READ workflow
-     * is replaced with the host-side keygen path in
-     * pgp_keys_generate_sig() that returns the pubkey directly.
-     * For READ (P1=81 after a prior generate), we need a cached
-     * pubkey — that's M5 polish (R-mem-persisted).  For now, READ
-     * just returns NO_KEY → 0x6A88.  GnuPG's normal flow is generate
-     * → captures pubkey in response → never re-reads. */
-    (void) pubkey_out;
-    return PGP_KEYS_NO_KEY;
+    /* Restored after chip FW update to 2.0.0 — lt_ecc_key_read works
+     * cleanly on slot 29 now.  Returns NO_KEY if slot is empty. */
+    int rc = tropic_ecc_pubkey_read(PGP_KEYS_SIG_SLOT, pubkey_out,
+                                     PGP_KEYS_PUBKEY_LEN);
+    if (rc < 0) {
+        memset(pubkey_out, 0, PGP_KEYS_PUBKEY_LEN);
+        return PGP_KEYS_NO_KEY;
+    }
+    return PGP_KEYS_OK;
 }
 
 int pgp_keys_sign_with_sig(const uint8_t *msg, size_t msg_len,
