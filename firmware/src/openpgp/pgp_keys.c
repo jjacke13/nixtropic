@@ -27,22 +27,23 @@ int pgp_keys_generate_sig(uint8_t pubkey_out[PGP_KEYS_PUBKEY_LEN])
 
     /* TROPIC01 R-config gates: SH0 needs UAP access for ECC ops on
      * slot 29's 8-slot group (24..31).  Factory default is permissive
-     * (all 0xFFFFFFFF) so this should be a no-op; if R-config has
-     * been clobbered by an earlier non-erase write, we may need to
-     * call lt_r_config_erase first. */
+     * (all 0xFFFFFFFF) so this should be a no-op. */
     int rc = tropic_ecc_ensure_slot_authorized(PGP_KEYS_SIG_SLOT);
     if (rc != 0) {
         pgp_keys_last_chip_rc = rc;
-        /* Map the ensure sub-step into our stage code so the applet
-         * can emit a distinct SW prefix:
-         *   tropic_last_ensure_step 1 (read failed)  → stage 3
-         *   tropic_last_ensure_step 2 (write failed) → stage 4 */
         pgp_keys_last_chip_stage = (tropic_last_ensure_step == 2) ? 4 : 3;
         return PGP_KEYS_CHIP_ERR;
     }
 
-    /* Regenerate destroys any prior key on the slot.  libtropic
-     * handles the erase implicitly in key_generate. */
+    /* Erase any existing key first.  TROPIC01's lt_ecc_key_generate
+     * returns LT_L3_FAIL (21) when the slot is already occupied —
+     * it does NOT auto-overwrite.  The erase wrapper coerces "slot
+     * already empty" to success, so calling it unconditionally is safe.
+     * Phase 7 M4 HW debug 2026-05-12: caught at first run, slot 29
+     * apparently had unexpected content on factory dongle. */
+    (void) tropic_ecc_erase(PGP_KEYS_SIG_SLOT);
+
+    /* Now generate the new key. */
     rc = tropic_ecc_generate(PGP_KEYS_SIG_SLOT, CURVE_ED25519);
     if (rc != 0) {
         pgp_keys_last_chip_rc = rc;

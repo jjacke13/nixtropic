@@ -845,18 +845,19 @@ static int handle_generate(uint8_t p1, uint8_t p2,
         default: base = 0x6F00u; break;
         }
 
-        if (pgp_keys_last_chip_stage == 3 || pgp_keys_last_chip_stage == 4) {
-            if (out_max >= 8u) {
-                out[0] = (uint8_t)(tropic_last_rconfig_addr >> 8);
-                out[1] = (uint8_t)(tropic_last_rconfig_addr & 0xFFu);
-                out[2] = 0x00u;
-                out[3] = 0x00u;
-                out[4] = (uint8_t)(tropic_last_rconfig_value >> 24);
-                out[5] = (uint8_t)(tropic_last_rconfig_value >> 16);
-                out[6] = (uint8_t)(tropic_last_rconfig_value >> 8);
-                out[7] = (uint8_t)(tropic_last_rconfig_value & 0xFFu);
-                *out_len = 8;
-            }
+        /* Always dump the last R-config state in the response body on
+         * ANY error so we can see what the chip actually thinks the
+         * UAP state is. */
+        if (out_max >= 8u) {
+            out[0] = (uint8_t)(tropic_last_rconfig_addr >> 8);
+            out[1] = (uint8_t)(tropic_last_rconfig_addr & 0xFFu);
+            out[2] = (uint8_t) pgp_keys_last_chip_stage;
+            out[3] = (uint8_t) tropic_last_ensure_step;
+            out[4] = (uint8_t)(tropic_last_rconfig_value >> 24);
+            out[5] = (uint8_t)(tropic_last_rconfig_value >> 16);
+            out[6] = (uint8_t)(tropic_last_rconfig_value >> 8);
+            out[7] = (uint8_t)(tropic_last_rconfig_value & 0xFFu);
+            *out_len = 8;
         }
         return emit_sw((uint16_t)(base | (uint8_t) err),
                         out, out_max, out_len);
