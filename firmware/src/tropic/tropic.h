@@ -95,6 +95,28 @@ int tropic_ecc_eddsa_sign(uint8_t slot, const uint8_t *msg, size_t msg_len,
 int tropic_ecc_erase(uint8_t slot);
 
 /**
+ * @brief Ensure SH0 has UAP access for ECC ops on `slot`.
+ *
+ * TROPIC01 R-config divides ECC slots into 4 groups of 8 (0..7, 8..15,
+ * 16..23, 24..31).  Each group has independent per-pairing-key access
+ * bits.  Factory default on our chip authorizes SH0 for groups
+ * 0..23 but NOT 24..31 — calling lt_ecc_key_generate on slot ≥24 with
+ * the SH0 session returns LT_L3_UNAUTHORIZED (21).
+ *
+ * Phase 7 OpenPGP uses slots 29/30/31 (per plan §4.6).  We must
+ * authorize SH0 for the slot-24..31 group on first use.  R-config
+ * writes are mutable until `lt_set_config_to_i_config` is called
+ * (which we don't), so this works fine and persists across power
+ * cycles.
+ *
+ * Authorizes generate / read / erase / eddsa_sign operations.
+ * Idempotent: if the bits are already set, no write happens.
+ *
+ * @return 0 on success, negative on chip error.
+ */
+int tropic_ecc_ensure_slot_authorized(uint8_t slot);
+
+/**
  * @brief Write `len` bytes to TROPIC01 R-mem slot. Requires open L3 session.
  *
  * Slot range: 0..511. Caller is responsible for ensuring the slot was

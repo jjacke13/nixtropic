@@ -205,6 +205,42 @@ int tropic_ecc_pubkey_read(uint8_t slot, uint8_t *out, size_t out_size)
     return (int) n;
 }
 
+int tropic_ecc_ensure_slot_authorized(uint8_t slot)
+{
+    if (slot > 31u) return -1;
+    if (tropic_l3_session_ensure() != 0) return -1;
+
+    /* Each 8-slot group occupies bits N*8..N*8+7 within the 32-bit
+     * UAP register.  Within that 8-bit field, bit 0 = SH0, bit 1 = SH1,
+     * etc.  We want SH0 (= 0x01) for the group `slot/8`.  Shift is
+     * `(slot/8) * 8`. */
+    uint32_t group_shift = (uint32_t)(slot / 8u) * 8u;
+    uint32_t want_bit = ((uint32_t) 0x01u) << group_shift;
+
+    /* The four UAP registers we need to authorize for OpenPGP key
+     * operations.  See TROPIC01_application_co.h. */
+    static const uint16_t addrs[] = {
+        0x130u,  /* CFG_UAP_ECC_KEY_GENERATE */
+        0x138u,  /* CFG_UAP_ECC_KEY_READ     */
+        0x13Cu,  /* CFG_UAP_ECC_KEY_ERASE    */
+        0x144u,  /* CFG_UAP_EDDSA_SIGN       */
+    };
+
+    for (size_t i = 0; i < sizeof addrs / sizeof addrs[0]; i++) {
+        uint32_t val = 0;
+        lt_ret_t r = lt_r_config_read(&s_handle,
+                                       (enum CONFIGURATION_OBJECTS_REGS) addrs[i],
+                                       &val);
+        if (r != LT_OK) return -(int) r;
+        if ((val & want_bit) == want_bit) continue;
+        r = lt_r_config_write(&s_handle,
+                              (enum CONFIGURATION_OBJECTS_REGS) addrs[i],
+                              val | want_bit);
+        if (r != LT_OK) return -(int) r;
+    }
+    return 0;
+}
+
 int tropic_ecc_erase(uint8_t slot)
 {
     if (tropic_l3_session_ensure() != 0) return -1;

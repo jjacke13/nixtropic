@@ -25,9 +25,19 @@ int pgp_keys_generate_sig(uint8_t pubkey_out[PGP_KEYS_PUBKEY_LEN])
 {
     if (pubkey_out == NULL) return PGP_KEYS_BAD_PARAM;
 
+    /* TROPIC01 R-config gates: SH0 (our session pairing key) needs UAP
+     * access for ECC ops on slot 29's 8-slot group (24..31).  Factory
+     * default authorizes SH0 only up to slot 23. */
+    int rc = tropic_ecc_ensure_slot_authorized(PGP_KEYS_SIG_SLOT);
+    if (rc != 0) {
+        pgp_keys_last_chip_rc = rc;
+        pgp_keys_last_chip_stage = 3;  /* new stage code = R-config setup */
+        return PGP_KEYS_CHIP_ERR;
+    }
+
     /* Regenerate destroys any prior key on the slot.  libtropic
      * handles the erase implicitly in key_generate. */
-    int rc = tropic_ecc_generate(PGP_KEYS_SIG_SLOT, CURVE_ED25519);
+    rc = tropic_ecc_generate(PGP_KEYS_SIG_SLOT, CURVE_ED25519);
     if (rc != 0) {
         pgp_keys_last_chip_rc = rc;
         pgp_keys_last_chip_stage = 1;
