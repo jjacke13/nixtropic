@@ -172,11 +172,19 @@
           tinyusbSrc = tinyusb;
         };
 
+        # TROPIC01 chip-firmware updater (host tool, Linux x86_64/aarch64).
+        # Builds against pinned libtropic + OpenSSL CAL.  See nix/fw-update-chip.nix
+        # + tools/fw-update-chip-main.c.
+        fw-update-chip = pkgs.callPackage ./nix/fw-update-chip.nix {
+          libtropicSrc = libtropic;
+        };
+
         apps = import ./nix/apps.nix {
           inherit pkgs;
           inherit stockFirmware;
           openFirmware = open-firmware;
           libtropicUtil = lt-util;
+          fwUpdateChip = fw-update-chip;
         };
 
         devShell = import ./nix/dev-shell.nix { inherit pkgs; };
@@ -187,6 +195,7 @@
           inherit stockFirmware lt-util;
           stock-firmware = stockFirmware;  # convenience alias
           inherit open-firmware;
+          inherit fw-update-chip;
           default = stockFirmware;
         };
 

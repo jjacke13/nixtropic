@@ -1,4 +1,4 @@
-{ pkgs, stockFirmware, openFirmware ? null, libtropicUtil ? null }:
+{ pkgs, stockFirmware, openFirmware ? null, libtropicUtil ? null, fwUpdateChip ? null }:
 
 # Backwards-compat alias — many internal references still use `firmware`.
 let firmware = openFirmware; in
@@ -2008,6 +2008,44 @@ in
       else
         "${flash-and-validate-phase7-m4}/bin/nixtropic-flash-and-validate-phase7-m4";
     meta.description = "DFU-flash open firmware + Phase 7 M4 validation";
+  };
+
+  # TROPIC01 chip-firmware updater.  Runs the host-side updater binary
+  # built from nix/fw-update-chip.nix + tools/fw-update-chip-main.c.
+  # Auto-picks the first /dev/ttyACM* unless the user passes one explicitly.
+  fw-update-chip = {
+    type = "app";
+    program =
+      let wrapper = pkgs.writeShellApplication {
+        name = "nixtropic-fw-update-chip";
+        runtimeInputs = [ pkgs.coreutils ] ++ pkgs.lib.optionals (fwUpdateChip != null) [ fwUpdateChip ];
+        text =
+          if fwUpdateChip == null then
+            ''echo "fw-update-chip not built in this flake."; exit 1''
+          else ''
+            set -euo pipefail
+            DEV="''${1:-}"
+            if [ -z "$DEV" ]; then
+              # Auto-detect: pick the lowest-numbered /dev/ttyACM*.
+              DEV="$(ls -1 /dev/ttyACM* 2>/dev/null | head -n1 || true)"
+            fi
+            if [ -z "$DEV" ] || [ ! -e "$DEV" ]; then
+              echo "ERROR: no /dev/ttyACM* found.  Plug in the dongle first." >&2
+              exit 1
+            fi
+            echo "Using device: $DEV"
+            echo ""
+            echo "⚠ THIS IS IRREVERSIBLE — chip rejects FW downgrade after success."
+            echo "⚠ Brick risk is low (Maintenance Mode = recoverable), but please:"
+            echo "   1. Make sure the dongle is on a stable USB port."
+            echo "   2. Don't unplug it during the update."
+            echo "   3. After success, our open-firmware should still work."
+            echo ""
+            exec ${fwUpdateChip}/bin/fw-update-chip "$DEV"
+          '';
+      };
+      in "${wrapper}/bin/nixtropic-fw-update-chip";
+    meta.description = "Update TROPIC01 chip firmware (CPU + SPECT) to App FW 2.0.0";
   };
 
   identify = {

@@ -1,0 +1,74 @@
+cmake_minimum_required(VERSION 3.21.0)
+
+project(nixtropic_fw_update_chip
+        DESCRIPTION "TROPIC01 chip-firmware updater (App FW + SPECT FW) for nixtropic"
+        LANGUAGES C)
+
+# These come from -D flags set by Nix:
+#   LIBTROPIC_SRC   — path to the pinned libtropic source
+#   LT_CPU_FW_UPDATE_DATA_VER  — "1_0_0" / "1_0_1" / "2_0_0"
+if (NOT DEFINED LIBTROPIC_SRC)
+    message(FATAL_ERROR "LIBTROPIC_SRC must be set via -DLIBTROPIC_SRC=...")
+endif()
+if (NOT DEFINED LT_CPU_FW_UPDATE_DATA_VER)
+    set(LT_CPU_FW_UPDATE_DATA_VER "2_0_0")
+endif()
+if (NOT DEFINED LT_USB_DEVKIT_PATH)
+    set(LT_USB_DEVKIT_PATH "/dev/ttyACM0")
+endif()
+
+set(LT_SILICON_REV "ACAB")   # TR01-C2P-T101 — auto-managed FW banks
+
+# Bootloader version selects which FW binary set to use.
+# The pinned libtropic includes boot_v_2_0_1 (with fw_v_1_0_0 / 1_0_1 / 2_0_0)
+# and the older boot_v_1_0_1 set.  ACAB silicon with the v2.0.1 bootloader
+# wants the boot_v_2_0_1 set.
+set(BL_FOLDER "boot_v_2_0_1")
+set(FW_BIN_DIR "${LIBTROPIC_SRC}/TROPIC01_fw_update_files/${BL_FOLDER}/fw_v_${LT_CPU_FW_UPDATE_DATA_VER}")
+
+if (NOT EXISTS "${FW_BIN_DIR}/fw_CPU.h" OR NOT EXISTS "${FW_BIN_DIR}/fw_SPECT.h")
+    message(FATAL_ERROR
+        "Missing FW binaries at ${FW_BIN_DIR}.  Check LT_CPU_FW_UPDATE_DATA_VER.")
+endif()
+
+# Pull libtropic in as a subdirectory (it knows how to build itself).
+# We need to set the silicon revision + CPU FW version BEFORE add_subdirectory
+# so libtropic's CMakeLists.txt sees them.
+set(LT_SILICON_REV ${LT_SILICON_REV} CACHE STRING "" FORCE)
+set(LT_CPU_FW_UPDATE_DATA_VER ${LT_CPU_FW_UPDATE_DATA_VER} CACHE STRING "" FORCE)
+
+add_subdirectory("${LIBTROPIC_SRC}" "libtropic_build")
+target_compile_options(tropic PRIVATE -ffunction-sections -fdata-sections)
+
+# Bring in the OpenSSL CAL (cal/openssl/).
+add_subdirectory("${LIBTROPIC_SRC}/cal/openssl" "openssl_cal")
+target_sources(tropic PRIVATE ${LT_CAL_SRCS})
+target_include_directories(tropic PUBLIC ${LT_CAL_INC_DIRS})
+
+# Bring in the POSIX USB-dongle HAL (hal/posix/usb_dongle/).
+add_subdirectory("${LIBTROPIC_SRC}/hal/posix/usb_dongle" "posix_usb_dongle_hal")
+target_sources(tropic PRIVATE ${LT_HAL_SRCS})
+target_include_directories(tropic PUBLIC ${LT_HAL_INC_DIRS})
+
+# Link OpenSSL via standard CMake find.
+find_package(OpenSSL REQUIRED)
+target_link_libraries(tropic PUBLIC OpenSSL::Crypto)
+
+# Our updater binary.
+add_executable(fw-update-chip
+    "${CMAKE_CURRENT_SOURCE_DIR}/fw-update-chip-main.c")
+
+target_compile_definitions(fw-update-chip PRIVATE
+    "LT_USB_DEVKIT_PATH=\"${LT_USB_DEVKIT_PATH}\""
+    "LT_TARGET_VERSION_CPU=\"v${LT_CPU_FW_UPDATE_DATA_VER}\""
+    "LT_TARGET_VERSION_SPECT=\"bundled\"")
+
+target_include_directories(fw-update-chip PRIVATE
+    ${FW_BIN_DIR}
+    "${LIBTROPIC_SRC}/cal/openssl"
+    "${LIBTROPIC_SRC}/hal/posix/usb_dongle"
+    "${LIBTROPIC_SRC}/include")
+
+target_link_libraries(fw-update-chip PRIVATE tropic)
+
+install(TARGETS fw-update-chip RUNTIME DESTINATION bin)
