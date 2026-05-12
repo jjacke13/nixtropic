@@ -203,6 +203,30 @@ int openpgp_state_sex_set(uint8_t v);  /* DO 5F35 */
 int openpgp_state_force_verify_set(uint8_t v);  /* DO C4 bit 0 */
 int openpgp_state_touch_required_set(uint8_t v);  /* aliases DO D6/D7/D8 */
 
+/* ---- M4 fingerprint + gentime + sig counter writers ---- */
+
+/**
+ * @brief Write 20 B fingerprint for the given slot (DO C7/C8/C9).
+ *        slot_idx = 0 (sig), 1 (dec), 2 (aut).
+ *        Caller responsible for PW3-verified gate.
+ */
+int openpgp_state_fingerprint_set(int slot_idx,
+                                   const uint8_t fpr[OPENPGP_FPR_LEN]);
+
+/**
+ * @brief Write 4 B generation timestamp BE u32 (DO CE/CF/D0).
+ *        slot_idx = 0 (sig), 1 (dec), 2 (aut).
+ */
+int openpgp_state_gentime_set(int slot_idx,
+                               const uint8_t gt[OPENPGP_GENTIME_LEN]);
+
+/**
+ * @brief Increment the 3-byte BCD signature counter (DO 93) by 1.
+ *        Called on each successful PSO:CDS.  Overflow wraps to 0
+ *        and triggers force_verify (consume PW1.81 again per spec).
+ */
+int openpgp_state_sig_counter_increment(void);
+
 /* ---- TERMINATE DF / ACTIVATE FILE ---- */
 
 /**

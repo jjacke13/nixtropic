@@ -426,3 +426,67 @@ int openpgp_state_touch_required_set(uint8_t v)
     buf[OFF_TOUCH_REQUIRED] = v;
     return (write_payload(buf) == 0) ? 0 : -2;
 }
+
+/* ---- M4 fingerprint / gentime / sig counter writers ---- */
+
+static int slot_idx_to_fpr_offset(int slot_idx, size_t *out_off)
+{
+    switch (slot_idx) {
+    case 0: *out_off = OFF_FPR_SIG; return 0;
+    case 1: *out_off = OFF_FPR_DEC; return 0;
+    case 2: *out_off = OFF_FPR_AUT; return 0;
+    default: return -1;
+    }
+}
+
+static int slot_idx_to_gentime_offset(int slot_idx, size_t *out_off)
+{
+    switch (slot_idx) {
+    case 0: *out_off = OFF_GENTIME_SIG; return 0;
+    case 1: *out_off = OFF_GENTIME_DEC; return 0;
+    case 2: *out_off = OFF_GENTIME_AUT; return 0;
+    default: return -1;
+    }
+}
+
+int openpgp_state_fingerprint_set(int slot_idx,
+                                   const uint8_t fpr[OPENPGP_FPR_LEN])
+{
+    size_t off;
+    if (slot_idx_to_fpr_offset(slot_idx, &off) != 0 || fpr == NULL) return -1;
+    uint8_t buf[OPENPGP_RMEM_PRIMARY_SIZE];
+    if (read_payload(buf) != 0) return -2;
+    memcpy(&buf[off], fpr, OPENPGP_FPR_LEN);
+    return (write_payload(buf) == 0) ? 0 : -2;
+}
+
+int openpgp_state_gentime_set(int slot_idx,
+                               const uint8_t gt[OPENPGP_GENTIME_LEN])
+{
+    size_t off;
+    if (slot_idx_to_gentime_offset(slot_idx, &off) != 0 || gt == NULL) return -1;
+    uint8_t buf[OPENPGP_RMEM_PRIMARY_SIZE];
+    if (read_payload(buf) != 0) return -2;
+    memcpy(&buf[off], gt, OPENPGP_GENTIME_LEN);
+    return (write_payload(buf) == 0) ? 0 : -2;
+}
+
+int openpgp_state_sig_counter_increment(void)
+{
+    uint8_t buf[OPENPGP_RMEM_PRIMARY_SIZE];
+    if (read_payload(buf) != 0) return -2;
+    /* DO 93 is 3 B BCD per OpenPGP spec §4.4.3.2 — the counter is a
+     * binary integer encoded big-endian in 3 bytes (NOT actual BCD).
+     * 24-bit range = up to ~16M signatures before wrap.  Wrap is
+     * benign (no spec-defined effect; gpg just sees the counter
+     * reset). */
+    uint32_t ctr =
+        ((uint32_t) buf[OFF_SIG_COUNTER + 0] << 16) |
+        ((uint32_t) buf[OFF_SIG_COUNTER + 1] << 8)  |
+        ((uint32_t) buf[OFF_SIG_COUNTER + 2]);
+    ctr = (ctr + 1u) & 0x00FFFFFFu;
+    buf[OFF_SIG_COUNTER + 0] = (uint8_t)((ctr >> 16) & 0xFFu);
+    buf[OFF_SIG_COUNTER + 1] = (uint8_t)((ctr >>  8) & 0xFFu);
+    buf[OFF_SIG_COUNTER + 2] = (uint8_t)( ctr        & 0xFFu);
+    return (write_payload(buf) == 0) ? 0 : -2;
+}

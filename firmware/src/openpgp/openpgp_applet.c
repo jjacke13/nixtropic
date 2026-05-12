@@ -9,6 +9,7 @@
 #include "openpgp_aid.h"
 #include "openpgp_state.h"
 #include "pgp_pin.h"
+#include "pgp_keys.h"
 #include "ccid/ccid_proto.h"
 
 #include <stdint.h>
@@ -29,6 +30,8 @@
 #define INS_PUT_DATA       0xDA
 #define INS_TERMINATE_DF   0xE6
 #define INS_ACTIVATE_FILE  0x44
+#define INS_GENERATE       0x47   /* GENERATE ASYMMETRIC KEY PAIR — M4 */
+#define INS_PSO            0x2A   /* PERFORM SECURITY OPERATION — M4+M5 */
 
 /* ===== Algorithm-attribute byte sequences (DO C1/C2/C3) =====
  *
@@ -712,11 +715,166 @@ static int handle_put_data(uint16_t tag,
             return emit_sw(SW_CONDITIONS_NOT_SATISFIED, out, out_max, out_len);
         }
         break;
+
+    /* M4 — fingerprints + generation timestamps. Host (gpg) writes
+     * these after a GENERATE so subsequent GET DATA reflects the
+     * actual key.  20 B fingerprint = SHA-1 over the public-key
+     * material per RFC 4880.  4 B gentime = BE u32 seconds since
+     * Unix epoch. */
+    case 0x00C7:   /* Fingerprint — sig */
+    case 0x00C8:   /* Fingerprint — dec */
+    case 0x00C9: { /* Fingerprint — aut */
+        if (body_len != OPENPGP_FPR_LEN) {
+            return emit_sw(SW_WRONG_LENGTH, out, out_max, out_len);
+        }
+        int slot = (int)(tag - 0x00C7);
+        rc = openpgp_state_fingerprint_set(slot, body);
+        break;
+    }
+
+    case 0x00CE:   /* Generation timestamp — sig */
+    case 0x00CF:   /* Generation timestamp — dec */
+    case 0x00D0: { /* Generation timestamp — aut */
+        if (body_len != OPENPGP_GENTIME_LEN) {
+            return emit_sw(SW_WRONG_LENGTH, out, out_max, out_len);
+        }
+        int slot = (int)(tag - 0x00CE);
+        rc = openpgp_state_gentime_set(slot, body);
+        break;
+    }
+
     default:
         return emit_sw(SW_REF_DATA_NOT_FOUND, out, out_max, out_len);
     }
 
     return emit_sw((rc == 0) ? SW_OK : SW_UNKNOWN_ERROR, out, out_max, out_len);
+}
+
+/* ===== M4 — GENERATE ASYMMETRIC KEY PAIR (INS 0x47) ===== */
+
+/* Build the 7F49-wrapped public key response into the response buffer.
+ * Returns 0 OK, -1 if out_max too small. */
+static int build_pubkey_response(uint8_t *out, size_t out_max, size_t *off,
+                                  const uint8_t pubkey[PGP_KEYS_PUBKEY_LEN])
+{
+    /* Inner: 86 [len=20] [pubkey 32B] = 34 bytes */
+    if (*off + 37u > out_max) return -1;
+
+    out[(*off)++] = 0x7Fu;
+    out[(*off)++] = 0x49u;
+    out[(*off)++] = 0x22u;   /* length 34 of inner content */
+
+    out[(*off)++] = 0x86u;
+    out[(*off)++] = (uint8_t) PGP_KEYS_PUBKEY_LEN;  /* 32 */
+    memcpy(&out[*off], pubkey, PGP_KEYS_PUBKEY_LEN);
+    *off += PGP_KEYS_PUBKEY_LEN;
+    return 0;
+}
+
+static int handle_generate(uint8_t p1, uint8_t p2,
+                            const uint8_t *body, size_t body_len,
+                            uint8_t *out, size_t out_max, size_t *out_len)
+{
+    if (p2 != 0x00u) {
+        return emit_sw(SW_INCORRECT_P1P2, out, out_max, out_len);
+    }
+    /* P1: 0x80 = generate; 0x81 = read public key */
+    int generate;
+    switch (p1) {
+    case 0x80u: generate = 1; break;
+    case 0x81u: generate = 0; break;
+    default:    return emit_sw(SW_INCORRECT_P1P2, out, out_max, out_len);
+    }
+
+    /* Body = control-reference template: CRT_TAG + 0x00 (empty value)
+     * CRT_TAG = 0xB6 (sig), 0xB8 (dec), 0xA4 (aut). */
+    if (body == NULL || body_len < 2u) {
+        return emit_sw(SW_WRONG_LENGTH, out, out_max, out_len);
+    }
+    uint8_t crt_tag = body[0];
+
+    /* GENERATE (P1=80) requires PW3 verified.  READ (P1=81) does not
+     * (per spec §7.2.14 — public keys are public). */
+    if (generate && !pgp_pin_is_verified(OPENPGP_PIN_PW3)) {
+        return emit_sw(SW_SECURITY_NOT_SATISFIED, out, out_max, out_len);
+    }
+
+    uint8_t pubkey[PGP_KEYS_PUBKEY_LEN];
+    int rc;
+
+    switch (crt_tag) {
+    case 0xB6u:  /* Signature key */
+        rc = generate ? pgp_keys_generate_sig(pubkey)
+                      : pgp_keys_read_sig_pubkey(pubkey);
+        break;
+
+    case 0xB8u:  /* Decryption key — deferred to M5 */
+    case 0xA4u:  /* Authentication key — deferred to M5 */
+        return emit_sw(SW_CONDITIONS_NOT_SATISFIED, out, out_max, out_len);
+
+    default:
+        return emit_sw(SW_REF_DATA_NOT_FOUND, out, out_max, out_len);
+    }
+
+    if (rc == PGP_KEYS_NO_KEY) {
+        /* READ on empty slot — return spec-defined "ref data not found" */
+        return emit_sw(SW_REF_DATA_NOT_FOUND, out, out_max, out_len);
+    }
+    if (rc != PGP_KEYS_OK) {
+        return emit_sw(SW_UNKNOWN_ERROR, out, out_max, out_len);
+    }
+
+    size_t off = 0;
+    if (build_pubkey_response(out, out_max, &off, pubkey) < 0) {
+        return emit_sw(SW_WRONG_LENGTH, out, out_max, out_len);
+    }
+    *out_len = off;
+    return emit_sw(SW_OK, out, out_max, out_len);
+}
+
+/* ===== M4 — PERFORM SECURITY OPERATION : Compute Digital Signature ===== */
+
+static int handle_pso(uint8_t p1, uint8_t p2,
+                       const uint8_t *body, size_t body_len,
+                       uint8_t *out, size_t out_max, size_t *out_len)
+{
+    /* Only PSO:CDS (P1=9E, P2=9A) is implemented in M4.
+     * PSO:DEC (P1=80, P2=86) and INT_AUT come in M5. */
+    if (p1 != 0x9Eu || p2 != 0x9Au) {
+        return emit_sw(SW_INCORRECT_P1P2, out, out_max, out_len);
+    }
+
+    /* PW1 must be session-verified.  Spec says P2=0x81 (PW1.81 — sign
+     * authority) specifically; M3's pgp_pin only tracks a single PW1
+     * verified flag, so we accept either 81 or 82.  Force_verify
+     * semantics (consume after one sig) deferred to M6 polish. */
+    if (!pgp_pin_is_verified(OPENPGP_PIN_PW1)) {
+        return emit_sw(SW_SECURITY_NOT_SATISFIED, out, out_max, out_len);
+    }
+
+    if (body == NULL || body_len == 0u) {
+        return emit_sw(SW_WRONG_LENGTH, out, out_max, out_len);
+    }
+
+    uint8_t sig[PGP_KEYS_SIG_LEN];
+    int rc = pgp_keys_sign_with_sig(body, body_len, sig);
+    if (rc == PGP_KEYS_NO_KEY) {
+        return emit_sw(SW_REF_DATA_NOT_FOUND, out, out_max, out_len);
+    }
+    if (rc != PGP_KEYS_OK) {
+        return emit_sw(SW_UNKNOWN_ERROR, out, out_max, out_len);
+    }
+
+    /* Best-effort: increment the signature counter (DO 93).  Failure
+     * doesn't fail the sign — we already have a valid sig. */
+    (void) openpgp_state_sig_counter_increment();
+
+    if (out_max < PGP_KEYS_SIG_LEN + 2u) {
+        return emit_sw(SW_WRONG_LENGTH, out, out_max, out_len);
+    }
+    memcpy(out, sig, PGP_KEYS_SIG_LEN);
+    *out_len = PGP_KEYS_SIG_LEN;
+    return emit_sw(SW_OK, out, out_max, out_len);
 }
 
 static int handle_terminate_df(uint8_t p1, uint8_t p2,
@@ -874,6 +1032,12 @@ int openpgp_applet_dispatch(const uint8_t *in, size_t in_len,
 
     case INS_ACTIVATE_FILE:
         return handle_activate_file(p1, p2, out, out_max, out_len);
+
+    case INS_GENERATE:
+        return handle_generate(p1, p2, body, body_len, out, out_max, out_len);
+
+    case INS_PSO:
+        return handle_pso(p1, p2, body, body_len, out, out_max, out_len);
 
     default:
         return emit_sw(SW_INS_NOT_SUPPORTED, out, out_max, out_len);
