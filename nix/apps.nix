@@ -2027,7 +2027,8 @@ in
             DEV="''${1:-}"
             if [ -z "$DEV" ]; then
               # Auto-detect: pick the lowest-numbered /dev/ttyACM*.
-              DEV="$(ls -1 /dev/ttyACM* 2>/dev/null | head -n1 || true)"
+              # Globbed via find to satisfy shellcheck SC2012.
+              DEV="$(find /dev -maxdepth 1 -name 'ttyACM*' 2>/dev/null | sort | head -n1)"
             fi
             if [ -z "$DEV" ] || [ ! -e "$DEV" ]; then
               echo "ERROR: no /dev/ttyACM* found.  Plug in the dongle first." >&2

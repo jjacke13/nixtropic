@@ -33,7 +33,7 @@
 #include "libtropic.h"
 #include "libtropic_common.h"
 #include "libtropic_port_posix_usb_dongle.h"
-#include "lt_openssl_common.h"
+#include "libtropic_openssl.h"   /* lt_ctx_openssl_t */
 
 /* CMake includes these via the bundled TROPIC01_fw_update_files/.
  * The pinned libtropic source provides 1.0.0 / 1.0.1 / 2.0.0 binaries
