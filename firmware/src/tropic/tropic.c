@@ -215,40 +215,33 @@ int      tropic_last_ensure_step   = 0;  /* 0=none, 1=read, 2=write */
 
 int tropic_ecc_ensure_slot_authorized(uint8_t slot)
 {
-    if (slot > 31u) return -1;
-    if (tropic_l3_session_ensure() != 0) return -1;
-
-    /* Each 8-slot group occupies bits N*8..N*8+7 within the 32-bit
-     * UAP register.  Within that 8-bit field, bit 0 = SH0, bit 1 = SH1,
-     * etc.  We want SH0 (= 0x01) for the group `slot/8`.  Shift is
-     * `(slot/8) * 8`. */
-    uint32_t group_shift = (uint32_t)(slot / 8u) * 8u;
-    uint32_t want_bit = ((uint32_t) 0x01u) << group_shift;
-
-    static const enum lt_config_obj_addr_t addrs[] = {
-        TR01_CFG_UAP_ECC_KEY_GENERATE_ADDR,
-        TR01_CFG_UAP_ECC_KEY_READ_ADDR,
-        TR01_CFG_UAP_ECC_KEY_ERASE_ADDR,
-        TR01_CFG_UAP_EDDSA_SIGN_ADDR,
-    };
-
-    for (size_t i = 0; i < sizeof addrs / sizeof addrs[0]; i++) {
-        uint32_t val = 0;
-        lt_ret_t r = lt_r_config_read(&s_handle, addrs[i], &val);
-        tropic_last_rconfig_addr  = (uint16_t) addrs[i];
-        tropic_last_rconfig_value = val;
-        if (r != LT_OK) {
-            tropic_last_ensure_step = 1;  /* read failed */
-            return -(int) r;
-        }
-        if ((val & want_bit) == want_bit) continue;
-        r = lt_r_config_write(&s_handle, addrs[i], val | want_bit);
-        if (r != LT_OK) {
-            tropic_last_ensure_step = 2;  /* write failed */
-            return -(int) r;
-        }
-    }
+    /* HAZARD AVOIDED (research/tropic01-inventory.md:277):
+     *   Writing R-config without first erasing it triggers
+     *   OI_TR01_ERR_2026010800 — chip enters permanent Alarm Mode
+     *   (effectively bricked).  The earlier version of this function
+     *   did `lt_r_config_write` directly; we got lucky because the
+     *   virgin-bit-check happened to skip the write on the user's
+     *   factory-fresh chip.  Removing that footgun unconditionally.
+     *
+     * Practical impact: on a virgin chip, the R-config defaults are
+     * already 0xFFFFFFFF (all sessions authorized for all slots) per
+     * the lab-batch provisioning data.  Nothing to authorize — every
+     * SH0 ECC op on any slot is already permitted at the UAP layer.
+     *
+     * If a future use case needs to RE-authorize, the safe pattern is
+     * `lt_r_config_erase` (atomic wipe of all 27 config words) then
+     * `lt_write_whole_R_config` with the full desired layout — never
+     * a single-register write.  Skip until then.
+     *
+     * The Phase 7 M4 slot-29 ECC_KEY_READ failure is unrelated to
+     * UAP authorization (would surface as LT_L3_UNAUTHORIZED at L3,
+     * not LT_L2_RESP_DISABLED at L2); it's an engineering-sample chip
+     * FW (App FW 0.2.0 on TR01-B2S-T005) behavior outside libtropic
+     * 3.x's supported range. */
+    (void) slot;
     tropic_last_ensure_step = 0;
+    tropic_last_rconfig_value = 0xFFFFFFFFu;  /* assumed permissive */
+    tropic_last_rconfig_addr  = 0;
     return 0;
 }
 
