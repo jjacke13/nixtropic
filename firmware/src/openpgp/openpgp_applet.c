@@ -511,10 +511,13 @@ static uint16_t pgp_pin_rc_to_sw(int rc, int which)
     case PGP_PIN_NOT_SET:                  return SW_REF_DATA_NOT_FOUND;  /* 0x6A88 */
     case PGP_PIN_BAD_LEN:                  return SW_WRONG_LENGTH;        /* 0x6700 */
     case PGP_PIN_CHIP_ERR:                 return 0x6F00;                 /* generic */
-    case PGP_PIN_CHIP_ERR_HASH_GET:        return 0x6F01;                 /* pin_hash_get  */
+    case PGP_PIN_CHIP_ERR_HASH_GET:        return 0x6F01;                 /* pin_hash_get (generic) */
     case PGP_PIN_CHIP_ERR_RETRIES_MATCH:   return 0x6F02;                 /* retries_set (match path) */
     case PGP_PIN_CHIP_ERR_RETRIES_BAD:     return 0x6F03;                 /* retries_set (mismatch path) */
     case PGP_PIN_CHIP_ERR_HASH_SET:        return 0x6F04;                 /* pin_hash_set */
+    case PGP_PIN_CHIP_ERR_READ_CHIP:       return 0x6F05;                 /* tropic_rmem_read rc != 0 */
+    case PGP_PIN_CHIP_ERR_READ_SHORT:      return 0x6F06;                 /* short read */
+    case PGP_PIN_CHIP_ERR_READ_MAGIC:      return 0x6F07;                 /* magic mismatch */
     default:                               return SW_UNKNOWN_ERROR;
     }
 }

@@ -69,15 +69,24 @@ static const char PGP_DEFAULT_PW3[] = "12345678";
 #define OFF_PW3_HASH         148   /* 16 B — SHA-256("12345678")[:16] default */
 #define OFF_RC_HASH          164   /* 16 B — all-zero if RC unset */
 
-/* Read the full payload.  Returns 0 OK, -1 magic mismatch / unitialised,
- * -2 chip error. */
+/* Read the full payload.
+ *
+ * Return codes (distinct for HW debug — Phase 7 M3 iteration
+ * 2026-05-12):
+ *   0   OK
+ *  -1   magic mismatch (slot present but our magic missing)
+ *  -3   chip read error (tropic_rmem_read returned non-zero)
+ *  -4   short read (got fewer bytes than minimum-viable header) */
 static int read_payload(uint8_t out[OPENPGP_RMEM_PRIMARY_SIZE])
 {
     size_t got = 0;
     int rc = tropic_rmem_read(OPENPGP_RMEM_PRIMARY_SLOT, out,
                               OPENPGP_RMEM_PRIMARY_SIZE, &got);
-    if (rc != 0 || got < (OFF_TOUCH_REQUIRED + 1u)) {
-        return -2;
+    if (rc != 0) {
+        return -3;
+    }
+    if (got < (OFF_TOUCH_REQUIRED + 1u)) {
+        return -4;
     }
     if (memcmp(&out[OFF_MAGIC], PGP_MAGIC, OFF_MAGIC_LEN) != 0) {
         return -1;
@@ -308,7 +317,11 @@ int openpgp_state_pin_hash_get(int which, uint8_t out[OPENPGP_PIN_HASH_LEN])
     size_t off;
     if (pin_hash_offset(which, &off) != 0 || out == NULL) return -1;
     uint8_t buf[OPENPGP_RMEM_PRIMARY_SIZE];
-    if (read_payload(buf) != 0) return -2;
+    /* Propagate the distinct read_payload error code so the caller can
+     * surface which failure mode tripped: -1 magic, -3 chip read, -4
+     * short read.  pgp_pin.c translates each to its own SW value. */
+    int rc = read_payload(buf);
+    if (rc != 0) return rc;
     memcpy(out, &buf[off], OPENPGP_PIN_HASH_LEN);
     return 0;
 }

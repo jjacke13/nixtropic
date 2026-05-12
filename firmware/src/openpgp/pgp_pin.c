@@ -89,9 +89,18 @@ int pgp_pin_verify(int which, const uint8_t *pin, size_t len)
     pgp_pin_hash(pin, len, submitted);
 
     uint8_t stored[OPENPGP_PIN_HASH_LEN];
-    if (openpgp_state_pin_hash_get(which, stored) != 0) {
+    int hg = openpgp_state_pin_hash_get(which, stored);
+    if (hg != 0) {
         memzero(submitted, sizeof submitted);
-        return PGP_PIN_CHIP_ERR_HASH_GET;
+        /* Map openpgp_state error code to a distinct PIN error so the
+         * caller emits a distinct SW.  We get 1 HW iteration of clarity
+         * out of this. */
+        switch (hg) {
+        case -3: return PGP_PIN_CHIP_ERR_READ_CHIP;
+        case -4: return PGP_PIN_CHIP_ERR_READ_SHORT;
+        case -1: return PGP_PIN_CHIP_ERR_READ_MAGIC;
+        default: return PGP_PIN_CHIP_ERR_HASH_GET;
+        }
     }
 
     int match = ct_eq(submitted, stored, OPENPGP_PIN_HASH_LEN);

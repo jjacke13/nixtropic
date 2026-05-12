@@ -49,10 +49,15 @@
 /* DEBUG sub-codes — pinpoint which R-mem op failed.  Mapped to
  * distinct SW values by pgp_pin_rc_to_sw so we can diagnose without
  * UART/CDC logging. */
-#define PGP_PIN_CHIP_ERR_HASH_GET        -6
+#define PGP_PIN_CHIP_ERR_HASH_GET        -6   /* generic — replaced by 3 below */
 #define PGP_PIN_CHIP_ERR_RETRIES_MATCH   -7
 #define PGP_PIN_CHIP_ERR_RETRIES_BAD     -8
 #define PGP_PIN_CHIP_ERR_HASH_SET        -9
+/* Sub-codes propagated from openpgp_state read_payload so we can tell
+ * WHICH read-side failure occurred during HW debug. */
+#define PGP_PIN_CHIP_ERR_READ_CHIP       -10  /* tropic_rmem_read rc != 0 */
+#define PGP_PIN_CHIP_ERR_READ_SHORT      -11  /* short read (got < 12) */
+#define PGP_PIN_CHIP_ERR_READ_MAGIC      -12  /* magic mismatch */
 
 /**
  * @brief Verify a PIN against its stored hash.  Decrements retry on
