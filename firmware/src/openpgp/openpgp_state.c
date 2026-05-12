@@ -18,9 +18,11 @@
 #include "sha2.h"   /* trezor_crypto SHA-256 */
 
 /* Magic identifies our PGP state from an arbitrary R-mem slot — slot 1
- * has no a-priori relationship to OpenPGP.  Bump if/when v1 layout
- * grows incompatible fields. */
-static const uint8_t PGP_MAGIC[4]    = { 'P', 'G', '7', 'K' };
+ * has no a-priori relationship to OpenPGP.  Bumped 'PG7K' → 'PG7L'
+ * at Phase 7 M3 HW debug (2026-05-12) to force re-init after the
+ * 475-byte writes left slot 1 in an inconsistent state.  Bump again
+ * if/when v1 layout grows incompatible fields. */
+static const uint8_t PGP_MAGIC[4]    = { 'P', 'G', '7', 'L' };
 #define PGP_SCHEMA_VERSION  1u
 
 /* pgp_state_present byte values (M3 — 3-state machine):

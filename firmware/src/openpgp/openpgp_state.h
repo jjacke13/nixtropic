@@ -44,7 +44,12 @@
 #include <stddef.h>
 
 #define OPENPGP_RMEM_PRIMARY_SLOT    1u
-#define OPENPGP_RMEM_PRIMARY_SIZE    475u
+/* 256 bytes — matches Phase 5 slots.c (SLOTS_RMEM_GLOBAL_SIZE).  475
+ * was the chip's *max* slot capacity per the inventory doc, but the
+ * default per-slot configuration on this silicon is smaller — writes
+ * over 256 silently break subsequent reads (caught at Phase 7 M3 HW
+ * test 2026-05-12: 0x6F01 mid-VERIFY on the second invocation). */
+#define OPENPGP_RMEM_PRIMARY_SIZE    256u
 
 /* PIN retry-counter defaults — match OpenPGP card spec.  Stored in the
  * cache bytes of slot 1; the actual M&D enforcement lives in chip M&D
