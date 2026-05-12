@@ -252,6 +252,17 @@ int tropic_ecc_ensure_slot_authorized(uint8_t slot)
     return 0;
 }
 
+int tropic_ecc_store(uint8_t slot, uint8_t curve, const uint8_t key[32])
+{
+    if (key == NULL) return -1;
+    if (tropic_l3_session_ensure() != 0) return -1;
+    lt_ecc_curve_type_t c = (curve == 0) ? TR01_CURVE_ED25519 : TR01_CURVE_P256;
+    lt_ret_t r = lt_ecc_key_store(&s_handle,
+                                   (lt_ecc_slot_t)(TR01_ECC_SLOT_0 + slot),
+                                   c, key);
+    return (r == LT_OK) ? 0 : -(int) r;
+}
+
 int tropic_ecc_erase(uint8_t slot)
 {
     if (tropic_l3_session_ensure() != 0) return -1;

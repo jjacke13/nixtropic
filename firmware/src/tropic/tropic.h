@@ -95,6 +95,18 @@ int tropic_ecc_eddsa_sign(uint8_t slot, const uint8_t *msg, size_t msg_len,
 int tropic_ecc_erase(uint8_t slot);
 
 /**
+ * @brief Store a pre-computed 32-byte private key (Ed25519 seed) into
+ *        the chip's ECC slot.  Used when `lt_ecc_key_read` is disabled
+ *        at the chip-firmware feature level on our specific dongle —
+ *        we host-side generate the seed (from chip TRNG), derive the
+ *        pubkey via trezor_crypto ed25519_publickey(), then store the
+ *        seed via this call.
+ *
+ *        Curve byte: 0 = Ed25519 (only one M4 needs).  P-256 unsupported.
+ */
+int tropic_ecc_store(uint8_t slot, uint8_t curve, const uint8_t key[32]);
+
+/**
  * @brief Ensure SH0 has UAP access for ECC ops on `slot`.
  *
  * TROPIC01 R-config divides ECC slots into 4 groups of 8 (0..7, 8..15,
