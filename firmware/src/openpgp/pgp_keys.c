@@ -15,6 +15,12 @@
  * exposed at this layer in M4. */
 #define CURVE_ED25519  0u
 
+/* DIAGNOSTIC GLOBAL — last raw tropic_ecc_* rc.  M4 HW debug surfaces
+ * this via SW so we can see what libtropic actually complains about.
+ * Will get tidied to a proper return-channel after we know the bug. */
+int pgp_keys_last_chip_rc = 0;
+int pgp_keys_last_chip_stage = 0;  /* 1=generate, 2=pubkey_read */
+
 int pgp_keys_generate_sig(uint8_t pubkey_out[PGP_KEYS_PUBKEY_LEN])
 {
     if (pubkey_out == NULL) return PGP_KEYS_BAD_PARAM;
@@ -22,11 +28,21 @@ int pgp_keys_generate_sig(uint8_t pubkey_out[PGP_KEYS_PUBKEY_LEN])
     /* Regenerate destroys any prior key on the slot.  libtropic
      * handles the erase implicitly in key_generate. */
     int rc = tropic_ecc_generate(PGP_KEYS_SIG_SLOT, CURVE_ED25519);
-    if (rc != 0) return PGP_KEYS_CHIP_ERR;
+    if (rc != 0) {
+        pgp_keys_last_chip_rc = rc;
+        pgp_keys_last_chip_stage = 1;
+        return PGP_KEYS_CHIP_ERR;
+    }
 
     rc = tropic_ecc_pubkey_read(PGP_KEYS_SIG_SLOT, pubkey_out,
                                  PGP_KEYS_PUBKEY_LEN);
-    if (rc != 0) return PGP_KEYS_CHIP_ERR;
+    if (rc != 0) {
+        pgp_keys_last_chip_rc = rc;
+        pgp_keys_last_chip_stage = 2;
+        return PGP_KEYS_CHIP_ERR;
+    }
+    pgp_keys_last_chip_rc = 0;
+    pgp_keys_last_chip_stage = 0;
     return PGP_KEYS_OK;
 }
 

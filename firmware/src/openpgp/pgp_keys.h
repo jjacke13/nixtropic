@@ -45,6 +45,13 @@
 #define PGP_KEYS_BAD_PARAM      -3
 #define PGP_KEYS_UNSUPPORTED    -4   /* M4 doesn't do this op yet */
 
+/* Diagnostic globals — last raw tropic_ecc_* return code + which stage
+ * (1 = generate, 2 = pubkey_read).  Set inside pgp_keys_generate_sig
+ * etc.  Applet uses these to surface the underlying lt_ret_t via SW
+ * during HW debug. */
+extern int pgp_keys_last_chip_rc;
+extern int pgp_keys_last_chip_stage;
+
 /**
  * @brief Generate a fresh Ed25519 key pair on the sig slot (29).
  *        Destroys any existing key on the slot.

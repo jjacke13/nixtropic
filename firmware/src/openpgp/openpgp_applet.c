@@ -821,7 +821,20 @@ static int handle_generate(uint8_t p1, uint8_t p2,
         return emit_sw(SW_REF_DATA_NOT_FOUND, out, out_max, out_len);
     }
     if (rc != PGP_KEYS_OK) {
-        return emit_sw(SW_UNKNOWN_ERROR, out, out_max, out_len);
+        /* M4 HW debug — encode the raw lt_ret_t into SW.
+         *   Low byte  = abs(tropic_ecc_* rc) — typically the lt_ret_t
+         *   value (e.g. 3 = LT_PARAM, 37 = LT_L2_GEN_ERR, etc.)
+         *   Bit 7 of upper byte distinguishes stage:
+         *     0x6Fxx = GENERATE failed (stage 1)
+         *     0x6Exx = PUBKEY_READ failed (stage 2)
+         *
+         * Will be replaced with proper SW after we know the bug. */
+        int err = pgp_keys_last_chip_rc;
+        if (err < 0) err = -err;
+        if (err > 0xFFu) err = 0xFFu;
+        uint16_t base = (pgp_keys_last_chip_stage == 2) ? 0x6E00u : 0x6F00u;
+        return emit_sw((uint16_t)(base | (uint8_t) err),
+                        out, out_max, out_len);
     }
 
     size_t off = 0;
