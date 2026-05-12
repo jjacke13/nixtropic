@@ -811,7 +811,18 @@ static int handle_generate(uint8_t p1, uint8_t p2,
 
     case 0xB8u:  /* Decryption key — deferred to M5 */
     case 0xA4u:  /* Authentication key — deferred to M5 */
-        return emit_sw(SW_CONDITIONS_NOT_SATISFIED, out, out_max, out_len);
+        /* For P1=81 (read pubkey): tell gpg the key isn't configured
+         * yet (REF_DATA_NOT_FOUND = 0x6A88).  Returning
+         * CONDITIONS_NOT_SATISFIED (0x6985) here was the M4 HW debug
+         * bug 2026-05-12 — scdaemon's LEARN does READ PUBLIC KEY for
+         * ALL three slots, and 0x6985 made it bail with the user-facing
+         * "Conditions of use not satisfied".  0x6A88 lets gpg see the
+         * card as "sig key set up, dec+aut not yet" and proceed.
+         *
+         * For P1=80 (generate): 0x6A88 too — same semantic: function
+         * not supported for this CRT yet.  M5 wires up the real DEC +
+         * AUT generation. */
+        return emit_sw(SW_REF_DATA_NOT_FOUND, out, out_max, out_len);
 
     default:
         return emit_sw(SW_REF_DATA_NOT_FOUND, out, out_max, out_len);
