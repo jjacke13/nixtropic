@@ -116,6 +116,14 @@ int tropic_ecc_erase(uint8_t slot);
  */
 int tropic_ecc_ensure_slot_authorized(uint8_t slot);
 
+/* Diagnostic globals updated by tropic_ecc_ensure_slot_authorized:
+ *   value = last R-config word read (the offending one if ensure failed)
+ *   addr  = which R-config register the value came from
+ *   step  = 0=ok, 1=read failed, 2=write failed */
+extern uint32_t tropic_last_rconfig_value;
+extern uint16_t tropic_last_rconfig_addr;
+extern int      tropic_last_ensure_step;
+
 /**
  * @brief Write `len` bytes to TROPIC01 R-mem slot. Requires open L3 session.
  *

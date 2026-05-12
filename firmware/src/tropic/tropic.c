@@ -206,6 +206,13 @@ int tropic_ecc_pubkey_read(uint8_t slot, uint8_t *out, size_t out_size)
     return (int) n;
 }
 
+/* Diagnostic — last R-config value read by ensure_slot, plus which
+ * register and which sub-step failed.  Surfaced via SW + response body
+ * by the OpenPGP applet so we can see chip state on HW. */
+uint32_t tropic_last_rconfig_value = 0xDEADBEEFu;
+uint16_t tropic_last_rconfig_addr  = 0;
+int      tropic_last_ensure_step   = 0;  /* 0=none, 1=read, 2=write */
+
 int tropic_ecc_ensure_slot_authorized(uint8_t slot)
 {
     if (slot > 31u) return -1;
@@ -218,9 +225,6 @@ int tropic_ecc_ensure_slot_authorized(uint8_t slot)
     uint32_t group_shift = (uint32_t)(slot / 8u) * 8u;
     uint32_t want_bit = ((uint32_t) 0x01u) << group_shift;
 
-    /* The four UAP registers we need to authorize for OpenPGP key
-     * operations.  Uses the typed enum from libtropic_common.h
-     * (lt_config_obj_addr_t — TR01_CFG_UAP_ECC_*_ADDR + EDDSA_SIGN). */
     static const enum lt_config_obj_addr_t addrs[] = {
         TR01_CFG_UAP_ECC_KEY_GENERATE_ADDR,
         TR01_CFG_UAP_ECC_KEY_READ_ADDR,
@@ -231,11 +235,20 @@ int tropic_ecc_ensure_slot_authorized(uint8_t slot)
     for (size_t i = 0; i < sizeof addrs / sizeof addrs[0]; i++) {
         uint32_t val = 0;
         lt_ret_t r = lt_r_config_read(&s_handle, addrs[i], &val);
-        if (r != LT_OK) return -(int) r;
+        tropic_last_rconfig_addr  = (uint16_t) addrs[i];
+        tropic_last_rconfig_value = val;
+        if (r != LT_OK) {
+            tropic_last_ensure_step = 1;  /* read failed */
+            return -(int) r;
+        }
         if ((val & want_bit) == want_bit) continue;
         r = lt_r_config_write(&s_handle, addrs[i], val | want_bit);
-        if (r != LT_OK) return -(int) r;
+        if (r != LT_OK) {
+            tropic_last_ensure_step = 2;  /* write failed */
+            return -(int) r;
+        }
     }
+    tropic_last_ensure_step = 0;
     return 0;
 }
 

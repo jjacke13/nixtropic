@@ -10,6 +10,7 @@
 #include "openpgp_state.h"
 #include "pgp_pin.h"
 #include "pgp_keys.h"
+#include "tropic/tropic.h"   /* tropic_last_rconfig_* diagnostics */
 #include "ccid/ccid_proto.h"
 
 #include <stdint.h>
@@ -821,18 +822,42 @@ static int handle_generate(uint8_t p1, uint8_t p2,
         return emit_sw(SW_REF_DATA_NOT_FOUND, out, out_max, out_len);
     }
     if (rc != PGP_KEYS_OK) {
-        /* M4 HW debug — encode the raw lt_ret_t into SW.
-         *   Low byte  = abs(tropic_ecc_* rc) — typically the lt_ret_t
-         *   value (e.g. 3 = LT_PARAM, 37 = LT_L2_GEN_ERR, etc.)
-         *   Bit 7 of upper byte distinguishes stage:
-         *     0x6Fxx = GENERATE failed (stage 1)
-         *     0x6Exx = PUBKEY_READ failed (stage 2)
+        /* M4 HW debug — encode raw lt_ret_t in SW low byte.  Stage
+         * code chooses the SW prefix:
+         *   stage 1 (generate failed)        → 0x6Fxx
+         *   stage 2 (pubkey_read failed)     → 0x6Exx
+         *   stage 3 (R-config READ failed)   → 0x6Dxx
+         *   stage 4 (R-config WRITE failed)  → 0x6Cxx
          *
-         * Will be replaced with proper SW after we know the bug. */
+         * For stage 3/4 we ALSO emit the failing register addr + the
+         * read value in the response body (8 bytes) so we can see
+         * the actual chip R-config state on the wire. */
         int err = pgp_keys_last_chip_rc;
         if (err < 0) err = -err;
         if (err > 0xFFu) err = 0xFFu;
-        uint16_t base = (pgp_keys_last_chip_stage == 2) ? 0x6E00u : 0x6F00u;
+
+        uint16_t base;
+        switch (pgp_keys_last_chip_stage) {
+        case 1:  base = 0x6F00u; break;
+        case 2:  base = 0x6E00u; break;
+        case 3:  base = 0x6D00u; break;
+        case 4:  base = 0x6C00u; break;
+        default: base = 0x6F00u; break;
+        }
+
+        if (pgp_keys_last_chip_stage == 3 || pgp_keys_last_chip_stage == 4) {
+            if (out_max >= 8u) {
+                out[0] = (uint8_t)(tropic_last_rconfig_addr >> 8);
+                out[1] = (uint8_t)(tropic_last_rconfig_addr & 0xFFu);
+                out[2] = 0x00u;
+                out[3] = 0x00u;
+                out[4] = (uint8_t)(tropic_last_rconfig_value >> 24);
+                out[5] = (uint8_t)(tropic_last_rconfig_value >> 16);
+                out[6] = (uint8_t)(tropic_last_rconfig_value >> 8);
+                out[7] = (uint8_t)(tropic_last_rconfig_value & 0xFFu);
+                *out_len = 8;
+            }
+        }
         return emit_sw((uint16_t)(base | (uint8_t) err),
                         out, out_max, out_len);
     }

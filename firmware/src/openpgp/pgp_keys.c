@@ -25,13 +25,19 @@ int pgp_keys_generate_sig(uint8_t pubkey_out[PGP_KEYS_PUBKEY_LEN])
 {
     if (pubkey_out == NULL) return PGP_KEYS_BAD_PARAM;
 
-    /* TROPIC01 R-config gates: SH0 (our session pairing key) needs UAP
-     * access for ECC ops on slot 29's 8-slot group (24..31).  Factory
-     * default authorizes SH0 only up to slot 23. */
+    /* TROPIC01 R-config gates: SH0 needs UAP access for ECC ops on
+     * slot 29's 8-slot group (24..31).  Factory default is permissive
+     * (all 0xFFFFFFFF) so this should be a no-op; if R-config has
+     * been clobbered by an earlier non-erase write, we may need to
+     * call lt_r_config_erase first. */
     int rc = tropic_ecc_ensure_slot_authorized(PGP_KEYS_SIG_SLOT);
     if (rc != 0) {
         pgp_keys_last_chip_rc = rc;
-        pgp_keys_last_chip_stage = 3;  /* new stage code = R-config setup */
+        /* Map the ensure sub-step into our stage code so the applet
+         * can emit a distinct SW prefix:
+         *   tropic_last_ensure_step 1 (read failed)  → stage 3
+         *   tropic_last_ensure_step 2 (write failed) → stage 4 */
+        pgp_keys_last_chip_stage = (tropic_last_ensure_step == 2) ? 4 : 3;
         return PGP_KEYS_CHIP_ERR;
     }
 
