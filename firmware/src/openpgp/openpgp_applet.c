@@ -841,7 +841,7 @@ static int handle_generate(uint8_t p1, uint8_t p2,
          * the actual chip R-config state on the wire. */
         int err = pgp_keys_last_chip_rc;
         if (err < 0) err = -err;
-        if (err > 0xFFu) err = 0xFFu;
+        if (err > (int) 0xFFu) err = 0xFF;
 
         uint16_t base;
         switch (pgp_keys_last_chip_stage) {

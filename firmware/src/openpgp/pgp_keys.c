@@ -10,7 +10,8 @@
 #include <string.h>
 
 #include "tropic/tropic.h"
-#include "ed25519-donna/ed25519.h"   /* ed25519_publickey() */
+#include "openpgp_state.h"   /* openpgp_state_dec_priv_get/set */
+#include "ed25519-donna/ed25519.h"   /* ed25519_publickey() + curve25519_scalarmult */
 #include "memzero.h"
 
 /* Ed25519 = curve 0 in tropic_ecc_generate.  P-256 = 1; that's not
