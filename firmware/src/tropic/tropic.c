@@ -16,6 +16,7 @@
 #include "stm32u5xx_hal.h"
 
 #include "libtropic.h"
+#include "libtropic_common.h"   /* enum CONFIGURATION_OBJECTS_REGS for R-config */
 #include "libtropic_port_stm32u5xx.h"
 
 /* M4: trezor_crypto CAL provides AES-GCM/SHA256/HMAC/X25519 for L3. */
@@ -218,24 +219,21 @@ int tropic_ecc_ensure_slot_authorized(uint8_t slot)
     uint32_t want_bit = ((uint32_t) 0x01u) << group_shift;
 
     /* The four UAP registers we need to authorize for OpenPGP key
-     * operations.  See TROPIC01_application_co.h. */
-    static const uint16_t addrs[] = {
-        0x130u,  /* CFG_UAP_ECC_KEY_GENERATE */
-        0x138u,  /* CFG_UAP_ECC_KEY_READ     */
-        0x13Cu,  /* CFG_UAP_ECC_KEY_ERASE    */
-        0x144u,  /* CFG_UAP_EDDSA_SIGN       */
+     * operations.  Uses the typed enum from libtropic_common.h
+     * (lt_config_obj_addr_t — TR01_CFG_UAP_ECC_*_ADDR + EDDSA_SIGN). */
+    static const enum lt_config_obj_addr_t addrs[] = {
+        TR01_CFG_UAP_ECC_KEY_GENERATE_ADDR,
+        TR01_CFG_UAP_ECC_KEY_READ_ADDR,
+        TR01_CFG_UAP_ECC_KEY_ERASE_ADDR,
+        TR01_CFG_UAP_EDDSA_SIGN_ADDR,
     };
 
     for (size_t i = 0; i < sizeof addrs / sizeof addrs[0]; i++) {
         uint32_t val = 0;
-        lt_ret_t r = lt_r_config_read(&s_handle,
-                                       (enum CONFIGURATION_OBJECTS_REGS) addrs[i],
-                                       &val);
+        lt_ret_t r = lt_r_config_read(&s_handle, addrs[i], &val);
         if (r != LT_OK) return -(int) r;
         if ((val & want_bit) == want_bit) continue;
-        r = lt_r_config_write(&s_handle,
-                              (enum CONFIGURATION_OBJECTS_REGS) addrs[i],
-                              val | want_bit);
+        r = lt_r_config_write(&s_handle, addrs[i], val | want_bit);
         if (r != LT_OK) return -(int) r;
     }
     return 0;
