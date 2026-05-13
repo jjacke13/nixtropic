@@ -12,8 +12,8 @@ The full daily-driver feature set works end-to-end on real hardware:
 - ✍️ **GPG signing** — `git commit -S` works; private key never leaves the TROPIC01 chip
 - 🔓 **GPG decryption** — `gpg --encrypt -r self … | gpg --decrypt` round-trip works
 - 🔑 **SSH via gpg-agent** — push to GitHub with the dongle's auth key
-- 🛡️ **Hardware-backed PIN** — FIDO PIN uses MAC-and-Destroy chip slots (8-attempt physical lockout); 9 wrong PINs and the slots are gone at the silicon level
-- 🟢 **Reset-with-SW1** — factory wipe by holding the button during the first 10 seconds of boot; no host software needed
+- 🛡️ **Hardware-backed PIN** — FIDO PIN uses MAC-and-Destroy chip slots (8 wrong PINs and all 8 slots are physically consumed at the silicon level; recovery only via factory-reset)
+- 🟢 **Anti-passive-attack factory reset** — CTAP2.1 authenticatorReset is gated on (a) within 10 s of power-on AND (b) a fresh SW1 press if any state exists, so an attacker who briefly snatches your unplugged dongle can't wipe it just by replugging
 - 🔄 **Force-UV** — `alwaysUv` option per CTAP2.1; user verification required for every credential use
 - 📦 **Reproducible Nix builds** — one `nix build` command from clean checkout to flashable firmware
 
@@ -48,7 +48,7 @@ sudo nix run github:jjacke13/nixtropic#fw-update-chip
 
 ### 3. Enter DFU mode and flash the latest firmware
 
-Hold SW1 (the button on the back of the dongle) while plugging USB. The dongle enumerates as `STMicroelectronics ST32 BOOTLOADER` (0483:df11).
+Hold SW1 (the button on the back of the dongle) while plugging USB. The dongle enumerates as `STMicroelectronics STM Device in DFU Mode` (`0483:df11`).
 
 ```bash
 sudo nix run github:jjacke13/nixtropic#flash-and-validate-phase7-m6
@@ -72,7 +72,6 @@ enable-ssh-support
 Then reload:
 
 ```bash
-gpgconf --kill scdaemon
 gpgconf --reload scdaemon
 gpg-connect-agent updatestartuptty /bye
 ```
@@ -109,25 +108,41 @@ ssh -T git@github.com            # touch SW1 when prompted
 
 ### FIDO2 / WebAuthn — register + login on webauthn.io
 
-1. Plug in the dongle. The LED should be steady (idle).
+1. Plug in the dongle. After boot the LED settles to off (idle state).
 2. Open https://webauthn.io in Firefox/Linux. Enter any username.
-3. Click **Register**. The LED starts blinking (user-presence required).
-4. Press **SW1** within 30 seconds.
+3. Click **Register**. The LED starts blinking at 2 Hz (user-presence required).
+4. Press **SW1** within 30 seconds. The LED goes solid for ~500 ms (confirmed).
 5. Optionally set a PIN.
-6. Click **Authenticate**. Press SW1 again. You're logged in.
+6. Click **Authenticate**. Press SW1 again when the LED blinks. You're logged in.
 
 The credential lives in a TROPIC01 ECC slot, signed on-chip with Ed25519. The host never sees the private key.
 
-### Factory reset (panic button)
+### Factory reset
 
-If the card is locked out, PINs are forgotten, or anything else goes wrong:
+State reset is **host-initiated** and gated by a short post-boot window plus an SW1 confirmation. There are two kinds — pick whichever surface is broken.
 
-1. Unplug the dongle.
-2. Plug it back in **while holding SW1** (or press SW1 within the first 10 seconds of boot).
-3. The LED blinks the reset pattern (fast triple-flash).
-4. All credentials, PINs, and the OpenPGP applet state are wiped. The card returns to factory defaults.
+**Wipe FIDO state** (credentials + PIN + Force-UV flag — and incidentally everything else on the chip, since `credstore_factory_reset` iterates all 32 ECC slots and R-mem slots 1..32 belt-and-suspenders):
 
-Chip-side ECC keys (slots 29 + 31) are erased; software state in R-mem is wiped. Only the chip firmware itself survives.
+1. Unplug and replug the dongle (this restarts the 10-second post-boot window).
+2. Within 10 seconds, run on the host:
+
+   ```bash
+   fido2-token -R $(fido2-token -L | grep nixtropic | awk -F: '{print $1}')
+   ```
+3. If the device has any state (PIN set or ≥ 1 credential), the LED switches to **AWAITING_TOUCH** (2 Hz blink). Press SW1 within 10 seconds. The LED goes solid for ~500 ms (**CONFIRMED**) and the wipe completes.
+4. If the device is virgin (no PIN, no credentials), step 3 is skipped — the reset runs immediately.
+
+**Wipe OpenPGP state** (PINs, cardholder data, fingerprints, *and* chip-side sig/aut ECC keys via OpenPGP `TERMINATE DF` + `ACTIVATE FILE`):
+
+```text
+gpg --card-edit
+> admin
+> factory-reset
+```
+
+This is the canonical path for "I forgot the OpenPGP PINs" — it doesn't need the post-boot window because authentication via successive wrong-PIN attempts is the trigger.
+
+**DO NOT confuse the above with DFU mode** — holding SW1 while plugging USB enters the STM32 ROM bootloader (`STMicroelectronics STM Device in DFU Mode`, `0483:df11`) for re-flashing firmware via `dfu-util`. That's documented separately in [`docs/RECOVERY.md`](docs/RECOVERY.md) and doesn't touch the TROPIC01 chip at all.
 
 ### `git commit -S` end-to-end
 
@@ -150,10 +165,10 @@ Tested on: Tropic Square **TS1302 USB devkit** (STM32U535 + TROPIC01, engineerin
 
 The dongle:
 
-- USB-C, ~$50 from Tropic Square
+- USB-C, sold by Tropic Square as a developer kit
 - STM32U535CCTx host MCU (256 KB flash, 96 KB RAM, ARM Cortex-M33)
-- TROPIC01 secure element (signing + true RNG + persistent storage)
-- SW1 user-presence button
+- TROPIC01 secure element (signing + true RNG + persistent storage + MAC-and-Destroy slots)
+- SW1 user-presence button (also the BOOT0 strap → used for entering DFU mode at reset)
 - 1× user LED
 
 Pre-built firmware lands at ~82.8% of the STM32's 256 KB flash budget. Future Phase 8 hardening (M&D PIN counters etc.) has comfortable headroom.
