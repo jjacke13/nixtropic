@@ -1,20 +1,32 @@
 /*
- * Phase 2 firmware main — USB CDC ↔ SPI passthrough (stock-protocol-compatible).
+ * nixtropic firmware main — boot sequence + idle loop.
  *
- * Boot sequence (LED diagnostic codes mirror Phase 1):
+ * Brings up the STM32U5 platform, USB composite device (CDC + HID×2
+ * + CCID), and TROPIC01 chip session in stages; the LED reports
+ * any boot-stage failure via a numeric blink pattern so a bricked
+ * dongle still reports cause without USB.
+ *
+ * Boot sequence:
  *   Stage 0  — raw GPIO 4 quick blinks (proves CPU runs our code)
- *   Stage 1  — HAL_Init                          on fail: 6-blink pattern
- *   Stage 2  — clock_init (48 MHz)               on fail: 1-blink pattern
- *   Stage 3  — gpio_init
- *   Stage 4  — spi_init                          on fail: 4-blink pattern
- *   Stage 5  — usb_clock_init (HSI48 + CRS)      on fail: 3-blink pattern
- *   Stage 6  — rng_init                          on fail: 2-blink pattern
- *   Stage 7  — usb_init (tusb_init)              on fail: 3-blink pattern
- *   Stage 8  — boot banner ('#'-prefixed; libtropic clients silently skip)
- *   Stage 9  — main loop: tud_task + cdc_protocol_task
+ *   Stage 1  — HAL_Init                            on fail: 6-blink
+ *   Stage 2  — clock_init (48 MHz SYSCLK)          on fail: 1-blink
+ *   Stage 3  — gpio_init (LED, SW1, TROPIC01 pwr)
+ *   Stage 4  — spi_init  (SPI1 to TROPIC01)        on fail: 4-blink
+ *   Stage 5  — usb_clock_init (HSI48 + CRS)        on fail: 3-blink
+ *   Stage 6  — rng_init (HAL_RNG self-test)        on fail: 2-blink
+ *   Stage 7  — usb_init (tusb_init, composite)     on fail: 3-blink
+ *   Stage 8  — tropic_init (L1+L2+L3 session up)   on fail: 5-blink
+ *   Stage 9  — boot banner ('#'-prefixed on CDC; libtropic clients
+ *              silently skip — same byte-faithful behaviour as
+ *              the stock TS1302 firmware)
+ *   Stage 10 — main loop: tud_task() + per-module *_task()
  *
- * Phase 1 work (libtropic L1+L2 round-trip on chip) preserved in tropic/
- * but excluded from build — re-enable in Phase 3 for HID lt-rpc.
+ * After enumeration the LED switches from boot heartbeat to the
+ * runtime state machine in platform/led.c (idle/awaiting-touch/
+ * confirmed/error states; covert-channel-safe — no LED changes
+ * inside crypto code paths).
+ *
+ * `__attribute__((noreturn)) main(void)` — no return; embedded.
  */
 
 #include <stdio.h>
