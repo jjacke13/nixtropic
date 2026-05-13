@@ -1,9 +1,12 @@
 /*
- * lt-rpc wire-format constants — shared between firmware and host (Python).
+ * lt-rpc wire-format constants — shared between firmware and host
+ * (Python test-harness scripts in tools/, plus the
+ * validate-phase{1..7}.sh suites).
  *
- * CTAPHID-derived framing for vendor RPC over 64-byte HID reports. We
- * use a single fixed channel ID for Phase 3; multi-channel CID negotiation
- * (CTAPHID_INIT 0x86) arrives with FIDO2 in Phase 4.
+ * Framing is CTAPHID-derived (FIDO U2F HID 1.0 spec §2.4) for
+ * vendor RPC over 64-byte HID reports.  We use a SINGLE fixed
+ * channel ID (no INIT-time CID negotiation — that's the FIDO2 path
+ * in firmware/src/fido_hid/ctaphid.c).
  *
  * INIT packet (first or only):
  *   byte 0..3   CID      0xCAFE0001 BE

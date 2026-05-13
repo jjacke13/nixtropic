@@ -1,13 +1,21 @@
 /*
- * lt-rpc — HID-based RPC protocol for talking to nixtropic firmware.
+ * lt-rpc — HID-based vendor RPC protocol for talking to nixtropic
+ * firmware over a /dev/hidraw* interface (vendor usage page 0xFF00,
+ * see usb_descriptors.c).
  *
- * Phase 3 M2: CTAPHID-style framing with single fixed channel.
- * Commands: PING (0x01), GET_RANDOM (0x02). More added in M3 + M4.
+ * Wire framing is CTAPHID-derived (FIDO U2F HID 1.0 §2.4) — INIT
+ * packet carries cmd + total payload length; CONT packets carry
+ * continuation chunks.  We use a SINGLE fixed channel ID
+ * (0xCAFE0001) rather than CTAPHID's INIT-time CID negotiation,
+ * since this is a vendor protocol with one client per dongle.
  *
- * Wire format in lt_rpc_proto.h. State machine in rpc.c assembles INIT +
- * CONT packets from the host into a contiguous request buffer, dispatches
- * to the command handler (rpc_cmds.c), then fragments the response back
- * into HID IN reports.
+ * Implemented commands (rpc_cmds.c): PING, GET_RANDOM, CHIP_ID,
+ * ECC_GENERATE, ECC_SIGN, ECC_PUBKEY.  Used by host-side test
+ * scripts in tools/ and by the validate-phase{1..7} suites.
+ *
+ * Distinct from the FIDO2 HID interface (usage page 0xF1D0, see
+ * firmware/src/fido_hid/) which speaks CTAPHID-proper with a real
+ * CTAP2 stack — they're on separate /dev/hidraw* devices.
  */
 
 #ifndef NIXTROPIC_HID_RPC_H

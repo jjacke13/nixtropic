@@ -1,11 +1,13 @@
 /*
- * lt-rpc command handlers.
+ * lt-rpc command handlers — request/response logic per command.
  *
- * M2 commands:
- *   PING        echoes the request payload verbatim
- *   GET_RANDOM  draws N bytes (N in [1, 256]) from the STM32 HW TRNG
- *
- * M3 adds CHIP_ID; M4 adds ECC_GENERATE / ECC_SIGN / ECC_PUBKEY.
+ * Commands:
+ *   PING          0x01  echoes the request payload verbatim
+ *   GET_RANDOM    0x02  draws N bytes (N in [1, 256]) from STM32 TRNG
+ *   CHIP_ID       0x03  reads TROPIC01 chip_id structure (128 B)
+ *   ECC_GENERATE  0x04  generates an Ed25519/P-256 keypair on a chip slot
+ *   ECC_SIGN      0x05  signs a 32 B message digest with a chip-slot key
+ *   ECC_PUBKEY    0x06  reads back the pubkey of a chip-slot key
  *
  * Handler contract (matches rpc_handler_fn in rpc.h):
  *   - Read request from req[0..req_len)
