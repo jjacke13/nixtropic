@@ -1,5 +1,13 @@
 /*
- * GPIO bring-up — see gpio.h. Pin assignments come from board.h.
+ * GPIO bring-up — see gpio.h.  Pin assignments come from board.h.
+ *
+ * EVERY runtime GPIO needs BOTH:
+ *   1. its bank's RCC clock enabled (__HAL_RCC_GPIO{x}_CLK_ENABLE())
+ *   2. a HAL_GPIO_Init() call with explicit Mode + Pull
+ *
+ * Missing (2) leaves the pin in silicon-default analog mode — reads
+ * return 0 unconditionally regardless of the wire voltage.  Caught
+ * the hard way at Phase 6 M1 HW debug (PH3 SW1 button).
  */
 
 #include "gpio.h"

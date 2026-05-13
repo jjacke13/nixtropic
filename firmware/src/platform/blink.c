@@ -1,7 +1,18 @@
 /*
- * LED blink-code state machine — see blink.h.
+ * LED blink-code state machine — see blink.h for the public API +
+ * pattern catalog.
  *
- * Polled from main loop. Pure HAL_GetTick polling; no IRQs.
+ * Drives the single user LED on TS1302 board pin P1.24 (mapped via
+ * firmware/src/platform/board.h) to communicate boot stage + runtime
+ * state.  Hand-rolled polling FSM, no IRQ — main loop calls
+ * blink_task() once per iteration; timing comes from HAL_GetTick()
+ * (1 kHz tick from STM32U5 SysTick).
+ *
+ * Also driven by the FIDO user-presence flow (firmware/src/fido_hid/
+ * user_presence.c) — `blink_pattern(BLINK_USER_TOUCH)` signals
+ * "press SW1 within 30 s" during CTAP2 makeCredential/getAssertion.
+ *
+ * No upstream source — hand-rolled.
  */
 
 #include "blink.h"

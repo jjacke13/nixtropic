@@ -1,13 +1,17 @@
 /*
- * Direct SPI1 driver — used by Phase 2 cdc_protocol/ for raw USB↔SPI passthrough.
+ * Direct SPI1 driver — talks to TROPIC01 over SPI1 on PA4/5/6/7
+ * (NSS/SCK/MISO/MOSI, AF5).
  *
- * In Phase 1 the SPI peripheral was driven via libtropic's hal/stm32/stm32u5xx
- * port. Phase 2 talks to TROPIC01 in pure byte-passthrough mode (host runs
- * libtropic), so we own the SPI peripheral directly.
+ * Mode 0, MSB-first, 8-bit, soft NSS.  Default prescaler /16 → 3 MHz
+ * at 48 MHz fclk.  Peripheral config copied verbatim from libtropic's
+ * upstream `hal/port/stm32/libtropic_port_stm32u5xx.c` so wire timing
+ * matches the stock TS1302 firmware exactly (verified Phase 2 —
+ * byte-faithful round-trip).
  *
- * Mode 0, MSB-first, 8-bit, soft NSS. Default prescaler /16 → 3 MHz at 48 MHz fclk.
- * SPI peripheral config matches libtropic_port_stm32u5xx.c verbatim so wire
- * timing is identical to Phase 1 + stock fw.
+ * Used by:
+ *   - `tropic/tropic.c` for the libtropic L1 + L2 + L3 sessions
+ *   - `cdc_protocol/protocol.c` for the Phase 2 USB↔SPI passthrough
+ *     mode (host runs libtropic, dongle is a transparent SPI bridge).
  */
 
 #ifndef NIXTROPIC_PLATFORM_SPI_H

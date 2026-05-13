@@ -1,9 +1,18 @@
 /*
- * GPIO bring-up. Per board.h pin assignments.
+ * GPIO bring-up.  Per board.h pin assignments.
  *
- * Phase 1 Group B brings up: LED (PA9), TROPIC01 power switch (PA0),
- * GPO input (PB0). SPI AF mux deferred to whenever libtropic comes in
- * (Group D's lt_init does the SPI peripheral; we do GPIO mux here).
+ * Configures the pins owned at the platform layer: LED (PA9, output),
+ * TROPIC01 power switch (PA0, output, default LOW), TROPIC01 GPO
+ * ready signal (PB0, input pull-down), SW1 user-presence button
+ * (PH3, input pull-up — added Phase 6).
+ *
+ * SPI1 AF mux (PA4/5/6/7) is owned by `platform/spi.c`; USB D+/D-
+ * (PA11/PA12) is owned by `usb/usb.c`.
+ *
+ * GOTCHA: enabling a GPIO bank's RCC clock is NOT enough to use a pin
+ * — HAL_GPIO_Init() with explicit Mode/Pull is required.  Cost us a
+ * Phase 6 M1 HW iteration: PH3 sat in silicon-default analog mode
+ * because we'd only enabled the GPIOH clock without per-pin init.
  */
 
 #ifndef NIXTROPIC_GPIO_H

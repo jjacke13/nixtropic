@@ -1,8 +1,33 @@
 /*
- * Phase 7 M2 — OpenPGP applet dispatcher.  See openpgp_applet.h.
+ * OpenPGP card applet — ISO 7816-4 APDU dispatcher implementing the
+ * OpenPGP card v3.4.1 specification (FSFE / gnupg.org publication:
+ * https://gnupg.org/ftp/specs/OpenPGP-smart-card-application-3.4.1.pdf).
  *
- * Hand-rolled BER-TLV emitter for composite DOs.  No malloc.  All
- * buffers are caller-supplied; we bounds-check every byte.
+ * Routes via firmware/src/ccid/apdu_dispatch.c (single applet today;
+ * the dispatcher is structured to accept a second applet, e.g. PIV in
+ * Phase 7b).  Wire transport is USB CCID class 1.1 (firmware/src/usb/
+ * usb_ccid.c).
+ *
+ * INS handlers implemented:
+ *
+ *   0xA4 SELECT                       §7.2.1   match on AID prefix
+ *   0xCA GET DATA                     §7.2.6   DOs 4F/5E/65/6E/7A/C0-CD/5B/5F2D/5F35
+ *   0xDA PUT DATA                     §7.2.8   writable DOs only (cardholder, fpr, lang…)
+ *   0x20 VERIFY                       §7.2.2   PW1 / PW3 / RC
+ *   0x24 CHANGE REFERENCE DATA        §7.2.3   single-attempt boundary (M6 H2 audit fix)
+ *   0x2C RESET RETRY COUNTER          §7.2.4   via RC or via PW3
+ *   0xE6 TERMINATE DF                 §7.2.16  erases chip ECC slots (M6 H1 audit fix)
+ *   0x44 ACTIVATE FILE                §7.2.17  recovery from TERMINATE
+ *   0x47 GENERATE ASYMMETRIC KEY PAIR §7.2.14  Ed25519 + X25519
+ *   0x2A PSO                          §7.2.10  CDS (9E/9A sign), DEC (80/86 ECDH)
+ *   0x88 INTERNAL AUTHENTICATE        §7.2.15  Ed25519 challenge-sign (SSH via gpg-agent)
+ *
+ * Hand-rolled BER-TLV emitter for composite DOs (no malloc); all
+ * output buffers caller-supplied; bounds-checked every byte.  See
+ * emit_tlv / emit_constructed.
+ *
+ * Spec status words + non-standard values defined at the top of the
+ * file; spec-canonical 9000 / 6A88 / 6982 etc. used inline.
  */
 
 #include "openpgp_applet.h"

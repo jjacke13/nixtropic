@@ -1,14 +1,18 @@
 /*
- * STM32 onboard HAL_RNG init (decision P1.22 + B3).
+ * STM32U5 onboard HAL_RNG — TRNG init + access.
  *
- * Two callers:
- *   - libtropic's `lt_port_random_bytes` via `device->rng_handle`
- *     (Group D, when we wire up libtropic)
- *   - The P1.22 32-byte HAL_RNG dump over USB CDC (proves host-MCU RNG
- *     is alive on every cold-boot)
+ * Singleton handle (`rng_handle()`) shared by:
+ *   - libtropic's `lt_port_random_bytes` (TROPIC01 host-side entropy
+ *     before the L3 secure session is up)
+ *   - the cold-boot HAL_RNG self-test dump over USB CDC (proves the
+ *     STM32 TRNG is alive independently of the secure element)
  *
- * We expose the singleton handle via `rng_handle()` so multiple consumers
- * use the same one.
+ * Reference: STM32U5 reference manual RM0456 §27 (RNG), NIST SP 800-90B
+ * compliant when clocked from HSI48.
+ *
+ * NOTE: do NOT use this as the high-assurance entropy source — use
+ * TROPIC01's TRNG via `tropic_random()` for FIDO credential keys + PIN
+ * KEK material.  This host-MCU RNG is a fallback / boot-bring-up source.
  */
 
 #ifndef NIXTROPIC_RNG_H

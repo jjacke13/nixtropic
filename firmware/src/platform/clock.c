@@ -1,8 +1,13 @@
 /*
  * Clock subsystem bring-up — see clock.h.
  *
- * Mirrors stock TS1302 fw `sdk/drv_u5/sys.c:_sys_clock_config` minus the
- * LL idioms — we use HAL throughout for consistency with libtropic's port.
+ * Mirrors stock TS1302 fw `sdk/drv_u5/sys.c:_sys_clock_config` minus
+ * the LL idioms — we use HAL throughout for consistency with
+ * libtropic's port (`hal/port/stm32/libtropic_port_stm32u5xx.c`).
+ *
+ * Failure recovery: HAL errors trip the pre-USB boot-failure blink
+ * pattern in main.c (raw GPIO toggling, no peripherals required) so
+ * the LED reports cause even if USB never enumerates.
  */
 
 #include "clock.h"

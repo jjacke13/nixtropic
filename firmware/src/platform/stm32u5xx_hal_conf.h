@@ -1,15 +1,19 @@
 /*
- * Minimal HAL configuration for nixtropic Phase 1 firmware.
+ * Minimal STM32U5 HAL configuration for nixtropic firmware.
  *
- * Only the HAL modules we actually use are enabled. Everything else is
- * deliberately off — keeps build time down and prevents accidental coupling.
+ * Only the HAL modules we actually use are enabled.  Everything else
+ * is deliberately off — keeps build size down and prevents accidental
+ * coupling to ST middleware.
  *
- * Decision P1.4: ST HAL selectively (RCC, GPIO, SPI, RNG, PWR, CORTEX,
- * FLASH for latency config). NO HAL_UART (we don't use LPUART debug —
- * USB CDC is the console). NO HAL_PCD (TinyUSB owns USB).
+ * Enabled: RCC, GPIO, SPI, RNG, PWR, CORTEX, FLASH (for latency
+ * config).  Excluded by design: HAL_UART (USB CDC is the console);
+ * HAL_PCD (TinyUSB owns USB).
  *
- * Per inventory §10.3: TS1302 has 8 MHz HSE crystal X1.
- * HSI48 + CRS provides USB peripheral kernel clock (Group C).
+ * Per research/stm32u535-inventory.md §10.3: TS1302 has an 8 MHz HSE
+ * crystal X1.  HSI48 + CRS auto-trim provides the USB peripheral
+ * kernel clock (see platform/clock.c).
+ *
+ * Derived from ST's stm32u5xx_hal_conf_template.h (Cube U5 HAL).
  */
 
 #ifndef STM32U5xx_HAL_CONF_H

@@ -1,9 +1,16 @@
 /*
- * TS1302 board pinout — single source of truth for pin/peripheral mapping.
+ * TS1302 board pinout — single source of truth for pin/peripheral
+ * mapping.
  *
- * Per research/stm32u535-inventory.md §10.1 and PROJECT.md §4 hardware essentials.
+ * Per research/stm32u535-inventory.md §10.1 and PROJECT.md §4 hardware
+ * essentials.  Authoritative reference for: LED (PA9), SW1
+ * user-presence button (PH3), TROPIC01 power switch (PA0), TROPIC01
+ * GPO ready signal (PB0), TROPIC01 SPI1 (PA4/5/6/7 = NSS/SCK/MISO/MOSI),
+ * USB D+/D- (PA12/PA11).
  *
- * Phase 1 uses only the subset listed below. Full pinout in inventory doc.
+ * If you change a pin assignment here, also update STM32CubeMX's
+ * .ioc if you regenerate the HAL init — but we don't regenerate; this
+ * file is the canonical source.
  */
 
 #ifndef NIXTROPIC_BOARD_H
