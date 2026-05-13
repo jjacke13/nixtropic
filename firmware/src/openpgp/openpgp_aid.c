@@ -1,6 +1,6 @@
 /*
- * Phase 7 M2 — OpenPGP AID constant definition.  See openpgp_aid.h
- * for the byte-by-byte breakdown.
+ * OpenPGP card AID constant definition.  See openpgp_aid.h for the
+ * byte-by-byte breakdown + manufacturer-ID notes.
  */
 
 #include "openpgp_aid.h"

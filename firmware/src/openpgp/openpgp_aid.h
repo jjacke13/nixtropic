@@ -1,21 +1,28 @@
 /*
- * Phase 7 M2 — OpenPGP card application identifier.
+ * OpenPGP card Application Identifier — compile-time constant.
  *
  * AID layout per OpenPGP Card v3.4.1 §4.2.1:
  *
  *   D2 76 00 01 24 01   RID (FSFE-allocated for OpenPGP application)
  *   03 04               Version 3.4
  *   4E 58               Manufacturer "NX" — self-allocated for nixtropic
- *                       (Reserved range per spec §Appendix A; not a
- *                       conflict with the FSFE-allocated commercial
- *                       manufacturer IDs.)
- *   00 00 00 01         Serial number (placeholder; M5+ may derive from
- *                       lower 32 bits of TROPIC01 chip ID for uniqueness)
+ *                       (gnupg's hardcoded manufacturer table doesn't
+ *                       recognise this value → "Manufacturer: unknown"
+ *                       in `gpg --card-status`.  Cosmetic-only.  Phase 8
+ *                       may swap to 0xFF00..0xFFFE for the spec-defined
+ *                       "unmanaged S/N range" label.  See
+ *                       docs/PHASE-8-BACKLOG.md §4.2.)
+ *   00 00 00 01         Serial number (placeholder)
  *   00 00               RFU
  *
  * Total: 16 bytes.  Returned in response to SELECT for the OpenPGP AID
- * and in GET DATA for DO 0x4F (raw AID) + DO 0x6E child (Application
- * Related Data template).
+ * and in GET DATA for DO 0x4F (raw AID) + as a sub-DO of DO 0x6E
+ * (Application Related Data template).
+ *
+ * NOTE: scdaemon parses bytes 6-7 as application version.  Values
+ * < 0x0100 trigger a fallback parser path that may fail to extract
+ * fields like PW status from DO 6E — see
+ * phase7_m6_d_display_anomalies.md.
  */
 
 #ifndef NIXTROPIC_OPENPGP_AID_H

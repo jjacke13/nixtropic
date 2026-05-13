@@ -1,16 +1,16 @@
 /*
- * Phase 7 M2 — OpenPGP card applet — SELECT + GET DATA (read-only).
+ * OpenPGP card applet — public dispatcher entry point.
  *
- * Per OpenPGP Card v3.4.1 spec §7.2.  M2 scope:
+ * Implements the OpenPGP card v3.4.1 specification (FSFE / gnupg.org).
+ * See openpgp_applet.c for the full INS handler table + spec section
+ * references.  The dispatcher entry below is called by
+ * firmware/src/ccid/apdu_dispatch.c with a flat APDU byte string.
  *
- *   - SELECT (00 A4 04 00 ...) for the OpenPGP AID — returns SW=9000.
- *     No FCI template emitted (some cards do; gpg --card-status works
- *     fine without it).
+ * READ-ONLY DOs handled via GET DATA (00 CA P1 P2):
  *
- *   - GET DATA (00 CA P1 P2) for read-only DOs:
  *       0x004F  AID (16 B raw)
- *       0x005E  Login data — returns 0x6A88 (not found) until M3
- *       0x5F50  URL — returns 0x6A88 until M3
+ *       0x005E  Login data
+ *       0x5F50  URL
  *       0x5F52  Historical bytes
  *       0x0065  Cardholder Related Data (composite: 5B + 5F2D + 5F35)
  *       0x006E  Application Related Data (composite: 4F + 5F52 + 73)

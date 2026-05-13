@@ -1,20 +1,21 @@
 /*
- * Phase 7 M2 — OpenPGP applet state on TROPIC01 R-mem slot 1.
+ * OpenPGP applet state on TROPIC01 R-mem slot 1.  Persisted state
+ * + accessors for the OpenPGP card surface.
  *
- * Slot 1 (PGP primary state) layout — schema v4, per
- * docs/PHASE-7-PLAN.md §4.7:
+ * Slot 1 layout (256 B) — magic "PG7N" / schema v2 (current after M6
+ * audit H2 fix):
  *
  *   offset  size   field
  *   ------  ----   -----
- *      0      4    magic "PG7K" (0x50,0x47,0x37,0x4B)
- *      4      2    schema_version = 1 (PGP state v1)
- *      6      1    pgp_state_present (1 once initialised by ACTIVATE FILE)
+ *      0      4    magic "PG7N" (0x50,0x47,0x37,0x4E)
+ *      4      2    schema_version = 2
+ *      6      1    pgp_state_present (1 once activated, 2 terminated)
  *      7      1    PW1 retry counter cache (0..3)
  *      8      1    PW3 retry counter cache (0..3)
  *      9      1    RC retry counter cache (0xFF if unset, else 0..3)
  *     10      1    force_verify (DO C4 bit 0; default 1)
  *     11      1    touch_required (alias for D6/D7/D8; default 1)
- *     12      2    reserved (was per-slot UIF — single global flag now)
+ *     12      2    reserved
  *     14     40    cardholder name (1 B len + 39 B data) — DO 5B
  *     54      2    language (ISO 639) — DO 5F2D
  *     56      1    sex (ISO 5218) — DO 5F35
@@ -24,17 +25,26 @@
  *    117      4    generation time sig (BE u32) — DO CE
  *    121      4    generation time dec — DO CF
  *    125      4    generation time aut — DO D0
- *    129      3    signature counter (BCD) — DO 93
- *    132    343    reserved
+ *    129      3    signature counter (BE 24) — DO 93
+ *    132     16    PW1 hash (SHA-256[:16])
+ *    148     16    PW3 hash (SHA-256[:16])
+ *    164     16    RC  hash (SHA-256[:16], all-zero if unset)
+ *    180     32    X25519 dec priv key (Trezor Safe 7 host-side pattern)
+ *    212      1    PW1 length (M6 audit H2 fix — canonical split boundary)
+ *    213      1    PW3 length
+ *    214      1    RC  length (0 if unset)
+ *    215     41    reserved
  *                                                              ----
- *   total = 475 B  (matches R-mem slot size on TROPIC01 FW ≥2.0.0)
+ *   total = 256 B (matches TROPIC01 default per-slot size)
  *
- * For M2 the only fields read by GET DATA are PW status (force_verify
- * + retry counters) + DO C7/C8/C9 fingerprints (all zero until keys
- * generated in M4) + cardholder fields (all empty/zero by default).
+ * Magic bumps: PG7K → PG7L → PG7M → PG7N as schema evolves.  Magic
+ * mismatch on read triggers a clean write of defaults
+ * (write_activated_defaults), which is the user-visible side effect
+ * of every M5/M6 upgrade.
  *
- * Free-form fields (login DO 5E, URL DO 5F50) live in R-mem slot 2 —
- * not in M2 scope; deferred to M3 with PUT DATA.
+ * Why R-mem and not flash: persistent across power cycles, encrypted
+ * on the chip side, accessible only via L3 session — so a firmware
+ * reflash that doesn't have the L3 keys can't read prior state.
  */
 
 #ifndef NIXTROPIC_OPENPGP_STATE_H

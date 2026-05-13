@@ -1,21 +1,34 @@
 /*
- * Phase 7 M4 — OpenPGP key generation + Ed25519 signing on TROPIC01.
+ * OpenPGP key generation + signing/ECDH on TROPIC01.
  *
- * Slot allocation (Phase 7 plan §4.6):
- *   29 — sig key (Ed25519)  — used by PSO:CDS (M4 + M6)
- *   30 — dec key (X25519)   — used by PSO:DEC (M5)
- *   31 — aut key (Ed25519)  — used by INTERNAL AUTHENTICATE (M5)
+ * Slot allocation (per docs/PHASE-7-PLAN.md §4.6):
+ *
+ *   29 — sig key (Ed25519, chip-side)  — used by PSO:CDS
+ *   30 — UNUSED (dec key is host-side, see below)
+ *   31 — aut key (Ed25519, chip-side)  — used by INTERNAL AUTHENTICATE
  *
  * Slots 0..28 are owned by FIDO per Phase 5 design (slots_init).
  *
- * M4 scope: sig key only.  DEC + AUT generation returns SW=0x6A82
- * (function not supported in current state).  M5 implements those.
+ * Architecture (Trezor Safe 7 pattern, confirmed by sub-agent
+ * investigation of libtropic source + TropicSquare docs):
  *
- * Key material lives on the TROPIC01 chip — STM32 firmware never sees
- * private keys.  All sign operations are chip-side via L3 secure
- * session (lt_ecc_eddsa_sign).  Pubkeys are read on demand from the
- * chip; no caching in flash/RAM (avoids stale-data bugs at the cost of
- * a few ms per READ PUBLIC KEY APDU).
+ *   - sig + aut keys: pure chip-side.  lt_ecc_key_generate creates
+ *     the keypair on chip slot 29/31; lt_ecc_eddsa_sign computes
+ *     EdDSA signatures on-chip.  STM32 NEVER sees the private key.
+ *
+ *   - dec key (X25519): host-side compute.  TROPIC01 doesn't expose
+ *     ECDH at the user-key level (confirmed via libtropic API audit
+ *     + TROPIC01.md line 32).  X25519 priv lives in R-mem slot 1
+ *     byte 180-211 (encrypted by L3 session); STM32 does
+ *     curve25519_donna scalarmult in software via trezor-crypto.
+ *     Phase 8 hardens this further with M&D-KEK gating
+ *     (docs/PHASE-8-BACKLOG.md §1.2).
+ *
+ * Pubkeys are read on demand from the chip / R-mem; no caching in
+ * flash/RAM (avoids stale-data bugs at the cost of a few ms per
+ * READ PUBLIC KEY APDU).
+ *
+ * Crypto primitives: Ed25519 per RFC 8032; X25519 per RFC 7748.
  */
 
 #ifndef NIXTROPIC_OPENPGP_PGP_KEYS_H
