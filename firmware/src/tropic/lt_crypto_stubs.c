@@ -1,36 +1,19 @@
 /*
- * Crypto stubs for libtropic — Phase 1 ONLY.
+ * VESTIGIAL — Phase 1 placeholder, NOT compiled in the current build.
  *
- * libtropic's L3 secure-session implementation (libtropic_l3.c, lt_hkdf.c,
- * lt_l3_process.c) calls into a "crypto provider" via the headers
- * lt_aesgcm.h / lt_x25519.h / lt_sha256.h / lt_hmac_sha256.h /
- * lt_crypto_common.h. Real implementations are provided by an external
- * crypto library (mbedtls in the F439ZI example, trezor_crypto in
- * libtropic's vendor/ tree) that the application chooses.
+ * Excluded from firmware/CMakeLists.txt: trezor_crypto's CAL provides
+ * the real libtropic crypto callbacks (AES-GCM, X25519, SHA-256,
+ * HMAC-SHA-256) since Phase 3 M4 — see firmware/CMakeLists.txt §
+ * "trezor_crypto CAL".
  *
- * Phase 1 is L2-only (no L3 secure session — verified via P1.11), so we
- * never actually call any L3 path. But:
- *   - lt_init() calls lt_crypto_ctx_init() unconditionally
- *   - The L3 .c files reference the other crypto symbols
+ * Kept in-tree as a historical reference for anyone reading Phase 1
+ * commits (e.g. `git log -- firmware/src/tropic/lt_crypto_stubs.c`).
+ * Slated for deletion in Phase 8 cleanup.
  *
- * Approach for Phase 1:
- *   - We DO NOT compile libtropic_l3.c, lt_l3_process.c, lt_hkdf.c
- *     (the L3-specific files). Their L3-only call sites simply don't
- *     exist in our binary.
- *   - We provide stubs for lt_crypto_ctx_init/deinit so lt_init succeeds.
- *   - We provide stubs for the other crypto fns so any inline calls
- *     from libtropic.c (e.g. inside lt_random_value_get, lt_session_start,
- *     etc.) link successfully. These functions ARE compiled into our
- *     binary but UNREACHABLE — `--gc-sections` strips them at link time
- *     unless we accidentally call them.
- *
- * Phase 5 will replace these stubs with a real crypto provider
- * (probably libtropic/vendor/trezor_crypto or mbedtls v4) when L3
- * secure session is needed for FIDO2 ClientPIN etc.
- *
- * SAFETY: Each stub returns LT_FAIL except lt_crypto_ctx_init/deinit.
- * If anything ever tries to actually use crypto via these stubs, the
- * caller will get LT_FAIL and bail out — no silent wrong behavior.
+ * Original purpose (Phase 1): libtropic's `lt_init` calls into a
+ * crypto-provider context-init function unconditionally; we needed
+ * something to satisfy the linker before trezor_crypto landed.  Each
+ * stub returned LT_FAIL so any accidental L3 use would fail loudly.
  */
 
 #include <stddef.h>

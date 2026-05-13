@@ -1,9 +1,20 @@
 /*
- * TROPIC01 power-up + libtropic L2 round-trip — see tropic.h.
+ * TROPIC01 host-side library glue — implementation.  See tropic.h
+ * for the public API + spec references.
  *
- * Phase 1 scope (per plan §0): L1 (SPI) + L2 (framing) only. NO L3
- * secure session — that's Phase 5. P1.11 verified `lt_get_info_*`
- * functions work without a session via direct L2 GET_INFO requests.
+ * Drives libtropic's lt_handle_t through power-up, SPI port init, and
+ * (when needed) L3 Noise IK secure session establishment.
+ *
+ * Known chip-side quirks worked around here:
+ *   - lt_get_info_fw_bank: returns LT_L2_GEN_ERR(37) on ACAB silicon
+ *     (auto-managed FW banks).  Informational, not a bug.
+ *   - ECC slot R-config: write-once erratum OI_TR01_ERR_2026010800.
+ *     Writing R-config without erase = permanent Alarm Mode brick.
+ *     `tropic_ecc_ensure_slot_authorized` is now a no-op (was the
+ *     footgun); R-config is written ONCE at chip provisioning time.
+ *   - Engineering-sample chip FW 0.3.1 was Deprecated; FW ≥ 2.0.0
+ *     fixes lt_ecc_key_read on slot 29.  Updater tool:
+ *     `nix run .#fw-update-chip`.
  */
 
 #include <stdbool.h>

@@ -1,14 +1,24 @@
 /*
- * TROPIC01 power-up + libtropic L1/L2 (and L3 in M4) round-trips.
+ * TROPIC01 host-side library glue — wraps libtropic's L1 (SPI) + L2
+ * (framing) + L3 (Noise IK secure session) into the nixtropic
+ * firmware's needs.
  *
- * Public API:
- *   tropic_init()           — power up chip, configure SPI AF, run lt_init
- *   tropic_l2_sweep()       — Phase 1 printf-based sweep (CDC console)
- *   tropic_chip_id_read()   — structured read of chip_id (128 B) for HID RPC
+ * libtropic upstream: https://github.com/tropicsquare/libtropic
+ * (vendored via Nix flake input; see flake.nix for the pinned revision).
  *
- * Phase 3 M3 adds the structured tropic_chip_id_read. Phase 1's
- * tropic_l2_sweep is kept for the CDC console path (Phase 1 validate-phase1.sh
- * still calls it). Both share the same global lt_handle_t.
+ * The TROPIC01 chip itself: open-source secure element from Tropic
+ * Square — datasheet + reference manual at https://github.com/
+ * tropicsquare/tropic01.  Chip API surface (commands we use):
+ *   L1: SPI byte transport
+ *   L2: GET_INFO, RESEND, FW UPDATE family (no session needed)
+ *   L3: SESSION_START (Noise IK with chip's STPUB), then:
+ *       ECC_KEY_GENERATE / ECC_KEY_READ / ECC_EDDSA_SIGN
+ *       (Ed25519 + P-256 sign), R_MEM_READ/WRITE/ERASE (persistent
+ *       storage), MAC_AND_DESTROY (retry-bounded slot consumption),
+ *       RANDOM_VALUE_GET (chip TRNG), FACTORY_RESET.
+ *
+ * Public C API exposed by this module is intentionally narrow — see
+ * the function-by-function comments below.
  */
 
 #ifndef NIXTROPIC_TROPIC_H
