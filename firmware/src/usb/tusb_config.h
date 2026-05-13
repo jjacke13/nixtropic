@@ -1,9 +1,15 @@
 /*
- * TinyUSB user configuration for nixtropic Phase 1.
+ * TinyUSB user configuration for nixtropic — composite device:
+ * CDC-ACM + HID×2 (lt-rpc + FIDO) + CCID smart card.
  *
- * Per plan decision P1.14: CDC-ACM only, single interface. HID and CCID
- * come in later phases. CFG_TUSB_MCU=OPT_MCU_STM32U5 is set in the
- * CMake toolchain (drives fsdev_stm32.h's U5 register-name remapping).
+ * CFG_TUSB_MCU = OPT_MCU_STM32U5 is set in the CMake toolchain (drives
+ * fsdev_stm32.h's U5 register-name remapping).  We use the **fsdev**
+ * driver (the U5 USB-FS peripheral is a Synopsys fsdev variant), NOT
+ * dwc2; using the wrong driver enumerates the device incorrectly or
+ * not at all.
+ *
+ * Upstream: TinyUSB (https://github.com/hathach/tinyusb).  Vendored
+ * via Nix flake input pinning — see flake.nix.
  */
 
 #ifndef NIXTROPIC_TUSB_CONFIG_H

@@ -1,18 +1,21 @@
 /*
- * Phase 7 M1 — TinyUSB application class driver for USB CCID.
+ * TinyUSB application class driver for USB CCID — implements the
+ * USB Integrated Circuit(s) Cards Interface (CCID) Class 1.1
+ * specification (PC/SC Workgroup spec, usb.org/sites/default/files/
+ * DWG_Smart-Card_CCID_Rev110.pdf).
  *
- * Implements the bare minimum to enumerate as a pcsc-lite-detectable
- * CCID reader and round-trip raw APDUs:
+ * Routes APDU bodies from the USB bulk-OUT endpoint to
+ * firmware/src/ccid/apdu_dispatch.c → firmware/src/openpgp/
+ * openpgp_applet.c, and ships the response back on bulk-IN.
  *
- *   PC_to_RDR_IccPowerOn   → RDR_to_PC_DataBlock  (ATR)
- *   PC_to_RDR_IccPowerOff  → RDR_to_PC_SlotStatus
- *   PC_to_RDR_GetSlotStatus → RDR_to_PC_SlotStatus
- *   PC_to_RDR_XfrBlock     → RDR_to_PC_DataBlock  (APDU response via apdu_dispatch)
- *   PC_to_RDR_{Get,Reset,Set}Parameters → RDR_to_PC_Parameters
- *   Anything else          → RDR_to_PC_SlotStatus (FAILED + CMD_NOT_SUPPORTED)
+ * CCID messages we handle:
  *
- * M2 extends apdu_dispatch.c with real OpenPGP applet INS handling;
- * this file (the USB transport) doesn't change.
+ *   PC_to_RDR_IccPowerOn       → RDR_to_PC_DataBlock  (ATR — see s_atr)
+ *   PC_to_RDR_IccPowerOff      → RDR_to_PC_SlotStatus
+ *   PC_to_RDR_GetSlotStatus    → RDR_to_PC_SlotStatus
+ *   PC_to_RDR_XfrBlock         → RDR_to_PC_DataBlock  (APDU → applet → SW)
+ *   PC_to_RDR_{Get,Reset,Set}Parameters → RDR_to_PC_Parameters (T=1)
+ *   Anything else              → RDR_to_PC_SlotStatus (FAILED + CMD_NOT_SUPPORTED)
  *
  * State model (single command in flight at a time):
  *

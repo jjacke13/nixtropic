@@ -1,28 +1,31 @@
 /*
- * USB descriptors for nixtropic — Phase 7 composite (CDC + HID×2 + CCID).
+ * USB descriptors for nixtropic — composite device exposing four
+ * functions to the host on a single USB connection:
  *
- * Layout:
- *   Interface 0   CDC control (notification EP IN)
- *   Interface 1   CDC data    (bulk EP OUT/IN)
- *   Interface 2   HID #0      lt-rpc — vendor usage page 0xFF00, 64 B IN/OUT
- *   Interface 3   HID #1      FIDO2  — usage page 0xF1D0, 64 B IN/OUT
- *   Interface 4   CCID        smart card — class 0x0B, bulk IN/OUT (Phase 7 M1)
+ *   IF 0  CDC control (notification EP IN)             — console / log
+ *   IF 1  CDC data    (bulk EP OUT/IN)                 — printf retarget
+ *   IF 2  HID #0      vendor usage page 0xFF00         — lt-rpc framing
+ *   IF 3  HID #1      FIDO2 usage page 0xF1D0          — CTAP2 transport
+ *   IF 4  CCID        class 0x0B, bulk IN/OUT          — OpenPGP card
  *
- * VID/PID stays `0xCAFE:0x4001` from Phase 2 (TinyUSB demo range, also
- * accepted by `nix run .#identify`). Real pid.codes allocation is a
- * Phase 8 task.
+ * VID/PID = 0xCAFE:0x4001 (TinyUSB demo range).  A pid.codes
+ * allocation is a Phase 8 publishing task — see
+ * docs/PHASE-8-BACKLOG.md §5.2.
  *
- * Two separate HID interfaces (rather than dual-collection) so each
+ * Two SEPARATE HID interfaces (rather than dual-collection) so each
  * surfaces as its own /dev/hidraw* and so libfido2's enumeration sees
- * exactly one FIDO interface (matching usage page 0xF1D0). lt-rpc stays
- * exactly as Phase 3 emitted it on instance 0.
+ * exactly one FIDO interface (matching usage page 0xF1D0 per the
+ * FIDO U2F HID 1.0 spec).
  *
- * The CCID interface is the Phase 7 addition.  Class 0x0B identifies us
- * as a smart card reader to pcsc-lite for plug-and-play enumeration.
- * Functional descriptor (54 B, type 0x21) advertises T=1 protocol and
- * short+extended APDU level exchange.  Bulk endpoints carry CCID
- * messages (PC_to_RDR_* / RDR_to_PC_*) — see firmware/src/ccid/ +
- * firmware/src/usb/usb_ccid.c.
+ * CCID interface follows USB CCID 1.1 spec §5.  Class 0x0B
+ * identifies us as a smart card reader to pcsc-lite for plug-and-play
+ * enumeration.  Functional descriptor (54 B, type 0x21) advertises
+ * T=1 protocol + short + extended APDU level exchange.  Bulk endpoints
+ * carry PC_to_RDR_* / RDR_to_PC_* messages (firmware/src/usb/
+ * usb_ccid.c).
+ *
+ * Reference specs: USB 2.0 (device, config, interface, endpoint
+ * descriptors), USB CDC 1.2, USB HID 1.11, USB CCID 1.1.
  */
 
 #include "tusb.h"

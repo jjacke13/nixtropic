@@ -1,9 +1,21 @@
 /*
  * USB peripheral bring-up — see usb.h.
  *
- * Sequence is intentionally explicit (no HAL helper for U5 USB pcd) so
- * we can debug at the register level if anything goes sideways. TinyUSB
- * handles everything from `tusb_init` onward.
+ * Sequence is intentionally explicit (no HAL helper for U5 USB pcd)
+ * so we can debug at the register level if anything goes sideways.
+ * TinyUSB handles everything from `tusb_init` onward.
+ *
+ * STM32U5-specific quirks baked in here:
+ *   - VDDUSB must be enabled BEFORE the USB peripheral RCC clock,
+ *     otherwise PA11/PA12 stay HIGH-Z and the host never sees us.
+ *   - PA12 renumeration trick — briefly drive PA12 (USB D+) LOW
+ *     before AF mux to force the host to re-enumerate.  Required if
+ *     the dongle is reset while the host has it cached as DFU.
+ *   - Use the **fsdev** TinyUSB driver (not dwc2) — see tusb_config.h.
+ *   - USB_IRQHandler is the correct ISR symbol on U5 (NOT OTG_FS_IRQHandler).
+ *
+ * Reference: STM32U5 reference manual RM0456 §40 (USB-FS), AN5483
+ * (USB-FS without external crystal via HSI48 + CRS).
  */
 
 #include "usb.h"

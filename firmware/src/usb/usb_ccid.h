@@ -1,5 +1,5 @@
 /*
- * Phase 7 M1 — TinyUSB application class driver for USB CCID.
+ * TinyUSB application class driver for USB CCID 1.1 — public glue.
  *
  * Exposes the driver via TinyUSB's `usbd_app_driver_get_cb()` hook
  * (called in usb.c).  Driver implements the 5 standard class-driver
@@ -9,7 +9,8 @@
  * CCID layer directly — they go through the TinyUSB device stack
  * which calls our driver via the registered usbd_class_driver_t.
  *
- * The ATR + APDU echo handler live in firmware/src/ccid/.
+ * APDU dispatch + the OpenPGP applet itself live in
+ * firmware/src/ccid/ + firmware/src/openpgp/.
  */
 
 #ifndef NIXTROPIC_USB_CCID_H

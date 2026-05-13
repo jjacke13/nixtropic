@@ -1,13 +1,16 @@
 /*
- * USB CDC bring-up — see usb.c.
+ * USB peripheral bring-up — see usb.c.
  *
- * Group C public API:
+ * Public API:
  *   usb_clock_init()  — HSI48 + CRS for USB peripheral kernel clock
- *   usb_init()        — VDDUSB enable, PA11/12 AF mux, PA12 renumeration trick,
- *                       enable USB peripheral RCC clock, then tusb_init
+ *   usb_init()        — VDDUSB enable, PA11/12 AF mux, PA12 renumeration
+ *                       trick, enable USB peripheral RCC clock, then
+ *                       tusb_init
  *   USB_IRQHandler()  — defined in usb.c, routes to tud_int_handler(0)
  *
  * After usb_init, caller must poll tud_task() in the main loop.
+ *
+ * Composite descriptor layout: see usb_descriptors.c.
  */
 
 #ifndef NIXTROPIC_USB_H
