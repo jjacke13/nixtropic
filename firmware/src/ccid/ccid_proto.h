@@ -1,15 +1,18 @@
 /*
- * Phase 7 M1 — USB CCID protocol structures.
+ * USB CCID 1.1 protocol structures — wire-level message header types,
+ * status/error bytes, and slot-status definitions.
  *
  * Reference: "Universal Serial Bus Device Class: Smart Card CCID
  * Specification for Integrated Circuit(s) Cards Interface Devices",
- * Revision 1.1 (USB-IF).
+ * Revision 1.1 (USB-IF):
+ *   https://www.usb.org/sites/default/files/DWG_Smart-Card_CCID_Rev110.pdf
  *
  * Wire byte order: little-endian for all multi-byte CCID fields.
- * (ISO 7816 APDUs inside CCID payloads are their own thing.)
+ * (ISO 7816-4 APDUs inside CCID payloads are their own thing —
+ * see firmware/src/ccid/apdu_dispatch.h.)
  *
- * Message structures use __attribute__((packed)) so the layout matches
- * the wire exactly. All field offsets are spec-mandated.
+ * Message structures use __attribute__((packed)) so the layout
+ * matches the wire exactly.  All field offsets are spec-mandated.
  */
 
 #ifndef NIXTROPIC_CCID_PROTO_H

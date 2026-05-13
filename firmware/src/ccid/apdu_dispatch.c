@@ -1,10 +1,10 @@
 /*
- * Phase 7 — ISO 7816 APDU dispatcher.  See apdu_dispatch.h.
+ * ISO 7816-4 APDU dispatcher — see apdu_dispatch.h for the public
+ * API + spec references.
  *
- * M1 echoed SW=0x9000 for every APDU.  M2 onwards forwards to the
- * OpenPGP applet (firmware/src/openpgp/openpgp_applet.c).  When
- * Phase 7b adds PIV, the dispatcher will route on the SELECT'd
- * applet's AID; for now there's only one applet.
+ * Hard-coded to forward to the OpenPGP applet.  AID-based routing for
+ * multiple applets (PIV in Phase 7b) lands when the second applet does
+ * — see docs/PHASE-8-BACKLOG.md §4.4.
  */
 
 #include "apdu_dispatch.h"

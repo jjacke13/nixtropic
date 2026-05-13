@@ -1,15 +1,19 @@
 /*
- * Phase 7 M1 — ISO 7816 APDU dispatcher (minimal echo).
+ * ISO 7816-4 APDU dispatcher — routes incoming APDUs to the currently-
+ * SELECTed applet.
  *
- * M1 scope: receive APDU bytes, parse CLA/INS/P1/P2/Lc/Le with bounds
- * checks, return SW = 0x9000 (OK) with no response data.  Unknown
- * CLA → 0x6E00.  No actual command handling — that's M2 (OpenPGP
- * applet SELECT + GET DATA).
+ * Today exactly one applet exists (OpenPGP card, see firmware/src/
+ * openpgp/openpgp_applet.c).  The dispatcher is structured to accept
+ * a second applet (e.g. PIV in Phase 7b — see docs/PHASE-8-BACKLOG.md
+ * §4.4) by routing on the SELECT'd AID; the routing-table machinery
+ * just isn't wired yet because there's only one applet.
  *
  * The dispatcher takes a flat APDU byte string (header + body) and
  * writes a response byte string (data + SW1 SW2) to the caller's
  * buffer.  Sizes are sanity-checked; extended-length APDUs supported
- * up to 4096 B body.
+ * up to 4096 B body (ISO 7816-4 §5.1).
+ *
+ * Reference: ISO/IEC 7816-4:2020 §5 Organization for interchange.
  */
 
 #ifndef NIXTROPIC_CCID_APDU_DISPATCH_H
