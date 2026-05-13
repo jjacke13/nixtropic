@@ -1,12 +1,17 @@
 /*
- * Phase 5 M1: TROPIC01-backed credential slot manager.
+ * TROPIC01-backed credential slot manager.
  *
- * Manages up to 32 FIDO2 credentials, each occupying:
+ * Manages up to 29 FIDO2 credentials (slots 0..28); slots 29..31 are
+ * reserved for OpenPGP card sig/dec/aut keys (see firmware/src/
+ * openpgp/pgp_keys.h §slot allocation).
+ *
+ * Each credential occupies:
  *   - TROPIC01 ECC slot (TR01_ECC_SLOT_0 + idx)        — private key, on chip
  *   - TROPIC01 R-mem slot (idx + 1)                    — metadata (256 B)
  *
- * R-mem slot 0 is the global state (allocation bitmap, schema magic,
- * later: PIN state, M&D bookkeeping). See docs/PHASE-5-PLAN.md §4.2.
+ * R-mem slot 0 is the global state (allocation bitmap, schema magic
+ * "NX7K" Phase 7, PIN state, M&D bookkeeping).  See
+ * docs/PHASE-5-PLAN.md §4.2 for the full layout.
  *
  * Persistence model:
  *   - R-mem is written/read over libtropic L3 — atomic per slot per spec.

@@ -1,27 +1,35 @@
 /*
- * Phase 5 M3 — CTAP2 ClientPIN protocol v1 (P-256 + AES-256-CBC + HMAC-SHA-256).
+ * CTAP2 ClientPIN protocol v1 — implementation.
  *
- * Implementation matches CTAP2 §5.5.4 / §6.5. All crypto from
- * trezor_crypto (already linked for libtropic L3 + Ed25519 in Phase 3/5).
+ * Spec: CTAP2.1 §5.5.4 (key agreement + token life-cycle) + §6.5
+ * (CBOR command surface).  pinUvAuthProtocol "version 1":
  *
- * Threat-model defensive choices in this file:
+ *   - Key agreement: P-256 ECDH (NIST FIPS 186-5)
+ *   - Encryption:    AES-256-CBC with IV=0
+ *   - MAC:           HMAC-SHA-256 (RFC 2104), output truncated to 16 B
+ *
+ * All crypto from trezor-crypto (vendored via libtropic — same
+ * primitives used for L3 Noise IK + Ed25519 sign).
+ *
+ * Threat-model defensive choices baked into this file:
  *   - All secret comparisons use ct_memcmp (constant-time).
- *   - shared_key + ephemeral private key live ONLY on the stack; wiped
- *     before return (memzero / memset).
+ *   - shared_key + ephemeral private key live ONLY on the stack;
+ *     wiped before return (memzero / memset).
  *   - pinUvAuthToken is RAM-only and only generated AFTER successful
- *     PIN verification. Token is regenerated on every getPinToken call.
- *   - Ephemeral P-256 keypair regenerates after every successful PIN op
- *     for forward secrecy (so a compromise of one shared_key doesn't
+ *     PIN verification.  Token is regenerated on every getPinToken.
+ *   - Ephemeral P-256 keypair regenerates after every successful PIN
+ *     op for forward secrecy (compromise of one shared_key doesn't
  *     leak prior or subsequent shared_keys).
  *   - PIN entry deliberately omitted from log/printf statements
  *     (timing side channels via UART).
  *
- * The retry-counter design layers two backstops:
- *   - persistent pin_retries (8 max, R-mem): survives power-cycle. M4
- *     will swap this for MAC-and-Destroy slot consumption.
- *   - in-boot consec_fails (3 max, RAM): forces power-cycle after
- *     3 wrong PINs even if persistent counter still has retries left.
- *     CTAP2 §5.5.4 §2 mandates this.
+ * Retry-counter design (two backstops):
+ *   - In-boot consec_fails (3 max, RAM): forces power-cycle after
+ *     3 wrong PINs even if persistent counter has retries left.
+ *     CTAP2 §5.5.4 mandates.
+ *   - Persistent retries: MAC-and-Destroy-backed (Phase 5 M4) —
+ *     8 chip slots physically consumed by wrong PINs; defends
+ *     against firmware-reflash brute-force.  See pin_md.c.
  */
 
 #include "pin.h"

@@ -1,8 +1,10 @@
 /*
- * authenticatorCredentialManagement (CTAP2 cmd 0x0A) — Phase 6 M3.
+ * authenticatorCredentialManagement — CTAP2.1 §6.8 implementation
+ * (command 0x0A).
  *
- * Implements CTAP2.1 §6.8 sub-commands for enumeration and deletion of
- * resident credentials.  Wired into ctap2.c's CBOR dispatcher.
+ * Lets the platform (libfido2, Chromium credential manager, Firefox
+ * Security Keys panel) enumerate and delete resident credentials on
+ * the dongle.  Wired into ctap2.c's CBOR dispatcher.
  *
  * Sub-commands implemented (CTAP2.1 §6.8.2):
  *   0x01  getCredsMetadata

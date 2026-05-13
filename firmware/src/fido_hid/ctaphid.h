@@ -1,15 +1,32 @@
 /*
  * CTAPHID framing layer for the FIDO HID interface (TinyUSB HID
- * instance 1). Mirrors the architecture of hid_rpc/rpc.c (single-channel
- * lt-rpc) but adds multi-CID negotiation: hosts allocate channels via
- * CTAPHID_INIT with the broadcast CID, then talk on their allocated CID.
+ * instance 1, USB usage page 0xF1D0).
  *
- * Phase 4 M2 implements: INIT, PING, MSG (returns 6E00), CANCEL, ERROR.
- * CBOR (0x10) is wired to a stub dispatcher that returns
- * CTAP2_ERR_INVALID_COMMAND for everything; M3 fills in real GetInfo.
+ * Implements the FIDO Alliance U2F HID 1.0 transport spec (FIDO U2F
+ * HID Protocol Specification, 2017-05-11):
+ *   https://fidoalliance.org/specs/fido-u2f-v1.2-ps-20170411/
+ *     fido-u2f-hid-protocol-v1.2-ps-20170411.html
  *
- * Like lt-rpc, only one transaction is in flight system-wide; if a packet
- * from a different CID arrives mid-assembly, we emit CHANNEL_BUSY.
+ * CTAP2 spec §11.2 reuses this transport unchanged.
+ *
+ * Implemented commands:
+ *   0x86  CTAPHID_INIT      channel allocation + capability echo
+ *   0x81  CTAPHID_PING      echo payload (interop test)
+ *   0x83  CTAPHID_MSG       U2F APDU passthrough (returns SW=6E00,
+ *                           class-not-supported — we're CTAP2-only)
+ *   0x10  CTAPHID_CBOR      CTAP2 request → ctap2.c dispatcher
+ *   0x11  CTAPHID_CANCEL    abort in-flight transaction
+ *   0x12  CTAPHID_KEEPALIVE emitted by us when waiting for SW1 touch
+ *   0x3F  CTAPHID_ERROR     non-success transport error
+ *
+ * Multi-CID negotiation: hosts allocate channels via CTAPHID_INIT
+ * with the broadcast CID (0xFFFFFFFF), then talk on their allocated
+ * CID.  Single in-flight transaction system-wide; cross-CID packets
+ * during assembly → CHANNEL_BUSY (FIDO U2F HID §3.4.3).
+ *
+ * Architecturally mirrors `firmware/src/hid_rpc/rpc.c` (single-channel
+ * vendor RPC) — both use the same INIT/CONT packet shape because
+ * lt-rpc was designed CTAPHID-derived from day one.
  */
 
 #ifndef NIXTROPIC_FIDO_HID_CTAPHID_H

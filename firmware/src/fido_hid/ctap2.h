@@ -1,13 +1,32 @@
 /*
- * CTAP2 command dispatcher.
+ * CTAP2 command dispatcher — implements the FIDO Alliance Client to
+ * Authenticator Protocol 2.1 spec (CTAP 2.1, 2021-06-15 final).
+ *
+ *   https://fidoalliance.org/specs/fido-v2.1-ps-20210615/
+ *     fido-client-to-authenticator-protocol-v2.1-ps-20210615.html
  *
  * Wired into the CTAPHID framing via fido_hid_cbor_dispatch() — the
  * framing layer hands us a fully-assembled CTAPHID_CBOR payload, we
- * peel off byte 0 (sub-command) and produce the response (whose first
- * byte is the CTAP2 status code).
+ * peel off byte 0 (sub-command) and produce the response (whose
+ * first byte is the CTAP2 status code per §6).
  *
- * M3 implements authenticatorGetInfo (0x04).
- * M4 adds authenticatorMakeCredential (0x01) + authenticatorGetAssertion (0x02).
+ * Sub-commands implemented:
+ *
+ *   0x01  authenticatorMakeCredential       §6.1
+ *   0x02  authenticatorGetAssertion         §6.2
+ *   0x04  authenticatorGetInfo              §6.4
+ *   0x06  authenticatorClientPIN            §6.5  (pin.c — protocol v1)
+ *   0x07  authenticatorReset                §6.7  (10 s post-boot window)
+ *   0x08  authenticatorGetNextAssertion     §6.3  (multi-credential rp)
+ *   0x0A  authenticatorCredentialManagement §6.8  (credmgmt.c)
+ *
+ * CBOR encoding rules: CTAP2 canonical (§7.1) — shortest length-prefix,
+ * lexicographic byte ordering of map keys.  Caller responsibility for
+ * canonical ordering; cbor.c does NOT sort.
+ *
+ * Originally derived from SoloKeys solo1 (https://github.com/
+ * solokeys/solo) — but substantially rewritten for trezor-crypto
+ * primitives + TROPIC01-backed credential storage (Phase 5 M2).
  */
 
 #ifndef NIXTROPIC_FIDO_HID_CTAP2_H
