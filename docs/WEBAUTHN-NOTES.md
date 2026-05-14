@@ -97,7 +97,7 @@ Exhausts after ~136 years at 1 sig/sec continuous.
 `fido2-token -I /dev/hidrawN` should report:
 
 - `aaguid: 6e697874726f70696300000000000003`
-- `options: rk, up, plat=false, clientPin, alwaysUv`
+- `options: rk, up, plat=false, alwaysUv, credMgmt, clientPin, credentialMgmtPreview` — `alwaysUv` is dynamic (true once a PIN is set)
 - `algorithms: eddsa, es256`
 - `pin protocols: 1`
 

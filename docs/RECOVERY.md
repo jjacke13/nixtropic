@@ -38,7 +38,7 @@ over SPI, so a bad STM32 reflash can't corrupt the secure element.
 | STM32 RDP level 2 lock                 | no           | don't enable RDP=2 in dev |
 | TROPIC01 R-config write w/o erase      | no, permanent| see PROJECT.md §5 — never reachable from nixtropic code |
 | TROPIC01 SH0 invalidated, no SH1 set   | no           | always set SH1+ before invalidating SH0 |
-| TROPIC01 chip firmware out-of-date     | yes          | `nix run .#fw-update-chip` |
+| TROPIC01 chip firmware out-of-date     | yes          | check with `nix run .#chip-fw-version`; update with `nix run .#fw-update-chip` |
 | FIDO credentials / PIN / Force-UV flag | yes          | host-side wipe — see README §Factory reset |
 | OpenPGP PINs / cardholder / keys       | yes          | `gpg --card-edit > admin > factory-reset` |
 
@@ -64,20 +64,32 @@ over SPI, so a bad STM32 reflash can't corrupt the secure element.
 
 The device reboots into the new firmware automatically.
 
-## TROPIC01 chip firmware update
+## TROPIC01 chip firmware — check + update
 
-Updates the TROPIC01's internal CPU + SPECT firmware.  One-way — the
-chip rejects downgrades after success.  Use this if `nix run .#identify`
-reports App FW < 2.0.0.
+The TROPIC01 has its own internal firmware (App FW running on the
+chip's RISC-V CPU + SPECT FW running on the cryptographic processor).
+Independent of the STM32's firmware.
+
+**Check what's running:**
+
+```bash
+sudo nix run .#chip-fw-version
+# App FW    = 2.0.0
+# SPECT FW  = 1.0.0
+```
+
+**Update if out-of-date** (chip rejects downgrades after success — the
+operation is one-way):
 
 ```bash
 sudo nix run .#fw-update-chip
 ```
 
-Built from `tools/fw-update-chip-main.c` against the pinned libtropic
-v3.2.1.  The dongle must be running stock firmware (not the open
-firmware) — the chip-FW updater needs the L1 SPI passthrough mode that
-stock provides.
+Both tools require the dongle to be running the STOCK TS1302 firmware
+(the one with the CDC USB↔SPI passthrough) — re-flash stock first via
+`nix run .#flash-stock` if you're currently on the open firmware.
+Built from `tools/{chip-fw-version,fw-update-chip}-main.c` against the
+pinned libtropic v3.2.1.
 
 ## Application-level reset
 
@@ -87,19 +99,6 @@ OpenPGP recipes.  TL;DR:
 
 - FIDO state: `fido2-token -R …` within 10 s of boot + SW1 confirm
 - OpenPGP state: `gpg --card-edit → admin → factory-reset`
-
-## Hardware-level recovery (extreme edge case)
-
-If DFU mode itself won't enumerate (very rare — ROM bootloader is
-robust), use SWD via ST-Link or J-Link on the TS1302 debug header
-(SWDIO, SWCLK, RST, GND):
-
-```bash
-openocd -f interface/stlink.cfg -f target/stm32u5x.cfg \
-  -c "init; reset halt; flash erase_address 0x08000000 0x40000; reset run; exit"
-```
-
-DFU should work again after this.
 
 ## See also
 

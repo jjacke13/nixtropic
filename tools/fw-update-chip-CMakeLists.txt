@@ -71,4 +71,18 @@ target_include_directories(fw-update-chip PRIVATE
 
 target_link_libraries(fw-update-chip PRIVATE tropic)
 
-install(TARGETS fw-update-chip RUNTIME DESTINATION bin)
+# Read-only sibling: just prints current App FW + SPECT FW versions.
+add_executable(chip-fw-version
+    "${CMAKE_CURRENT_SOURCE_DIR}/chip-fw-version-main.c")
+
+target_compile_definitions(chip-fw-version PRIVATE
+    "LT_USB_DEVKIT_PATH=\"${LT_USB_DEVKIT_PATH}\"")
+
+target_include_directories(chip-fw-version PRIVATE
+    "${LIBTROPIC_SRC}/cal/openssl"
+    "${LIBTROPIC_SRC}/hal/posix/usb_dongle"
+    "${LIBTROPIC_SRC}/include")
+
+target_link_libraries(chip-fw-version PRIVATE tropic)
+
+install(TARGETS fw-update-chip chip-fw-version RUNTIME DESTINATION bin)

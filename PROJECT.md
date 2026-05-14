@@ -46,7 +46,7 @@ for the full search trail.
 | 5 | **FIDO2 stack: hand-rolled against CTAP2.1 spec** | Implementation against the canonical CTAP2.1 specification, using SoloKeys solo v1 and CanoKey as triangulation references when the spec is ambiguous.  No vendored FIDO code. |
 | 6 | **OpenPGP card stack: hand-rolled against OpenPGP card v3.4.1 spec** | Same approach as FIDO2 — clean-room against the spec.  No Gnuk / CanoKey code referenced. |
 | 7 | **Software crypto library: trezor_crypto (reused from libtropic L3 CAL)** | libtropic's L3 secure session already links trezor_crypto for AES-256-GCM, SHA-256, HMAC-SHA-256, X25519, Ed25519 (via ed25519-donna).  All the algorithms the host-side FIDO/OpenPGP code needs are already linked — no second crypto library. |
-| 8 | **Build: CMake + CMSIS + ST HAL** | ST HAL is more Nix-friendly than ST LL (no missing glue for SPI/RNG init).  HAL adds ~30 KB but fits the budget.  CMake + arm-none-eabi-gcc 14.3. |
+| 8 | **Build: CMake + CMSIS + ST HAL** | ST HAL is more Nix-friendly than ST LL (no missing glue for SPI/RNG init).  HAL adds ~30 KB but fits the budget.  CMake + nixpkgs' `gcc-arm-embedded-13` (arm-none-eabi-gcc 13.x). |
 | 9 | **Pairing keys at build: PRODUCTION (`*_prod0`)** | The validated TS1302 dongle ships **production** silicon `TR01-C2P-T101`, rev ACAB — not engineering samples.  Build flag `NIXTROPIC_ENG_KEYS=1` switches to `*_eng_sample` for development against older / engineering-sample chips. |
 | 10 | **Document audience: AI agents primary** | This file is structured for AI agents working on the project.  Users read conversationally and reference this file as needed. |
 | 11 | **ECC-only (no RSA)** | Ed25519 (sig/aut) + Cv25519 / X25519 (dec).  TROPIC01 has zero RSA hardware.  Flash budget would not fit RSA on STM32U535's 256 KB ceiling.  GnuPG ECC smartcard is fully covered. |
@@ -147,7 +147,7 @@ for the full search trail.
 ### STM32U535 host MCU (TS1302)
 
 - Cortex-M33 with TrustZone-M, max 160 MHz
-- 256 KB Flash, 96 KB SRAM
+- 256 KB Flash, 192 KB SRAM1 usable (firmware uses SRAM1 only; SRAM2/4/BKPSRAM left to idle)
 - Crypto accelerators **present**: HASH (SHA-2), TRNG
 - Crypto accelerators **absent**: AES, PKA, SAES, MCE, OTFDEC, BHK
   (only on higher U5 SKUs).  All symmetric crypto, HMAC, ECDH must be
@@ -210,9 +210,9 @@ any R-config or pairing-key change.
 2. **Black-box checkpoints.**  Define externally observable behavior;
    verify via host-side scripts.  Firmware is SUT; host tools are the
    test harness.
-3. **Standard tools as test clients.**  `fido2-token`, `pkcs11-tool`,
-   `gpg`, `pcsc_scan`, `webauthn.io`.  If those work, browsers will
-   too.  Avoid proprietary test clients.
+3. **Standard tools as test clients.**  `fido2-token`, `gpg`,
+   `opensc-tool`, `pcsc_scan`, `webauthn.io`.  If those work, browsers
+   will too.  Avoid proprietary test clients.
 4. **Recovery rehearsal.**  The DFU recovery path is re-validated
    whenever risky firmware lands.
 5. **Host-side static analysis.**  Run `nix run .#lint` (cppcheck) over
@@ -227,7 +227,7 @@ any R-config or pairing-key change.
 
 | Rule | Enforcement |
 |---|---|
-| `-Wall -Wextra -Werror -Wconversion -Wshadow -Wundef -Wcast-align -Wstrict-prototypes` | CMake CFLAGS |
+| `-Wall -Wextra -Wconversion -Wshadow -Wundef -Wcast-align -Wstrict-prototypes` | CMake CFLAGS — `-Werror` is intentionally parked (see arm-none-eabi.cmake) until the build is stable across nixpkgs bumps |
 | No dynamic allocation after init | Manual review |
 | All buffers static, sized at compile time | Audit |
 | Static analysis: `cppcheck` via `nix run .#lint` | Pre-commit check |
@@ -274,12 +274,14 @@ nixtropic/
 │   │   └── platform/         # STM32U5 HAL wrappers, board pinout, clock, GPIO, LED
 │   └── third_party_overlay/  # U545→U535 BSP adaptation for TinyUSB
 ├── tools/
-│   ├── validate.sh           # full FIDO + OpenPGP validation wrapper
-│   ├── validate-fido.sh      # FIDO2 surface checks
-│   ├── validate-openpgp.sh   # OpenPGP card APDU checks
-│   ├── fido2_test.py         # development-time deep FIDO test helper
-│   ├── lt_rpc.py             # lt-rpc client for vendor HID commands
-│   └── fw-update-chip-main.c # TROPIC01 chip-firmware updater source
+│   ├── validate.sh                 # full FIDO + OpenPGP validation wrapper
+│   ├── validate-fido.sh            # FIDO2 surface checks
+│   ├── validate-openpgp.sh         # OpenPGP card APDU checks
+│   ├── fido2_test.py               # development-time deep FIDO test helper
+│   ├── lt_rpc.py                   # lt-rpc client for vendor HID commands
+│   ├── chip-fw-version-main.c      # TROPIC01 chip-firmware version reader source
+│   ├── fw-update-chip-main.c       # TROPIC01 chip-firmware updater source
+│   └── fw-update-chip-CMakeLists.txt # shared CMake build for the two C tools
 ├── docs/
 │   ├── BACKLOG.md            # Open work items
 │   ├── RECOVERY.md           # DFU recovery procedure

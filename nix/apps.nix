@@ -444,8 +444,11 @@ in
     meta.description = "Diagnose TS1302 USB enumeration + permissions";
   };
 
-  # ===== TROPIC01 chip-firmware updater =====
-  # Auto-picks the first /dev/ttyACM* unless the user passes one explicitly.
+  # ===== TROPIC01 chip-firmware tools =====
+  # Both auto-pick the first /dev/ttyACM* unless the user passes one explicitly.
+  # Both require the dongle to be running the STOCK TS1302 firmware (the
+  # one with the CDC USB↔SPI passthrough) — re-flash stock first via
+  # `nix run .#flash-stock` if you're currently on the open firmware.
 
   fw-update-chip = {
     type = "app";
@@ -460,7 +463,6 @@ in
             set -euo pipefail
             DEV="''${1:-}"
             if [ -z "$DEV" ]; then
-              # Auto-detect: lowest-numbered /dev/ttyACM*.
               DEV="$(find /dev -maxdepth 1 -name 'ttyACM*' 2>/dev/null | sort | head -n1)"
             fi
             if [ -z "$DEV" ] || [ ! -e "$DEV" ]; then
@@ -480,6 +482,32 @@ in
       };
       in "${wrapper}/bin/nixtropic-fw-update-chip";
     meta.description = "Update TROPIC01 chip firmware (CPU + SPECT) to App FW 2.0.0";
+  };
+
+  chip-fw-version = {
+    type = "app";
+    program =
+      let wrapper = pkgs.writeShellApplication {
+        name = "nixtropic-chip-fw-version";
+        runtimeInputs = [ pkgs.coreutils ] ++ pkgs.lib.optionals (fwUpdateChip != null) [ fwUpdateChip ];
+        text =
+          if fwUpdateChip == null then
+            ''echo "chip-fw-version not built in this flake."; exit 1''
+          else ''
+            set -euo pipefail
+            DEV="''${1:-}"
+            if [ -z "$DEV" ]; then
+              DEV="$(find /dev -maxdepth 1 -name 'ttyACM*' 2>/dev/null | sort | head -n1)"
+            fi
+            if [ -z "$DEV" ] || [ ! -e "$DEV" ]; then
+              echo "ERROR: no /dev/ttyACM* found.  Plug in the dongle first." >&2
+              exit 1
+            fi
+            exec ${fwUpdateChip}/bin/chip-fw-version "$DEV"
+          '';
+      };
+      in "${wrapper}/bin/nixtropic-chip-fw-version";
+    meta.description = "Read the TROPIC01 chip's running App FW + SPECT FW versions";
   };
 
   # ===== Maintenance =====

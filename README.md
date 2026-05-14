@@ -14,9 +14,9 @@ The full daily-driver feature set works end-to-end on real hardware:
 - 🔐 **FIDO2 / WebAuthn** — register + login via `webauthn.io` in Firefox; hardware PIN protection; user-presence button (SW1) gates every operation
 - ✍️ **GPG signing** — `git commit -S` works; private key never leaves the TROPIC01 chip
 - 🔓 **GPG decryption** — `gpg --encrypt -r self … | gpg --decrypt` round-trip works
-- 🔑 **SSH via gpg-agent** — push to GitHub with the dongle's auth key
-- 🛡️ **Hardware-backed PIN** — FIDO PIN uses MAC-and-Destroy chip slots (8 wrong PINs and all 8 slots are physically consumed at the silicon level; recovery only via factory-reset)
-- 🟢 **Anti-passive-attack factory reset** — CTAP2.1 authenticatorReset is gated on (a) within 10 s of power-on AND (b) a fresh SW1 press if any state exists, so an attacker who briefly snatches your unplugged dongle can't wipe it just by replugging
+- 🔑 **SSH via gpg-agent** — ssh to remote host with the authentication key only inside the chip
+- 🛡️ **Hardware-backed PIN** — FIDO PIN uses MAC-and-Destroy chip slots (8 wrong PINs and all slots are physically consumed at the silicon level; recovery only via factory-reset)
+- 🟢 **Anti-passive-attack factory reset** — CTAP2.1 authenticatorReset is gated on (a) within 10 s of power-on AND (b) a fresh SW1 press if any state exists, so an attacker who briefly snatches the dongle can't wipe it just by replugging
 - 🔄 **Force-UV** — `alwaysUv` option per CTAP2.1; user verification required for every credential use
 - 📦 **Reproducible Nix builds** — one `nix build` command from clean checkout to flashable firmware
 
@@ -43,7 +43,15 @@ This sets up udev rules for both **app mode** (`cafe:4001`) and **DFU mode** (`0
 
 ### 2. Update the TROPIC01 chip firmware (one-time, if needed)
 
-The dongle ships with chip firmware 0.3.1 (Deprecated). nixtropic needs chip firmware ≥ 2.0.0.
+The dongle may ship with chip firmware 0.3.1 (Deprecated).  nixtropic needs chip firmware ≥ 2.0.0.  Check what's running first:
+
+```bash
+sudo nix run github:jjacke13/nixtropic#chip-fw-version
+# App FW    = 2.0.0
+# SPECT FW  = 1.0.0
+```
+
+If it reports < 2.0.0, update (one-way — the chip rejects downgrades after success):
 
 ```bash
 sudo nix run github:jjacke13/nixtropic#fw-update-chip
@@ -164,12 +172,12 @@ gpg: Good signature from "..." [ultimate]
 
 ## Hardware
 
-Tested on: Tropic Square **TS1302 USB devkit** (STM32U535 + TROPIC01, engineering sample TR01-B2S-T005). Other TROPIC01 boards (RPi shield, Arduino shield) are *not* targeted by this project.
+Tested on: Tropic Square **TS1302 USB devkit** (STM32U535 + TROPIC01, production silicon `TR01-C2P-T101`, rev ACAB).  Other TROPIC01 boards (RPi shield, Arduino shield) are *not* targeted by this project.
 
 The dongle:
 
 - USB-C, sold by Tropic Square as a developer kit
-- STM32U535CCTx host MCU (256 KB flash, 96 KB RAM, ARM Cortex-M33)
+- STM32U535CCTx host MCU (256 KB flash, 192 KB SRAM usable, ARM Cortex-M33)
 - TROPIC01 secure element (signing + true RNG + persistent storage + MAC-and-Destroy slots)
 - SW1 user-presence button (also the BOOT0 strap → used for entering DFU mode at reset)
 - 1× user LED
@@ -178,7 +186,7 @@ Pre-built firmware lands at ~82.8% of the STM32's 256 KB flash budget. Comfortab
 
 ## What this is NOT (yet)
 
-- **Not Yubikey-equivalent for every flow.** RSA is out of scope (ECC-only, see [`docs/PHASE-7-PLAN.md §0`](docs/PHASE-7-PLAN.md)).
+- **Not Yubikey-equivalent for every flow.** RSA is out of scope (ECC-only, see [`PROJECT.md §2 decision #11`](PROJECT.md)).
 - **Not on Windows / macOS.** Linux/NixOS first. Other platforms should work but haven't been validated.
 - **Not yet in nixpkgs.** Upstreaming tracked in [`docs/BACKLOG.md §5.1`](docs/BACKLOG.md).
 - **AAGUID is self-allocated** (`6e697874726f70696300000000000003` = ASCII `"nixtropic\x00\x00\x00\x00\x00\x00\x03"`). Not FIDO MDS registered ($25k/year not viable for an open-source project). RPs will display "unknown manufacturer" — this is by design. See [`docs/WEBAUTHN-NOTES.md §3`](docs/WEBAUTHN-NOTES.md).
@@ -188,11 +196,11 @@ Pre-built firmware lands at ~82.8% of the STM32's 256 KB flash budget. Comfortab
 | Doc | What it is |
 | --- | --- |
 | [`PROJECT.md`](PROJECT.md) | Source of truth — architecture, phase plan, locked decisions, critical facts. Written for AI agents and contributors. |
-| [`STATUS.md`](STATUS.md) | Append-only project log; latest at top. |
+| [`STATUS.md`](STATUS.md) | Top-level milestone log (current ship state). |
 | [`docs/BACKLOG.md`](docs/BACKLOG.md) | Open work items: M&D PIN counters, credProps, configurable policies, PIV applet, etc. |
 | [`docs/history/`](docs/history/) | Historical per-phase design documents (kept for reference, not load-bearing). |
-| [`docs/RECOVERY.md`](docs/RECOVERY.md) | What to do if the dongle is bricked. |
-| [`docs/WEBAUTHN-NOTES.md`](docs/WEBAUTHN-NOTES.md) | Browser quirks, AAGUID policy, credential ID format. |
+| [`docs/RECOVERY.md`](docs/RECOVERY.md) | What to do if the dongle stops working. |
+| [`docs/WEBAUTHN-NOTES.md`](docs/WEBAUTHN-NOTES.md) | AAGUID policy, credential ID format, authData layout, browser quirks, RP debugging ladder. |
 | [`TROPIC01.md`](TROPIC01.md) | Conversational primer on the secure element. |
 | [`research/`](research/) | Deep technical references (TROPIC01 inventory, STM32U535 inventory, prior-art verification). Load on demand. |
 
@@ -213,7 +221,7 @@ nix build .#stock-firmware
 nix run .#flash-stock
 ```
 
-The flake exposes a tight 10-app surface: `flash-stock`, `flash-open`, `flash-and-validate`, `validate`, `validate-fido`, `validate-openpgp`, `identify`, `check-dongle`, `fw-update-chip`, `lint`.  Use `nix flake show` for the full descriptions.
+The flake exposes a tight 11-app surface: `flash-stock`, `flash-open`, `flash-and-validate`, `validate`, `validate-fido`, `validate-openpgp`, `identify`, `check-dongle`, `chip-fw-version`, `fw-update-chip`, `lint`.  Use `nix flake show` for the full descriptions.
 
 ## License + Acknowledgments
 

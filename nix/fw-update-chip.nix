@@ -18,13 +18,15 @@ stdenv.mkDerivation {
   src = ../tools;
 
   # The tools/ directory has many files (validate scripts, etc.).  We only
-  # want the two for this tool.  unpackPhase puts us in ./tools; rewrite
-  # the layout into ./tools/build/ with the right filenames + CMakeLists.txt.
+  # want the chip-firmware sources.  unpackPhase puts us in ./tools;
+  # rewrite the layout into ./source-build/ with the right filenames +
+  # CMakeLists.txt.  The CMakeLists references both main.c files by
+  # their original tools/-relative names; keep those names.
   postUnpack = ''
     mkdir -p source-build
-    cp $sourceRoot/fw-update-chip-main.c source-build/main.c
+    cp $sourceRoot/fw-update-chip-main.c   source-build/fw-update-chip-main.c
+    cp $sourceRoot/chip-fw-version-main.c  source-build/chip-fw-version-main.c
     cp $sourceRoot/fw-update-chip-CMakeLists.txt source-build/CMakeLists.txt
-    sed -i 's|fw-update-chip-main.c|main.c|g' source-build/CMakeLists.txt
     sourceRoot=source-build
   '';
 
@@ -41,10 +43,14 @@ stdenv.mkDerivation {
   NIX_CFLAGS_COMPILE = "-Wno-error";
 
   meta = {
-    description = "One-shot TROPIC01 application-firmware updater (host tool)";
+    description = "TROPIC01 chip-firmware tools (fw-update-chip + chip-fw-version)";
     longDescription = ''
-      Updates the TROPIC01's mutable application firmware (CPU FW + SPECT
-      FW) on a TS1302 USB dongle running nixtropic's open firmware.
+      Two host-side binaries built from the same libtropic glue:
+
+        fw-update-chip   — One-shot updater for the TROPIC01's mutable
+                            application firmware (CPU FW + SPECT FW).
+        chip-fw-version  — Read-only reporter; prints currently-running
+                            App FW + SPECT FW versions.
 
       Targets ACAB silicon (TR01-C2P-T101+) with bootloader v2.0.1.  Writes
       both FW bank pairs (1+2 with the required Maintenance reboot between
