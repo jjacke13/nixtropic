@@ -3,8 +3,8 @@
  * API + spec references.
  *
  * Hard-coded to forward to the OpenPGP applet.  AID-based routing for
- * multiple applets (PIV in Phase 7b) lands when the second applet does
- * — see docs/PHASE-8-BACKLOG.md §4.4.
+ * multiple applets (e.g. PIV) lands when the second applet does — see
+ * docs/BACKLOG.md §4.4.
  */
 
 #include "apdu_dispatch.h"

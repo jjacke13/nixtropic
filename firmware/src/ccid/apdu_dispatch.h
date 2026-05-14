@@ -4,9 +4,9 @@
  *
  * Today exactly one applet exists (OpenPGP card, see firmware/src/
  * openpgp/openpgp_applet.c).  The dispatcher is structured to accept
- * a second applet (e.g. PIV in Phase 7b — see docs/PHASE-8-BACKLOG.md
- * §4.4) by routing on the SELECT'd AID; the routing-table machinery
- * just isn't wired yet because there's only one applet.
+ * a second applet (e.g. PIV — see docs/BACKLOG.md §4.4) by routing on
+ * the SELECT'd AID; the routing-table machinery just isn't wired yet
+ * because there's only one applet.
  *
  * The dispatcher takes a flat APDU byte string (header + body) and
  * writes a response byte string (data + SW1 SW2) to the caller's

@@ -7,7 +7,7 @@ Open-source firmware project turning the **Tropic Square TS1302 USB devkit** int
 ## NOTE: THIS IS *NOT* PRODUCTION READY YET. BASIC FUNCTIONALITY HAS BEEN TESTED OK
 ## BUGS MAY EXIST AND CODE NEEDS MORE AUDITING AND TESTS
 
-## Status — Phase 7 ✅ COMPLETE (2026-05-12)
+## Status — daily-driver ready (2026-05-12)
 
 The full daily-driver feature set works end-to-end on real hardware:
 
@@ -20,7 +20,7 @@ The full daily-driver feature set works end-to-end on real hardware:
 - 🔄 **Force-UV** — `alwaysUv` option per CTAP2.1; user verification required for every credential use
 - 📦 **Reproducible Nix builds** — one `nix build` command from clean checkout to flashable firmware
 
-A 17-check end-to-end validation suite (`nix run .#flash-and-validate-phase7-m6`) confirms each surface stays green after every change.
+An end-to-end validation suite (`nix run .#validate` — 22 non-interactive checks across the FIDO2 + OpenPGP card surfaces) confirms each surface stays green after every change.
 
 ## Quickstart — daily-driver setup (Linux - NixOS)
 
@@ -54,10 +54,10 @@ sudo nix run github:jjacke13/nixtropic#fw-update-chip
 Hold SW1 (the button on the back of the dongle) while plugging USB. The dongle enumerates as `STMicroelectronics STM Device in DFU Mode` (`0483:df11`).
 
 ```bash
-sudo nix run github:jjacke13/nixtropic#flash-and-validate-phase7-m6
+sudo nix run github:jjacke13/nixtropic#flash-and-validate
 ```
 
-The 17-check validation suite runs immediately after flash and confirms FIDO2 + OpenPGP + audit fixes all work.
+The validation suite runs immediately after flash and confirms FIDO2 + OpenPGP card surfaces are both functional.
 
 ### 4. Configure GnuPG for the OpenPGP card
 
@@ -174,13 +174,13 @@ The dongle:
 - SW1 user-presence button (also the BOOT0 strap → used for entering DFU mode at reset)
 - 1× user LED
 
-Pre-built firmware lands at ~82.8% of the STM32's 256 KB flash budget. Future Phase 8 hardening (M&D PIN counters etc.) has comfortable headroom.
+Pre-built firmware lands at ~82.8% of the STM32's 256 KB flash budget. Comfortable headroom for the items in [`docs/BACKLOG.md`](docs/BACKLOG.md) (M&D PIN counters for OpenPGP, PIV applet, etc.).
 
 ## What this is NOT (yet)
 
 - **Not Yubikey-equivalent for every flow.** RSA is out of scope (ECC-only, see [`docs/PHASE-7-PLAN.md §0`](docs/PHASE-7-PLAN.md)).
 - **Not on Windows / macOS.** Linux/NixOS first. Other platforms should work but haven't been validated.
-- **Not yet in nixpkgs.** Phase 8 (or later) will upstream.
+- **Not yet in nixpkgs.** Upstreaming tracked in [`docs/BACKLOG.md §5.1`](docs/BACKLOG.md).
 - **AAGUID is self-allocated** (`6e697874726f70696300000000000003` = ASCII `"nixtropic\x00\x00\x00\x00\x00\x00\x03"`). Not FIDO MDS registered ($25k/year not viable for an open-source project). RPs will display "unknown manufacturer" — this is by design. See [`docs/WEBAUTHN-NOTES.md §3`](docs/WEBAUTHN-NOTES.md).
 
 ## Documentation
@@ -189,8 +189,8 @@ Pre-built firmware lands at ~82.8% of the STM32's 256 KB flash budget. Future Ph
 | --- | --- |
 | [`PROJECT.md`](PROJECT.md) | Source of truth — architecture, phase plan, locked decisions, critical facts. Written for AI agents and contributors. |
 | [`STATUS.md`](STATUS.md) | Append-only project log; latest at top. |
-| [`docs/PHASE-{1..7}-PLAN.md`](docs/) | Per-phase design documents. |
-| [`docs/PHASE-8-BACKLOG.md`](docs/PHASE-8-BACKLOG.md) | Open items deferred to the next phase (M&D for OpenPGP PINs, credProps, configurable policies, etc). |
+| [`docs/BACKLOG.md`](docs/BACKLOG.md) | Open work items: M&D PIN counters, credProps, configurable policies, PIV applet, etc. |
+| [`docs/history/`](docs/history/) | Historical per-phase design documents (kept for reference, not load-bearing). |
 | [`docs/RECOVERY.md`](docs/RECOVERY.md) | What to do if the dongle is bricked. |
 | [`docs/WEBAUTHN-NOTES.md`](docs/WEBAUTHN-NOTES.md) | Browser quirks, AAGUID policy, credential ID format. |
 | [`TROPIC01.md`](TROPIC01.md) | Conversational primer on the secure element. |
@@ -213,7 +213,7 @@ nix build .#stock-firmware
 nix run .#flash-stock
 ```
 
-The flake exposes per-phase validation apps (`validate-phase1` through `validate-phase7-m6`) plus their `flash-and-validate-…` counterparts that DFU-flash before validating.
+The flake exposes a tight 10-app surface: `flash-stock`, `flash-open`, `flash-and-validate`, `validate`, `validate-fido`, `validate-openpgp`, `identify`, `check-dongle`, `fw-update-chip`, `lint`.  Use `nix flake show` for the full descriptions.
 
 ## License + Acknowledgments
 
@@ -225,4 +225,4 @@ Built on top of:
 - [libtropic](https://github.com/tropicsquare/libtropic) — official C SDK
 - [trezor-crypto](https://github.com/trezor/trezor-firmware/tree/main/crypto) — Ed25519 / X25519 / SHA / HMAC primitives
 - [TinyUSB](https://github.com/hathach/tinyusb) — embedded USB device stack
-- [SoloKeys](https://github.com/solokeys/solo) (Phase 4 source for CTAP2) — open FIDO2 firmware
+- [SoloKeys](https://github.com/solokeys/solo) — the open FIDO2 firmware project our CTAP2 stack draws from

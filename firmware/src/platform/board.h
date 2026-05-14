@@ -38,15 +38,15 @@
 #define BOARD_SPI_CS_PORT       GPIOA
 #define BOARD_SPI_CS_PIN        GPIO_PIN_4    /* PA4 soft CS */
 
-/* ----- TROPIC01 GPO line (PB0) — input, pull-down, no IRQ in Phase 1 ----- */
+/* ----- TROPIC01 GPO line (PB0) — input, pull-down, polled (no IRQ) ----- */
 #define BOARD_TROPIC_GPO_PORT   GPIOB
 #define BOARD_TROPIC_GPO_PIN    GPIO_PIN_0
 
-/* ----- BOOT0 / SW1 button (PH3) — input, pull-down. Not used in Phase 1 ----- */
+/* ----- BOOT0 / SW1 button (PH3) — input, pull-up. User-presence ----- */
 #define BOARD_BUTTON_PORT       GPIOH
 #define BOARD_BUTTON_PIN        GPIO_PIN_3
 
-/* ----- USB FS pins (PA11/PA12, AF10) — wired up in Group C ----- */
+/* ----- USB FS pins (PA11/PA12, AF10) — owned by usb/usb.c ----- */
 #define BOARD_USB_PORT          GPIOA
 #define BOARD_USB_DM_PIN        GPIO_PIN_11
 #define BOARD_USB_DP_PIN        GPIO_PIN_12

@@ -20,7 +20,7 @@ int clock_init(void)
      * On U5, PWR registers are clock-gated and silently no-op without this.
      * Symptom of forgetting: HAL_PWREx_ControlVoltageScaling times out
      * waiting for VOSRDY (which never gets set because the MODIFY_REG
-     * write to PWR->VOSR didn't land). Cost us a Group B HW iteration. */
+     * write to PWR->VOSR didn't land). */
     __HAL_RCC_PWR_CLK_ENABLE();
 
     /* Step 1: voltage scale Range 3 (lowest power, max 50 MHz).

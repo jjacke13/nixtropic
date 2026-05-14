@@ -1,34 +1,28 @@
 /*
- * Phase 7 M3 — OpenPGP PIN handling (PW1 / PW3 / RC).
+ * OpenPGP PIN handling (PW1 / PW3 / RC).
  *
  * VERIFY / CHANGE REFERENCE DATA / RESET RETRY COUNTER over an R-mem
  * persisted PIN hash + retry counter.  Session state ("PW3 has been
  * verified this session") lives in RAM and is cleared on TERMINATE DF
  * or USB reset.
  *
- * SECURITY NOTE — M3 SHIPS WITH SOFTWARE-ONLY RETRY COUNTERS.  The
- * retry counter lives in R-mem on the TROPIC01 chip but is NOT
- * hardware-enforced via MAC-and-Destroy as Phase 5 FIDO PIN is.  An
- * attacker who can reflash the STM32 firmware can bypass the counter.
+ * SECURITY NOTE — SHIPS WITH SOFTWARE-ONLY RETRY COUNTERS.  The retry
+ * counter lives in R-mem on the TROPIC01 chip but is NOT hardware-
+ * enforced via MAC-and-Destroy as the FIDO PIN is (firmware/src/
+ * fido_hid/pin_md.c).  An attacker who can reflash the STM32 firmware
+ * can bypass the counter and brute-force the SHA-256[:16] hash
+ * offline (tractable for weak PINs; unreachable for 8-char random
+ * PINs).
  *
- * This is a DELIBERATE M3-only compromise.  Phase 7 plan §3 H6 calls
- * for M&D backing of all three PINs (chip slots 8..16).  Wiring M&D
- * into pin_md.c-style cross-PIN logic is substantial code that we're
- * deferring to M6 (audit + close) — M3's value is unblocking the
- * remaining APDU surface (PUT DATA, TERMINATE/ACTIVATE, then M4
- * GENERATE) so we can iterate on real `gpg --card-edit` flows.
- *
- * Until M6, the threat model on a Phase 7-flashed dongle is:
- *   - Wire-level attacker (no STM32 reflash): can't bypass; gets 3
+ * Threat model:
+ *   - Wire-level attacker (no STM32 reflash): cannot bypass; gets 3
  *     wrong-PIN attempts then 0x6983 forever (until ACTIVATE FILE).
- *   - STM32-reflash attacker: can wipe retry counter, brute-force PIN
- *     hash offline (16-byte hash; tractable for weak PINs but
- *     unreachable for 8-char random PINs).
+ *   - STM32-reflash attacker: can wipe retry counter and brute-force
+ *     PIN hash offline.
  *
- * H6 follow-up: M6 will swap the software counter for M&D-backed
- * retries via either (a) refactor pin_md.c to be slot-base-parameter-
- * ised or (b) inline M&D scheme in pgp_pin.c using TROPIC01 chip
- * slots 8..16 directly.  See PHASE-7-PLAN.md §3 row H6.
+ * Hardening path: swap the software counter for M&D-backed retries
+ * (either parameterise pin_md.c or inline an M&D scheme here against
+ * TROPIC01 chip slots 8..16).  See docs/BACKLOG.md §1.1.
  */
 
 #ifndef NIXTROPIC_OPENPGP_PGP_PIN_H

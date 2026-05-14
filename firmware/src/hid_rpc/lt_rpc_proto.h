@@ -44,7 +44,7 @@
 #define LT_RPC_CMD_ECC_PUBKEY   0x06u
 #define LT_RPC_CMD_ECC_ERASE    0x07u
 
-/* Phase 5 M1 debug commands (slot manager visibility for host-side
+/* Slot-manager visibility debug commands (for host-side
  * validate-phase5-m1.sh). Kept under 0x10..0x1F. Will be gated under
  * NIXTROPIC_DEBUG ifdef post-Phase-8 — for now they always compile in
  * because we're actively developing on this surface. */
@@ -54,7 +54,7 @@
 #define LT_RPC_CMD_SLOTS_META     0x13u  /* req: 1 B slot_idx; resp: 50 B (1 alg + 1 flags + 32 rpHash + 16 nonce) */
 #define LT_RPC_CMD_SLOTS_RESET    0x14u  /* req: empty;  resp: empty.  WIPES EVERYTHING. */
 
-/* Phase 6 M2 — Force-UV flag accessors. */
+/* Force-UV flag accessors. */
 #define LT_RPC_CMD_FORCE_UV_GET   0x15u  /* req: empty;  resp: 1 B (0=off, 1=on). */
 #define LT_RPC_CMD_FORCE_UV_SET   0x16u  /* req: 1 B (0|1);  resp: empty. */
 

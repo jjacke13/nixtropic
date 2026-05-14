@@ -48,11 +48,11 @@
 #include "fido_hid/slots.h"
 #include "fido_hid/pin.h"
 #include "fido_hid/user_presence.h"
-#include "tropic/tropic.h"  /* re-enabled in Phase 3 M3 for libtropic on chip */
+#include "tropic/tropic.h"  /* libtropic L1+L2+L3 session on chip */
 
 #include "tusb.h"
 
-/* Phase 6 M1: SysTick drives the SW1 debouncer + LED state machine at
+/* SysTick drives the SW1 debouncer + LED state machine at
  * 1 kHz.  HAL_IncTick must run first (HAL_Delay / HAL_GetTick depend on
  * it); the additional callbacks are cheap and bounded. */
 void SysTick_Handler(void)
@@ -175,9 +175,9 @@ int main(void)
     }
 
     /* Stage 4.5 — Power-cycle TROPIC01: explicit OFF → 20 ms → ON, then
-     * 300 ms settle. Mirrors Phase 1 tropic.c:73-83 (which mirrors stock
-     * app/main.c:51-54 OFF→ON pattern). gpio_init() left PA0 LOW; spi_init
-     * may have taken ~ms more so VCC is fully discharged. Re-assert the
+     * 300 ms settle.  Mirrors stock TS1302 firmware `app/main.c:51-54`
+     * OFF→ON pattern.  gpio_init() left PA0 LOW; spi_init may have
+     * taken ~ms more so VCC is fully discharged.  Re-assert the
      * power-off explicitly to make the pulse-shape unambiguous. */
     board_tropic_power_off();
     HAL_Delay(20);
@@ -189,7 +189,7 @@ int main(void)
         raw_blink_code(3);
     }
 
-    /* Stage 6 — RNG (kept from Phase 1 for future use; harmless if unused) */
+    /* Stage 6 — STM32 HW TRNG (used by libtropic L1 + diagnostic dumps) */
     if (rng_init() != 0) {
         raw_blink_code(2);
     }
@@ -205,17 +205,18 @@ int main(void)
     hid_rpc_init();
     fido_hid_init();
 
-    /* Stage 8.5 — libtropic on chip (M3). Runs power-cycle again + lt_init.
-     * If lt_init fails the chip is still powered (power-cycle ran first),
-     * so Phase 2 CDC ASCII passthrough still works for lt-util. We log
-     * but don't halt — HID CHIP_ID command will return an error to the
-     * host if lt_init didn't succeed. */
+    /* Stage 8.5 — libtropic on chip.  Runs a second power-cycle then
+     * lt_init.  If lt_init fails the chip is still powered (the first
+     * power-cycle ran in Stage 4.5), so the CDC ASCII passthrough mode
+     * still works for lt-util.  We log but don't halt — HID CHIP_ID
+     * command will return an error to the host if lt_init didn't
+     * succeed. */
     tropic_init();
 
-    /* Stage 8.6 — Phase 5: credential store + slot manager.
-     * Phase 5 M2: credstore_init opens L3 lazily on first use, calls
-     * slots_init internally (reads R-mem slot 0, orphan-scrubs bitmap),
-     * and initializes TROPIC01 mcounter 0 to MAX if it's a first boot
+    /* Stage 8.6 — Credential store + slot manager.
+     * credstore_init opens L3 lazily on first use, calls slots_init
+     * internally (reads R-mem slot 0, orphan-scrubs bitmap), and
+     * initializes TROPIC01 mcounter 0 to MAX if it's a first boot
      * (used as the shared monotonic signCount).
      *
      * We log on failure but don't halt — FIDO2 paths will simply return
@@ -230,10 +231,10 @@ int main(void)
         }
     }
 
-    /* Stage 8.7 — Phase 5 M3: ClientPIN ephemeral keypair.
+    /* Stage 8.7 — ClientPIN ephemeral keypair.
      * Generates a fresh P-256 keypair from TROPIC01 TRNG for CTAP2 PIN
-     * protocol v1 key agreement. Lives in RAM only; regenerated on every
-     * boot AND after each successful setPin/changePin. */
+     * protocol v1 key agreement.  Lives in RAM only; regenerated on
+     * every boot AND after each successful setPin/changePin. */
     {
         int rc = pin_init();
         if (rc != 0) {
@@ -243,7 +244,7 @@ int main(void)
         }
     }
 
-    /* Phase 6 M1: LED state machine takes over.  Boot phase used
+    /* LED state machine takes over.  Boot phase used
      * LED_HEARTBEAT (default initial state); switch to LED_IDLE once
      * everything is up so the off-state advertises "ready, awaiting
      * host request" — same UX cue Yubikey gives. */

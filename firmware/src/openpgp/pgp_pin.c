@@ -1,5 +1,5 @@
 /*
- * Phase 7 M3 — OpenPGP PIN handling.  See pgp_pin.h.
+ * OpenPGP PIN handling.  See pgp_pin.h.
  *
  * Single shared session state — PW1 / PW3 / RC verified flags persist
  * until pgp_pin_clear_session() is called.

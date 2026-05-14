@@ -7,7 +7,7 @@
  *
  * Missing (2) leaves the pin in silicon-default analog mode — reads
  * return 0 unconditionally regardless of the wire voltage.  Caught
- * the hard way at Phase 6 M1 HW debug (PH3 SW1 button).
+ * the hard way when wiring up PH3 SW1 button.
  */
 
 #include "gpio.h"

@@ -141,7 +141,7 @@ static int handle_ecc_erase(const uint8_t *req, size_t req_len,
     return (tropic_ecc_erase(req[0]) == 0) ? 0 : -1;
 }
 
-/* ===== Phase 5 M1 debug handlers — slot-manager visibility ===== */
+/* ===== Slot-manager visibility debug handlers ===== */
 
 static int handle_slots_bitmap(const uint8_t *req, size_t req_len,
                                uint8_t *resp, size_t resp_max)
@@ -205,7 +205,7 @@ static int handle_slots_reset(const uint8_t *req, size_t req_len,
     return 0;
 }
 
-/* Phase 6 M2 — Force-UV flag accessors.
+/* Force-UV flag accessors.
  *
  * GET is unauthenticated: the same information is already public
  * via `options.alwaysUv` in CTAP2 GetInfo, so a vendor-channel read

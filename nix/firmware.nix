@@ -10,23 +10,20 @@
 , tinyusbSrc
 }:
 
-# Phase 1 firmware build.
+# nixtropic open firmware build — STM32U535 bare-metal.
 #
-# Bare-metal target: stdenvNoCC (no C compiler in stdenv — we provide
-# arm-none-eabi-gcc via gcc-arm-embedded). hardeningDisable = ["all"]
-# because hardening flags are host-targeted and don't make sense on a
-# Cortex-M33 freestanding target.
+# stdenvNoCC: no C compiler in stdenv — we provide arm-none-eabi-gcc
+# via gcc-arm-embedded.  hardeningDisable = ["all"] because hardening
+# flags are host-targeted and don't make sense on a Cortex-M33
+# freestanding target.
 #
-# Source roots are passed to CMake as cache variables. The CMakeLists
-# expects them and aborts if any are missing — this guards against the
+# Source roots are passed to CMake as cache variables.  The CMakeLists
+# expects them and aborts if any are missing — guards against the
 # "I forgot to wire one up" failure mode.
-#
-# See docs/PHASE-1-PLAN.md for the multi-group bring-up plan; this
-# derivation is the A2 deliverable.
 
 stdenvNoCC.mkDerivation {
   pname = "nixtropic-firmware";
-  version = "0.3.0-phase3-hid-composite";
+  version = "0.3.0";
 
   src = ../firmware;
 
@@ -64,15 +61,15 @@ stdenvNoCC.mkDerivation {
   '';
 
   meta = with lib; {
-    description = "Custom STM32U535 firmware for TS1302 (Phase 1 skeleton)";
+    description = "Custom STM32U535 firmware exposing TS1302 as a FIDO2 + OpenPGP USB security key";
     longDescription = ''
-      Phase 1 deliverable: STM32U535 firmware that brings up USB CDC-ACM
-      via TinyUSB, powers and queries TROPIC01 over SPI1, prints L2 chip-ID
-      and RNG over /dev/ttyACM*. Currently at the A4 build-pipeline-skeleton
-      stage; see docs/PHASE-1-PLAN.md for full plan.
+      Composite USB device (CDC + HID×2 + CCID) on the Tropic Square
+      TS1302 dongle.  FIDO2 / WebAuthn over CTAPHID + OpenPGP card over
+      USB CCID + lt-rpc vendor HID + CDC console.  All cryptographic
+      operations route through the TROPIC01 secure element via libtropic
+      L3 sessions.
     '';
     platforms = platforms.linux;
-    # License finalized in Phase 8 polish.
     license = licenses.mit;
   };
 }

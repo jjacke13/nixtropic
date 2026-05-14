@@ -53,7 +53,7 @@ extern "C" {
 #define HSI_VALUE              16000000UL
 #endif
 
-/* HSI48 used by USB FS (Group C). 48 MHz internal RC, CRS-trimmable. */
+/* HSI48 used by USB FS.  48 MHz internal RC, CRS-trimmable. */
 #if !defined(HSI48_VALUE)
 #define HSI48_VALUE            48000000UL
 #endif
@@ -88,7 +88,7 @@ extern "C" {
 /* No full assert in release; conservative for now */
 /* #define USE_FULL_ASSERT    1U */
 
-/* Disable register-callback functionality across HAL modules. Phase 3 M4
+/* Disable register-callback functionality across HAL modules.  The
  * adds tropic.c (which pulls in stm32u5xx_hal.h) to APP_SOURCES with
  * strict -Wundef enabled; without these explicit `0` defines, the
  * `#if (USE_HAL_*_REGISTER_CALLBACKS == 1)` checks in HAL headers blow up. */

@@ -6,13 +6,11 @@
 #   - ARM bare-metal toolchain (gcc-arm-embedded-13) — pinned to LTS for
 #     reproducibility with the stock firmware build
 #   - dfu-util for flashing the dongle via STM32 factory bootloader
-#   - openocd + stlink for SWD-level debugging (used from Phase 1 onward)
-#   - picocom for UART debug console (needed in Phase 1 to read libtropic
-#     output from the STM32 before USB stack is added)
-#   - cmake + make for the build system (Phase 0 uses make from upstream;
-#     our future custom firmware uses cmake)
-#   - libtropic, lt-util on PATH for host-side TROPIC01 interaction
-#   - Standard utilities: usbutils (lsusb), pkg-config, jq, gnumake
+#   - openocd + stlink for SWD-level debugging
+#   - picocom + minicom for serial console / debug
+#   - cmake + ninja + make for the build system
+#   - Python with hidapi + cryptography for lt-rpc + FIDO2 test helpers
+#   - Standard utilities: usbutils (lsusb), pkg-config, jq
 
 pkgs.mkShell {
   name = "nixtropic-dev";
@@ -40,8 +38,8 @@ pkgs.mkShell {
     jq
     bash
 
-    # Phase 3: Python with hidapi for lt-rpc client tests (tools/hid_echo_test.py
-    # and tools/lt_rpc.py in M2). cryptography is needed in M4 for Ed25519 verify.
+    # Python with hidapi for lt-rpc client tests + cryptography for
+    # Ed25519 verify (tools/fido2_test.py, tools/lt_rpc.py).
     (python3.withPackages (p: [ p.hid p.cryptography ]))
 
     # libtropic host tooling (built from our flake — see packages output)
@@ -56,19 +54,19 @@ pkgs.mkShell {
     ║  nixtropic dev shell — TROPIC01 + STM32U535 firmware project  ║
     ╚═══════════════════════════════════════════════════════════════╝
 
-    Phase 0 toolchain ready:
+    Toolchain ready:
       arm-none-eabi-gcc  $(arm-none-eabi-gcc -dumpversion 2>/dev/null || echo "?")
       dfu-util           $(dfu-util --version 2>/dev/null | head -1 | awk '{print $NF}' || echo "?")
       openocd            $(openocd --version 2>&1 | head -1 | awk '{print $4}' || echo "?")
       cmake              $(cmake --version 2>/dev/null | head -1 | awk '{print $3}' || echo "?")
 
     Useful commands:
-      nix build .#stock-firmware     Build stock TS1302 firmware
-      nix run .#identify             Read TROPIC01 chip info (needs dongle)
-      nix run .#flash-stock          Flash stock fw via DFU (needs dongle in DFU mode)
-      lsusb | grep -E '0483:5740|0483:df11'   Check dongle connection
+      nix build .#open-firmware            Build the nixtropic open firmware
+      nix run  .#flash-and-validate        DFU-flash + full FIDO + OpenPGP validation
+      nix run  .#validate                  Run the validation suite against a flashed dongle
+      nix run  .#check-dongle              Diagnose USB enumeration / permissions
 
-    Read PROJECT.md for the full plan. See docs/RECOVERY.md for DFU procedure.
+    Read README.md for the daily-driver recipe.  See docs/RECOVERY.md for DFU procedure.
     EOF
   '';
 }

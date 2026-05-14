@@ -12,16 +12,16 @@
 #
 # What it does:
 #   - Creates a `tropic` group
-#   - Adds udev rules for TS1302 in app mode (0483:5740 stock fw, cafe:4001
-#     custom fw) and DFU mode (0483:df11), giving the `tropic` group r/w
-#     access without sudo
-#   - (Phase 7) Configures pcsc-lite to recognise our CCID interface by
-#     patching libccid's Info.plist to include VID 0xCAFE PID 0x4001.
-#     Without this patch, libccid silently refuses to drive cafe:4001
-#     even though our device correctly advertises USB class 0x0B.
+#   - Adds udev rules for TS1302 in app mode (0483:5740 stock fw,
+#     cafe:4001 nixtropic open fw) and DFU mode (0483:df11), giving
+#     the `tropic` group r/w access without sudo
+#   - Configures pcsc-lite + a patched libccid that recognises our CCID
+#     interface (VID 0xCAFE PID 0x4001).  Without this patch, libccid
+#     silently refuses to drive cafe:4001 even though the device
+#     correctly advertises USB class 0x0B (smart card reader).
 #   - Optionally adds specified users to the `tropic` group
 #
-# What it does NOT do (yet — Phase 8):
+# What it does NOT do (yet):
 #   - Run any service
 #   - Configure system-wide PKCS#11 module path
 #   - Set up firmware auto-update
@@ -39,8 +39,9 @@ let
   # three parallel arrays (ifdVendorID, ifdProductID, ifdFriendlyName)
   # in Info.plist via awk.  Existing 607 readers are untouched.
   #
-  # Real fix (Phase 8): pid.codes-allocated VID:PID + upstream PR to
-  # libccid.  For now this patch keeps the test surface clean.
+  # Real fix (tracked in docs/BACKLOG.md §5.2): pid.codes-allocated
+  # VID:PID + upstream PR to libccid.  For now this patch keeps the
+  # test surface clean.
   ccidWithNixtropic = pkgs.ccid.overrideAttrs (old: {
     postFixup = (old.postFixup or "") + ''
       INFO="$out/pcsc/drivers/ifd-ccid.bundle/Contents/Info.plist"
@@ -82,10 +83,10 @@ in
       default = true;
       description = ''
         Enable pcsc-lite with a libccid override that recognises the
-        nixtropic CCID interface (VID 0xCAFE PID 0x4001).  Required
-        for Phase 7 OpenPGP card functionality (`gpg --card-status`,
-        `git commit -S`, SSH via gpg-agent).  Set to false if you only
-        use the dongle as a FIDO2 key (HID transport).
+        nixtropic CCID interface (VID 0xCAFE PID 0x4001).  Required for
+        OpenPGP card functionality (`gpg --card-status`, `git commit -S`,
+        SSH via gpg-agent).  Set to false if you only use the dongle as
+        a FIDO2 key (HID transport).
       '';
     };
 
@@ -122,8 +123,9 @@ in
         # Three USB identities the dongle can show up as:
         #   1. Stock firmware app mode: VID 0483 PID 5740 (ST CDC-ACM,
         #      labeled "TropicSquare SPI interface")
-        #   2. Custom Phase 1+ firmware: VID cafe PID 4001 (TinyUSB demo
-        #      defaults — real allocation deferred to Phase 8 ship-prep)
+        #   2. nixtropic open firmware: VID cafe PID 4001 (TinyUSB demo
+        #      defaults — pid.codes allocation tracked in
+        #      docs/BACKLOG.md §5.2)
         #   3. STM32 DFU bootloader: VID 0483 PID df11
         #
         # All three get group/permission + ID_MM_DEVICE_IGNORE so:
@@ -142,10 +144,10 @@ in
           ENV{ID_MM_DEVICE_IGNORE}="1", \
           TAG+="uaccess"
 
-        # ----- Custom Phase 1 firmware in app mode -----
+        # ----- nixtropic open firmware in app mode -----
         SUBSYSTEM=="tty", ATTRS{idVendor}=="cafe", ATTRS{idProduct}=="4001", \
           GROUP="${cfg.groupName}", MODE="0660", \
-          SYMLINK+="tropic01-phase1", \
+          SYMLINK+="tropic01-open", \
           ENV{ID_MM_DEVICE_IGNORE}="1", \
           TAG+="uaccess"
         SUBSYSTEM=="usb", ATTRS{idVendor}=="cafe", ATTRS{idProduct}=="4001", \
@@ -161,9 +163,9 @@ in
       '';
     }
 
-    # Phase 7 — pcsc-lite + patched libccid for CCID OpenPGP card
-    # transport.  Guarded by enableCcid so FIDO-only users aren't
-    # forced to install pcscd.
+    # pcsc-lite + patched libccid for CCID OpenPGP card transport.
+    # Guarded by enableCcid so FIDO-only users aren't forced to install
+    # pcscd.
     (lib.mkIf cfg.enableCcid {
       services.pcscd.enable = true;
       services.pcscd.plugins = lib.mkForce [ ccidWithNixtropic ];

@@ -7,7 +7,7 @@
  *   30 — UNUSED (dec key is host-side, see below)
  *   31 — aut key (Ed25519, chip-side)  — used by INTERNAL AUTHENTICATE
  *
- * Slots 0..28 are owned by FIDO per Phase 5 design (slots_init).
+ * Slots 0..28 are owned by FIDO (see firmware/src/fido_hid/slots.h).
  *
  * Architecture (Trezor Safe 7 pattern, confirmed by sub-agent
  * investigation of libtropic source + TropicSquare docs):
@@ -21,8 +21,8 @@
  *     + TROPIC01.md line 32).  X25519 priv lives in R-mem slot 1
  *     byte 180-211 (encrypted by L3 session); STM32 does
  *     curve25519_donna scalarmult in software via trezor-crypto.
- *     Phase 8 hardens this further with M&D-KEK gating
- *     (docs/PHASE-8-BACKLOG.md §1.2).
+ *     Future work hardens this further with M&D-KEK gating
+ *     (see docs/BACKLOG.md §1.2).
  *
  * Pubkeys are read on demand from the chip / R-mem; no caching in
  * flash/RAM (avoids stale-data bugs at the cost of a few ms per
@@ -37,7 +37,7 @@
 #include <stdint.h>
 #include <stddef.h>
 
-/* Chip ECC slot indices.  Aligns with Phase 7 plan §4.6. */
+/* Chip ECC slot indices. */
 #define PGP_KEYS_SIG_SLOT  29u
 #define PGP_KEYS_DEC_SLOT  30u
 #define PGP_KEYS_AUT_SLOT  31u
@@ -111,7 +111,7 @@ int pgp_keys_erase_sig(void);
  *
  * Following the Trezor Safe 7 pattern: priv lives in R-mem (chip-
  * persistent), STM32 does curve25519_donna scalarmult in software
- * via trezor_crypto's curve25519-donna (already linked from Phase 3).
+ * via trezor_crypto's curve25519-donna (linked for libtropic L3).
  *
  * Trust model M5 ship: priv key plain in R-mem, readable by anyone
  * with SH0 + L3 session — same trust level as PIN hashes today.
@@ -120,8 +120,8 @@ int pgp_keys_erase_sig(void);
  *
  * M6 audit + close hardens: wraps dec priv with M&D-gated KEK derived
  * from PW1, mirroring Trezor's PIN-encrypted-seed design.  Same M&D
- * framework that hardens PW1/PW3/RC retry counters (Phase 7 plan §3
- * H6, deferred from M3). */
+ * framework that hardens PW1/PW3/RC retry counters (see
+ * docs/BACKLOG.md §1.1). */
 
 int pgp_keys_generate_dec(uint8_t pubkey_out[PGP_KEYS_PUBKEY_LEN]);
 int pgp_keys_read_dec_pubkey(uint8_t pubkey_out[PGP_KEYS_PUBKEY_LEN]);

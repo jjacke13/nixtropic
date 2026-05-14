@@ -5,13 +5,13 @@
  * Mode 0, MSB-first, 8-bit, soft NSS.  Default prescaler /16 → 3 MHz
  * at 48 MHz fclk.  Peripheral config copied verbatim from libtropic's
  * upstream `hal/port/stm32/libtropic_port_stm32u5xx.c` so wire timing
- * matches the stock TS1302 firmware exactly (verified Phase 2 —
- * byte-faithful round-trip).
+ * matches the stock TS1302 firmware exactly (verified byte-faithful
+ * round-trip against the stock fw).
  *
  * Used by:
  *   - `tropic/tropic.c` for the libtropic L1 + L2 + L3 sessions
- *   - `cdc_protocol/protocol.c` for the Phase 2 USB↔SPI passthrough
- *     mode (host runs libtropic, dongle is a transparent SPI bridge).
+ *   - `cdc_protocol/protocol.c` for the transparent SPI bridge mode
+ *     (host runs libtropic, dongle is a transparent SPI bridge).
  */
 
 #ifndef NIXTROPIC_PLATFORM_SPI_H
