@@ -7,6 +7,16 @@ Open-source firmware project turning the **Tropic Square TS1302 USB devkit** int
 ## NOTE: THIS IS *NOT* PRODUCTION READY YET. BASIC FUNCTIONALITY HAS BEEN TESTED OK
 ## BUGS MAY EXIST AND CODE NEEDS MORE AUDITING AND TESTS
 
+## Flash the dongle (TL;DR)
+
+Hold SW1 while plugging USB to enter DFU mode, then:
+
+```bash
+sudo nix run github:jjacke13/nixtropic#flash-and-validate
+```
+
+Flashes the open firmware and runs the 22-check validation suite.  For the full daily-driver setup (NixOS module, GPG config, key initialization), follow the Quickstart below.
+
 ## Status — daily-driver ready (2026-05-12)
 
 The full daily-driver feature set works end-to-end on real hardware:
