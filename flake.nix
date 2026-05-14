@@ -1,19 +1,26 @@
 {
   description = ''
-    nixtropic — Nix flake for Tropic Square TROPIC01 + TS1302 USB devkit work.
+    nixtropic — open-source firmware turning the Tropic Square TS1302
+    USB devkit into a FIDO2 + OpenPGP USB security key.
 
-    Phase 0 deliverables:
+    Outputs:
+      packages.open-firmware      The custom security-key firmware
       packages.stock-firmware     Reproducibly-built unmodified TS1302 firmware
-                                  (the recovery / factory-reset image)
-      packages.libtropic          The official C SDK as a Nix package
-      packages.lt-util            The official lt-util CLI for chip access
+                                  (recovery / factory-reset image)
+      packages.lt-util            Official TROPIC01 CLI for chip access
+      packages.fw-update-chip     Host tool for updating TROPIC01 chip firmware
       devShells.default           ARM toolchain + flashing/debug utilities
       apps.flash-stock            DFU-flash the stock firmware
+      apps.flash-and-validate-*   DFU-flash open firmware + run validation suite
+      apps.validate-*             Run a validation suite against a flashed dongle
       apps.identify               Read TROPIC01 chip info via lt-util
       apps.check-dongle           Diagnose USB enumeration and permissions
-      nixosModules.tropic         udev rules + group for non-sudo dongle access
+      apps.fw-update-chip         Update the TROPIC01 chip's own firmware
+      nixosModules.tropic         udev rules + pcsc-lite + libccid Info.plist
+                                  patch so the dongle is usable without sudo
 
-    Read PROJECT.md for the full project plan and phase roadmap.
+    See README.md for the daily-driver setup recipe and PROJECT.md for
+    the architecture deep dive.
   '';
 
   inputs = {
@@ -54,7 +61,7 @@
       flake = false;
     };
 
-    # ===== Phase 1 inputs (custom firmware) =====
+    # ===== Custom-firmware inputs =====
     # All four pinned to specific commits for reproducibility. None have
     # submodules (verified 2026-05-10).
 
@@ -80,8 +87,8 @@
       flake = false;
     };
 
-    # TinyUSB — 0.20.0 release tag (per Phase 1 plan decision P1.25).
-    # We adapt the U545 BSP to U535 inside firmware/third_party_overlay/.
+    # TinyUSB — 0.20.0 release tag.  We adapt the U545 BSP to U535 inside
+    # firmware/third_party_overlay/.
     tinyusb = {
       url = "github:hathach/tinyusb/3af1bec1a9161ee8dec29487831f7ac7ade9e189";
       flake = false;
@@ -111,10 +118,9 @@
           src = stockFwSrc;
         };
 
-        # Build lt-util as a Nix package.
-        # Note: we keep this small and Phase-0-shaped. The CMake build of
-        # libtropic-util pulls libtropic in as a submodule normally, so we
-        # mirror that pattern.
+        # Build lt-util as a Nix package.  The CMake build of libtropic-util
+        # pulls libtropic in as a git submodule normally, so we mirror that
+        # pattern via fetchSubmodules.
         ltUtilSrc = pkgs.fetchFromGitHub {
           owner = "tropicsquare";
           repo = "libtropic-util";
@@ -136,10 +142,7 @@
           # corrupting state and yielding LT_L1_SPI_ERROR on subsequent calls.
           # Fixed in libtropic >= v3.x; lt-util upstream is dormant and still
           # pins libtropic v1.0.0. Symptom: mode poll (1 byte) and riscv_fw
-          # (4 bytes) work; chip_id (130 bytes) fails. Verified 2026-05-10
-          # by manual replication of the lt-util sequence end-to-end against
-          # our Phase 2 firmware (nix run .#read + printf chip_id sequence
-          # → 294 bytes returned correctly with byte-exact Phase 0 baseline).
+          # (4 bytes) work; chip_id (130 bytes) fails.
           postPatch = ''
             substituteInPlace libtropic/hal/port/unix/lt_port_unix_usb_dongle.c \
               --replace-fail 'count < 2 * tx_data_length' 'count < tx_data_length'
@@ -159,11 +162,11 @@
           };
         };
 
-        # Open firmware — custom STM32U535 firmware that's a byte-faithful
-        # drop-in replacement for the stock TS1302 firmware (Phase 2 deliverable
-        # per PROJECT.md §6). 100% Nix-built, MIT-licensed USB stack (TinyUSB),
-        # libtropic kept as a flake input for host-side use only. Built on
-        # any host with an arm-none-eabi cross toolchain via gcc-arm-embedded.
+        # Open firmware — custom STM32U535 firmware exposing the dongle as
+        # a composite USB device (CDC + HID×2 + CCID): FIDO2 / WebAuthn
+        # over CTAPHID + OpenPGP card over CCID + lt-rpc vendor HID.  100%
+        # Nix-built, MIT-licensed USB stack (TinyUSB), arm-none-eabi cross
+        # toolchain via gcc-arm-embedded.
         open-firmware = pkgs.callPackage ./nix/firmware.nix {
           libtropicSrc = libtropic;
           cmsisCoreSrc = cmsis-core;
