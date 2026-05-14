@@ -4,6 +4,9 @@ Open-source firmware project turning the **Tropic Square TS1302 USB devkit** int
 
 > Yubikey-class hardware. Open silicon. Open SDK. Reproducible Nix builds. Daily-driver-tested.
 
+## NOTE: THIS IS *NOT* PRODUCTION READY YET. BASIC FUNCTIONALITY HAS BEEN TESTED OK
+## BUGS MAY EXIST AND CODE NEEDS MORE AUDITING AND TESTS
+
 ## Status — Phase 7 ✅ COMPLETE (2026-05-12)
 
 The full daily-driver feature set works end-to-end on real hardware:
@@ -19,7 +22,7 @@ The full daily-driver feature set works end-to-end on real hardware:
 
 A 17-check end-to-end validation suite (`nix run .#flash-and-validate-phase7-m6`) confirms each surface stays green after every change.
 
-## Quickstart — daily-driver setup (NixOS)
+## Quickstart — daily-driver setup (Linux - NixOS)
 
 Requires Nix with flakes enabled. The dongle must be a Tropic Square TS1302 (STM32U535 + TROPIC01).
 
@@ -175,7 +178,7 @@ Pre-built firmware lands at ~82.8% of the STM32's 256 KB flash budget. Future Ph
 
 ## What this is NOT (yet)
 
-- **Not Yubikey-equivalent for every flow.** RSA is out of scope (ECC-only, see [`docs/PHASE-7-PLAN.md §0`](docs/PHASE-7-PLAN.md)). PIV is deferred to Phase 7b. Chromium / Brave WebAuthn detection on Linux still flaky (Firefox works fine — see [`docs/WEBAUTHN-NOTES.md §8`](docs/WEBAUTHN-NOTES.md)).
+- **Not Yubikey-equivalent for every flow.** RSA is out of scope (ECC-only, see [`docs/PHASE-7-PLAN.md §0`](docs/PHASE-7-PLAN.md)).
 - **Not on Windows / macOS.** Linux/NixOS first. Other platforms should work but haven't been validated.
 - **Not yet in nixpkgs.** Phase 8 (or later) will upstream.
 - **AAGUID is self-allocated** (`6e697874726f70696300000000000003` = ASCII `"nixtropic\x00\x00\x00\x00\x00\x00\x03"`). Not FIDO MDS registered ($25k/year not viable for an open-source project). RPs will display "unknown manufacturer" — this is by design. See [`docs/WEBAUTHN-NOTES.md §3`](docs/WEBAUTHN-NOTES.md).
