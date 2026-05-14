@@ -1,121 +1,111 @@
-# Recovery / Factory-Reset Procedure for TS1302
+# Recovery
 
-> **TL;DR:** If your TS1302 dongle stops working after flashing custom firmware, hold SW1 + replug, then run `nix run .#flash-stock`. The TROPIC01 chip itself is **not** affected by STM32 firmware mishaps.
+What to do when the dongle stops working as expected.
 
----
+## Silicon layout
 
-## Threat model — what's actually recoverable
+```
+   host PC                       TS1302 USB devkit
+   ┌─────────────────┐  USB-C   ┌─────────────────────────────┐
+   │ browser / gpg / │ ◄──────► │  STM32U535 host MCU         │
+   │ ssh / libfido2 /│          │  ┌───────────────────────┐  │
+   │ pcsc-lite       │          │  │ nixtropic firmware    │  │
+   └─────────────────┘          │  │  - USB composite      │  │
+                                │  │  - FIDO2 + OpenPGP    │  │
+                                │  │  - libtropic L1/L2/L3 │  │
+                                │  └─────────────┬─────────┘  │
+                                │                │ SPI1       │
+                                │                ▼            │
+                                │  ┌───────────────────────┐  │
+                                │  │ TROPIC01 secure elem  │  │
+                                │  │  - ECC + M&D slots    │  │
+                                │  │  - R-mem (persistent) │  │
+                                │  │  - TRNG, L3 AES-GCM   │  │
+                                │  │  - chip firmware      │  │
+                                │  └───────────────────────┘  │
+                                └─────────────────────────────┘
+```
 
-The TS1302 dongle has two distinct silicon parts that can fail in different ways. Recovery procedures depend on which has failed.
+DFU operations touch ONLY the STM32 firmware (top half).  TROPIC01
+(bottom half) is reachable only through L3 commands the STM32 sends
+over SPI, so a bad STM32 reflash can't corrupt the secure element.
 
-| Failure | Recoverable? | How |
-|---|---|---|
-| **STM32U535 firmware corrupt / wrong / unbootable** | ✅ Yes, easily | DFU mode → `nix run .#flash-stock` |
-| **STM32U535 brick (RDP level 2)** | ⚠️ Hard — chip is one-way locked | Don't enable RDP=2 in development |
-| **TROPIC01 R-config error → Alarm Mode** | ❌ No, permanent | Avoid; see below |
-| **TROPIC01 pairing slot SH0 invalidated without replacement** | ❌ No, can't auth | Always set up SH1+ before invalidating SH0 |
-| **TROPIC01 firmware corrupt** | ✅ Yes, via `lt_do_mutable_fw_update` | Phase 8 will provide tooling |
+## Failure modes
 
-**Takeaway:** STM32 firmware mishaps are recoverable in seconds. TROPIC01 mishaps are usually permanent. Phase 0–6 of this project doesn't touch TROPIC01's R-config, so you're in the safe zone.
+| Failure                                | Recoverable? | How |
+|---                                     |---           |---  |
+| STM32 firmware corrupt / wrong         | seconds      | DFU re-flash |
+| STM32 RDP level 2 lock                 | no           | don't enable RDP=2 in dev |
+| TROPIC01 R-config write w/o erase      | no, permanent| see PROJECT.md §5 — never reachable from nixtropic code |
+| TROPIC01 SH0 invalidated, no SH1 set   | no           | always set SH1+ before invalidating SH0 |
+| TROPIC01 chip firmware out-of-date     | yes          | `nix run .#fw-update-chip` |
+| FIDO credentials / PIN / Force-UV flag | yes          | host-side wipe — see README §Factory reset |
+| OpenPGP PINs / cardholder / keys       | yes          | `gpg --card-edit > admin > factory-reset` |
 
----
+## DFU re-flash (most common path)
 
-## Standard recovery: re-flash stock firmware via DFU
+1. Unplug the dongle.
+2. Hold SW1 (BOOT0 strap).
+3. Plug in USB.
+4. Release SW1 after ~1 s.
+5. Verify:
 
-This is the procedure for any "the dongle isn't behaving right" situation up through Phase 6 of the project.
+   ```bash
+   lsusb | grep 0483:df11
+   # Bus … Device …: ID 0483:df11 STMicroelectronics STM Device in DFU Mode
+   ```
 
-### Step 1: Enter DFU mode
+6. Flash:
 
-The STM32U535 has a factory-burned ROM bootloader (CC EAL4+ certified). It always works, regardless of what's in flash, as long as you tell it to run instead of jumping to user firmware. The way to do that is to hold `BOOT0` high at reset.
+   ```bash
+   sudo nix run .#flash-stock     # restore stock firmware
+   sudo nix run .#flash-open      # install nixtropic open firmware
+   ```
 
-On TS1302, `BOOT0` is wired to the **SW1 button** (the only button on the dongle).
+The device reboots into the new firmware automatically.
 
-**Procedure:**
-1. **Unplug** the TS1302 dongle from USB
-2. **Press and hold** the SW1 button (don't let go yet)
-3. **While holding SW1**, plug the dongle into USB
-4. **Release SW1** after about 1 second (any time after USB enumeration is fine)
-5. The dongle is now in DFU mode
+## TROPIC01 chip firmware update
 
-### Step 2: Verify DFU mode
+Updates the TROPIC01's internal CPU + SPECT firmware.  One-way — the
+chip rejects downgrades after success.  Use this if `nix run .#identify`
+reports App FW < 2.0.0.
 
 ```bash
-lsusb | grep "0483:df11"
+sudo nix run .#fw-update-chip
 ```
 
-Expected output:
-```
-Bus XXX Device YYY: ID 0483:df11 STMicroelectronics STM Device in DFU Mode
-```
+Built from `tools/fw-update-chip-main.c` against the pinned libtropic
+v3.2.1.  The dongle must be running stock firmware (not the open
+firmware) — the chip-FW updater needs the L1 SPI passthrough mode that
+stock provides.
 
-If you don't see this:
-- Try unplugging and the SW1-hold sequence again (timing matters)
-- Try a different USB cable / port
-- If you accidentally see `0483:5740` (CDC-ACM) instead, the dongle is in **app mode**, not DFU mode — that's fine for normal use, only enter DFU if you want to recover
+## Application-level reset
 
-### Step 3: Flash stock firmware
+Wipes credentials / PINs / cardholder state without touching firmware
+on either silicon.  See **README → Factory reset** for the FIDO and
+OpenPGP recipes.  TL;DR:
+
+- FIDO state: `fido2-token -R …` within 10 s of boot + SW1 confirm
+- OpenPGP state: `gpg --card-edit → admin → factory-reset`
+
+## Hardware-level recovery (extreme edge case)
+
+If DFU mode itself won't enumerate (very rare — ROM bootloader is
+robust), use SWD via ST-Link or J-Link on the TS1302 debug header
+(SWDIO, SWCLK, RST, GND):
 
 ```bash
-nix run .#flash-stock
+openocd -f interface/stlink.cfg -f target/stm32u5x.cfg \
+  -c "init; reset halt; flash erase_address 0x08000000 0x40000; reset run; exit"
 ```
 
-This executes `dfu-util -a 0 -s 0x08000000:leave -D <stock-firmware.bin>`:
-- `-a 0` — alternate setting 0 (internal flash)
-- `-s 0x08000000:leave` — write at address `0x08000000` (start of flash), then automatically jump to user firmware after flashing
-- `-D <bin>` — download (host → device) this binary file
-
-The flash takes ~2–3 seconds. The device automatically reboots into the freshly flashed firmware.
-
-### Step 4: Verify recovery
-
-```bash
-nix run .#identify
-```
-
-Expected: chip ID, firmware versions, certificate info — same as before any custom firmware was flashed.
-
-If `lsusb` shows `0483:5740` and `nix run .#identify` succeeds, the dongle is back to factory state.
-
----
-
-## What about TROPIC01 itself?
-
-The TROPIC01 chip is a separate piece of silicon connected to the STM32U535 via SPI. It is **completely unaffected** by anything you do to the STM32's firmware:
-
-- Re-flashing the STM32 doesn't touch TROPIC01
-- Erasing the STM32's flash doesn't touch TROPIC01
-- DFU operations on the STM32 don't touch TROPIC01
-
-The TROPIC01 has its own firmware (Bootloader, Application FW, SPECT FW), its own state (ECC slots, R-mem, R-config, etc.), and its own lifecycle. It can only be modified through libtropic-issued L3 commands over the SPI link.
-
-If you flash random STM32 firmware that opens an L3 session and then issues a malformed `lt_r_config_write`, *that* could brick TROPIC01 (see PROJECT.md §5 critical facts). But Phase 0 firmware (this) and Phases 1–6 (planned) don't touch R-config at all, so the brick path isn't reachable from this project's code.
-
----
-
-## Edge case: STM32 RDP level 2 lock-out
-
-If — *for some reason* — production firmware sets the STM32U535 Read-Out Protection (RDP) to level 2, the chip enters a permanent locked state where DFU can no longer write to flash. **This is not recoverable.** Don't enable RDP=2 in development. Phase 8 (production polish) is the only phase where RDP=2 is even considered, and only after extensive validation.
-
-This project's development firmware will run at RDP=0 (no lockout, full debug access).
-
----
-
-## Hardware-level recovery (if all else fails)
-
-If even DFU mode doesn't enumerate (extremely unusual), the STM32U535's SWD debug interface is broken out on the TS1302's debug header (4 pins typically: SWDIO, SWCLK, RST, GND). With an ST-Link or J-Link debugger:
-
-```bash
-# In the dev shell
-openocd -f interface/stlink.cfg -f target/stm32u5x.cfg -c "init; reset halt; flash erase_address 0x08000000 0x40000; reset run; exit"
-```
-
-Then DFU should work again. This is a *very* edge case — DFU mode in factory ROM is extremely robust.
-
----
+DFU should work again after this.
 
 ## See also
 
-- `PROJECT.md` §4 — TS1302 board pinout, including BOOT0/SW1 (PH3, pin 44)
-- `PROJECT.md` §5 — full critical-facts list including the TROPIC01 brick erratum
-- `research/stm32u535-inventory.md` §3 — STM32 bootloader details
-- Tropic Square's `tropic01-stm32u5-usb-devkit-fw/README.md` — upstream reference for the DFU procedure
+- README §Factory reset — application-level reset recipes
+- PROJECT.md §5 — critical facts (TROPIC01 brick erratum + pairing
+  key rules)
+- `research/stm32u535-inventory.md` — STM32 bootloader details
+- Tropic Square's `tropic01-stm32u5-usb-devkit-fw` — upstream DFU
+  reference
