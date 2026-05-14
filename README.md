@@ -25,7 +25,7 @@ The full daily-driver feature set works end-to-end on real hardware:
 - ✍️ **GPG signing** — `git commit -S` works; private key never leaves the TROPIC01 chip
 - 🔓 **GPG decryption** — `gpg --encrypt -r self … | gpg --decrypt` round-trip works
 - 🔑 **SSH via gpg-agent** — ssh to remote host with the authentication key only inside the chip
-- 🛡️ **Hardware-backed PIN** — FIDO PIN uses MAC-and-Destroy chip slots (8 wrong PINs and all slots are physically consumed at the silicon level; recovery only via factory-reset)
+- 🛡️ **Hardware-backed PIN** — FIDO PIN retry counter via TROPIC01's MAC-and-Destroy primitive: each wrong PIN mutates one of 8 dedicated chip slots; the original `master_secret` is reconstructible only via a correct PIN.  After 8 wrong attempts without a correct in between, the chip refuses further verifications until `authenticatorReset`.  Firmware-reflash attackers cannot bypass — the state mutation is chip-enforced.
 - 🟢 **Anti-passive-attack factory reset** — CTAP2.1 authenticatorReset is gated on (a) within 10 s of power-on AND (b) a fresh SW1 press if any state exists, so an attacker who briefly snatches the dongle can't wipe it just by replugging
 - 🔄 **Force-UV** — `alwaysUv` option per CTAP2.1; user verification required for every credential use
 - 📦 **Reproducible Nix builds** — one `nix build` command from clean checkout to flashable firmware

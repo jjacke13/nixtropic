@@ -358,7 +358,7 @@ nixtropic/
 | **STPUB** | Tropic Square's certified public key for the chip, baked at fab.  Used for chip authentication. |
 | **R-config / I-config** | Chip's permission/policy table.  R = rewritable, I = irreversible (1→0 only). |
 | **R-mem** | Rewritable user storage (512 slots × 256 B default) |
-| **MAC-and-Destroy** | One-shot per-slot MAC primitive for PIN-attempt rate limiting |
+| **MAC-and-Destroy** | TROPIC01 per-slot MAC primitive: every call returns `MAC(K, input)` AND mutates the slot's internal key `K` to a new value.  Used as the basis for a chip-side retry counter — wrong PINs mutate slots past the state where the original PIN's derivation works; only a correct PIN re-initialises.  Reusable across resets via `authenticatorReset`. |
 | **CTAP2** | FIDO Alliance protocol over USB HID for FIDO2 |
 | **WebAuthn** | W3C browser API for FIDO2 authentication |
 | **CCID** | USB Chip Card Interface Device class — smartcard reader protocol |
