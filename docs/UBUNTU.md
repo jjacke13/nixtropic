@@ -54,15 +54,15 @@ put `arm-none-eabi-*` first on PATH.
 The flake pins every input by commit hash.  Reproduce that here:
 
 ```bash
-mkdir -p ~/src/nixtropic-deps && cd ~/src/nixtropic-deps
+mkdir -p $HOME/src/nixtropic-deps && cd $HOME/src/nixtropic-deps
 
 # Main repo
 git clone https://github.com/jjacke13/nixtropic
 cd nixtropic
-git checkout v0.1     # or main
+git checkout main
 
 # Pinned vendored sources (used by both firmware and host tools)
-cd ~/src/nixtropic-deps
+cd $HOME/src/nixtropic-deps
 git clone https://github.com/tropicsquare/libtropic                && \
     (cd libtropic                && git checkout 6d058a36c7db9e55549a5e79ed4f9a83def80c0a)
 git clone --recurse-submodules https://github.com/tropicsquare/libtropic-util && \
@@ -80,7 +80,7 @@ git clone https://github.com/hathach/tinyusb                       && \
 Layout after this step:
 
 ```
-~/src/nixtropic-deps/
+$HOME/src/nixtropic-deps/
 ├── nixtropic/          ← this repo
 ├── libtropic/
 ├── libtropic-util/
@@ -95,14 +95,15 @@ Layout after this step:
 ## 3. Build the firmware
 
 ```bash
-cd ~/src/nixtropic-deps/nixtropic/firmware
+cd $HOME/src/nixtropic-deps/nixtropic/firmware
 cmake -S . -B build -G Ninja \
+  -DCMAKE_BUILD_TYPE=MinSizeRel \
   -DCMAKE_TOOLCHAIN_FILE=cmake/arm-none-eabi.cmake \
-  -DLIBTROPIC_SRC=~/src/nixtropic-deps/libtropic \
-  -DCMSIS_CORE_SRC=~/src/nixtropic-deps/cmsis-core \
-  -DCMSIS_DEVICE_U5_SRC=~/src/nixtropic-deps/cmsis-device-u5 \
-  -DSTM32U5XX_HAL_DRIVER_SRC=~/src/nixtropic-deps/stm32u5xx-hal-driver \
-  -DTINYUSB_SRC=~/src/nixtropic-deps/tinyusb
+  -DLIBTROPIC_SRC=$HOME/src/nixtropic-deps/libtropic \
+  -DCMSIS_CORE_SRC=$HOME/src/nixtropic-deps/cmsis-core \
+  -DCMSIS_DEVICE_U5_SRC=$HOME/src/nixtropic-deps/cmsis-device-u5 \
+  -DSTM32U5XX_HAL_DRIVER_SRC=$HOME/src/nixtropic-deps/stm32u5xx-hal-driver \
+  -DTINYUSB_SRC=$HOME/src/nixtropic-deps/tinyusb
 cmake --build build
 ls -lh build/firmware.bin
 ```
@@ -116,7 +117,7 @@ Expected size: ~217 KB (82.8% of the STM32U535's 256 KB flash).
 ### 4a. `lt-util` (chip CLI, used by `chip-fw-version` / `fw-update-chip`)
 
 ```bash
-cd ~/src/nixtropic-deps/libtropic-util
+cd $HOME/src/nixtropic-deps/libtropic-util
 
 # Patch upstream off-by-one in the bundled libtropic v1.0.0 host adapter.
 # (Fixed in libtropic >= v3.x; lt-util is dormant and still pins v1.0.0.)
@@ -133,13 +134,13 @@ sudo install -m 755 build/lt-util /usr/local/bin/lt-util
 These two binaries share a CMakeLists.  Drop it into a build scratch dir:
 
 ```bash
-mkdir -p ~/src/nixtropic-deps/chip-fw-tools && cd ~/src/nixtropic-deps/chip-fw-tools
-cp ~/src/nixtropic-deps/nixtropic/tools/fw-update-chip-main.c   .
-cp ~/src/nixtropic-deps/nixtropic/tools/chip-fw-version-main.c  .
-cp ~/src/nixtropic-deps/nixtropic/tools/fw-update-chip-CMakeLists.txt ./CMakeLists.txt
+mkdir -p $HOME/src/nixtropic-deps/chip-fw-tools && cd $HOME/src/nixtropic-deps/chip-fw-tools
+cp $HOME/src/nixtropic-deps/nixtropic/tools/fw-update-chip-main.c   .
+cp $HOME/src/nixtropic-deps/nixtropic/tools/chip-fw-version-main.c  .
+cp $HOME/src/nixtropic-deps/nixtropic/tools/fw-update-chip-CMakeLists.txt ./CMakeLists.txt
 
 cmake -S . -B build \
-  -DLIBTROPIC_SRC=~/src/nixtropic-deps/libtropic \
+  -DLIBTROPIC_SRC=$HOME/src/nixtropic-deps/libtropic \
   -DLT_CPU_FW_UPDATE_DATA_VER=2_0_0
 cmake --build build
 sudo install -m 755 build/fw-update-chip  /usr/local/bin/fw-update-chip
@@ -254,7 +255,7 @@ Mode), but use a stable USB port and don't unplug it during the update.
 4. Flash:
 
    ```bash
-   sudo dfu-util -a 0 -s 0x08000000:leave -D ~/src/nixtropic-deps/nixtropic/firmware/build/firmware.bin
+   sudo dfu-util -a 0 -s 0x08000000:leave -D $HOME/src/nixtropic-deps/nixtropic/firmware/build/firmware.bin
    ```
 
 `dfu-util` exits non-zero with `Error during download get_status` after
@@ -313,7 +314,7 @@ tools — no Nix needed.  They use `lsusb`, `fido2-token`, `opensc-tool`,
 `gpg`, and `gpg-connect-agent`.
 
 ```bash
-cd ~/src/nixtropic-deps/nixtropic
+cd $HOME/src/nixtropic-deps/nixtropic
 bash tools/validate.sh           # full: FIDO2 + OpenPGP — 22 checks
 bash tools/validate-fido.sh      # FIDO2 surface only — 5 checks
 bash tools/validate-openpgp.sh   # OpenPGP surface only — 17 checks

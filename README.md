@@ -36,6 +36,8 @@ An end-to-end validation suite (`nix run .#validate` — 22 non-interactive chec
 
 Requires Nix with flakes enabled. The dongle must be a Tropic Square TS1302 (STM32U535 + TROPIC01).
 
+> **Not on NixOS?** See [`docs/UBUNTU.md`](docs/UBUNTU.md) for the same flow translated to `apt` + `git` + `cmake`.
+
 ### 1. Add nixtropic to your system flake
 
 ```nix
@@ -210,6 +212,7 @@ Pre-built firmware lands at ~82.8% of the STM32's 256 KB flash budget. Comfortab
 | [`docs/BACKLOG.md`](docs/BACKLOG.md) | Open work items: M&D PIN counters, credProps, configurable policies, PIV applet, etc. |
 | [`docs/history/`](docs/history/) | Historical per-phase design documents (kept for reference, not load-bearing). |
 | [`docs/RECOVERY.md`](docs/RECOVERY.md) | What to do if the dongle stops working. |
+| [`docs/UBUNTU.md`](docs/UBUNTU.md) | End-to-end setup on Ubuntu (no Nix): apt deps, source build, udev, libccid patch, flash, GPG. |
 | [`docs/WEBAUTHN-NOTES.md`](docs/WEBAUTHN-NOTES.md) | AAGUID policy, credential ID format, authData layout, browser quirks, RP debugging ladder. |
 | [`TROPIC01.md`](TROPIC01.md) | Conversational primer on the secure element. |
 | [`research/`](research/) | Deep technical references (TROPIC01 inventory, STM32U535 inventory, prior-art verification). Load on demand. |
