@@ -54,15 +54,14 @@ put `arm-none-eabi-*` first on PATH.
 The flake pins every input by commit hash.  Reproduce that here:
 
 ```bash
-mkdir -p $HOME/src/nixtropic-deps && cd $HOME/src/nixtropic-deps
+mkdir -p $HOME/src && cd $HOME/src
 
 # Main repo
 git clone https://github.com/jjacke13/nixtropic
-cd nixtropic
-git checkout main
+(cd nixtropic && git checkout main)
 
 # Pinned vendored sources (used by both firmware and host tools)
-cd $HOME/src/nixtropic-deps
+mkdir -p nixtropic-deps && cd nixtropic-deps
 git clone https://github.com/tropicsquare/libtropic                && \
     (cd libtropic                && git checkout 6d058a36c7db9e55549a5e79ed4f9a83def80c0a)
 git clone --recurse-submodules https://github.com/tropicsquare/libtropic-util && \
@@ -80,14 +79,15 @@ git clone https://github.com/hathach/tinyusb                       && \
 Layout after this step:
 
 ```
-$HOME/src/nixtropic-deps/
-├── nixtropic/          ← this repo
-├── libtropic/
-├── libtropic-util/
-├── cmsis-core/
-├── cmsis-device-u5/
-├── stm32u5xx-hal-driver/
-└── tinyusb/
+$HOME/src/
+├── nixtropic/                  ← main repo
+└── nixtropic-deps/             ← vendored sources only
+    ├── libtropic/
+    ├── libtropic-util/
+    ├── cmsis-core/
+    ├── cmsis-device-u5/
+    ├── stm32u5xx-hal-driver/
+    └── tinyusb/
 ```
 
 ---
@@ -95,7 +95,7 @@ $HOME/src/nixtropic-deps/
 ## 3. Build the firmware
 
 ```bash
-cd $HOME/src/nixtropic-deps/nixtropic/firmware
+cd $HOME/src/nixtropic/firmware
 cmake -S . -B build -G Ninja \
   -DCMAKE_BUILD_TYPE=MinSizeRel \
   -DCMAKE_TOOLCHAIN_FILE=cmake/arm-none-eabi.cmake \
@@ -134,10 +134,10 @@ sudo install -m 755 build/lt-util /usr/local/bin/lt-util
 These two binaries share a CMakeLists.  Drop it into a build scratch dir:
 
 ```bash
-mkdir -p $HOME/src/nixtropic-deps/chip-fw-tools && cd $HOME/src/nixtropic-deps/chip-fw-tools
-cp $HOME/src/nixtropic-deps/nixtropic/tools/fw-update-chip-main.c   .
-cp $HOME/src/nixtropic-deps/nixtropic/tools/chip-fw-version-main.c  .
-cp $HOME/src/nixtropic-deps/nixtropic/tools/fw-update-chip-CMakeLists.txt ./CMakeLists.txt
+mkdir -p $HOME/src/chip-fw-tools && cd $HOME/src/chip-fw-tools
+cp $HOME/src/nixtropic/tools/fw-update-chip-main.c   .
+cp $HOME/src/nixtropic/tools/chip-fw-version-main.c  .
+cp $HOME/src/nixtropic/tools/fw-update-chip-CMakeLists.txt ./CMakeLists.txt
 
 cmake -S . -B build \
   -DLIBTROPIC_SRC=$HOME/src/nixtropic-deps/libtropic \
@@ -255,7 +255,7 @@ Mode), but use a stable USB port and don't unplug it during the update.
 4. Flash:
 
    ```bash
-   sudo dfu-util -a 0 -s 0x08000000:leave -D $HOME/src/nixtropic-deps/nixtropic/firmware/build/firmware.bin
+   sudo dfu-util -a 0 -s 0x08000000:leave -D $HOME/src/nixtropic/firmware/build/firmware.bin
    ```
 
 `dfu-util` exits non-zero with `Error during download get_status` after
@@ -314,7 +314,7 @@ tools — no Nix needed.  They use `lsusb`, `fido2-token`, `opensc-tool`,
 `gpg`, and `gpg-connect-agent`.
 
 ```bash
-cd $HOME/src/nixtropic-deps/nixtropic
+cd $HOME/src/nixtropic
 bash tools/validate.sh           # full: FIDO2 + OpenPGP — 22 checks
 bash tools/validate-fido.sh      # FIDO2 surface only — 5 checks
 bash tools/validate-openpgp.sh   # OpenPGP surface only — 17 checks
