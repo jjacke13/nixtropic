@@ -108,7 +108,10 @@ cmake --build build
 ls -lh build/firmware.bin
 ```
 
-Expected size: ~217 KB (82.8% of the STM32U535's 256 KB flash).
+Expected size: ~179 KB (68% of the STM32U535's 256 KB flash) with
+`MinSizeRel` / `-Os` on Ubuntu's gcc-14.2.  For comparison, the flake's
+Release / `-O2` build on gcc-13 lands at ~217 KB (82.8%) — same firmware,
+different optimisation goal.
 
 ---
 
