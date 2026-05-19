@@ -350,9 +350,15 @@ static int handle_get_data(uint16_t tag, uint8_t *out, size_t out_max, size_t *o
         off += OPENPGP_AID_LEN;
         break;
 
-    case 0x005E:   /* Login data — M3 stores via PUT DATA */
-    case 0x5F50:   /* URL — M3 */
-        return emit_sw(SW_REF_DATA_NOT_FOUND, out, out_max, out_len);
+    case 0x005E:   /* Login data — empty body, not 6A88.  scdaemon's
+                    do_learn_status chains do_getattr calls with `if
+                    (!err)`; a 6A88 return on LOGIN-DATA propagates
+                    GPG_ERR_NO_OBJ and aborts the rest of the chain
+                    (KEY-FPR, KEY-TIME, CA-FPR, CHV-STATUS,
+                    SIG-COUNTER), leaving gpg --card-status with
+                    "[none]" for every key + "0 0 0" PINs. */
+    case 0x5F50:   /* URL — same reasoning as 5E. */
+        break;
 
     case 0x5F52: { /* Historical bytes */
         if (off + sizeof HISTORICAL_BYTES > out_max) return emit_sw(SW_WRONG_LENGTH, out, out_max, out_len);
