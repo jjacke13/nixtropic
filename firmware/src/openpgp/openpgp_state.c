@@ -32,8 +32,13 @@
  * boundary (OpenPGP card v3.4.1 §7.2.6) without an exhaustive search
  * that would consume the retry counter in a single APDU.  Existing
  * PG7M state is wiped: user re-enters default PINs after upgrade. */
-static const uint8_t PGP_MAGIC[4]    = { 'P', 'G', '7', 'N' };
-#define PGP_SCHEMA_VERSION  2u
+/* Bumped 'PG7N' → 'PG7O' at Phase 8 cosmetic polish 2026-05-20 — DO
+ * 5F2D Language preference now defaults to "en" instead of all-zero,
+ * so `gpg --card-status` shows "Language: en" out of the box rather
+ * than the raw `\xff\xff` / `\x00\x00` placeholder.  PG7N state is
+ * wiped: PINs go back to defaults (123456 / 12345678). */
+static const uint8_t PGP_MAGIC[4]    = { 'P', 'G', '7', 'O' };
+#define PGP_SCHEMA_VERSION  3u
 
 /* pgp_state_present byte values (M3 — 3-state machine):
  *   0 = factory fresh (never bootstrapped) — next init auto-activates
@@ -139,6 +144,11 @@ static int write_activated_defaults(void)
     buf[OFF_FORCE_VERIFY]      = 1;
     buf[OFF_TOUCH_REQUIRED]    = 1;
     buf[OFF_SEX]               = 0x39;  /* ISO 5218 "not applicable" */
+    /* DO 5F2D Language preference — default to "en" (ISO 639-1) so
+     * gpg --card-status shows "Language: en" out of the box.  User
+     * can override via card-edit > admin > lang <code>. */
+    buf[OFF_LANG]              = 'e';
+    buf[OFF_LANG + 1]          = 'n';
 
     /* Hash default PINs into PW1 + PW3 slots.  SHA-256[:16] same
      * convention as Phase 5 pin.c. */
