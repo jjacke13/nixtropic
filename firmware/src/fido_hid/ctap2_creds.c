@@ -121,7 +121,8 @@ static int parse_make_cred(const uint8_t *req, size_t req_len,
                            int *out_has_pin_auth, uint8_t out_pin_auth[16],
                            int *out_pin_protocol,
                            const uint8_t **out_user_handle,
-                           size_t *out_user_handle_len)
+                           size_t *out_user_handle_len,
+                           int *out_want_credProps)
 {
     int alg_found = 0;
     int alg_pref  = 0;        /* selected COSE alg id */
@@ -131,6 +132,7 @@ static int parse_make_cred(const uint8_t *req, size_t req_len,
     *out_pin_protocol = 0;
     *out_user_handle     = NULL;
     *out_user_handle_len = 0;
+    *out_want_credProps  = 0;
 
     cbor_reader_t r;
     cbor_reader_init(&r, req, req_len);
@@ -239,6 +241,39 @@ static int parse_make_cred(const uint8_t *req, size_t req_len,
                 if (!alg_found && (alg_here == -8 || alg_here == -7)) {
                     alg_pref  = alg_here;
                     alg_found = 1;
+                }
+            }
+        } else if (key == 6u) {
+            /* extensions = { "<name>": <value>, ... }.  Phase 8 M2:
+             * recognise the client-driven `credProps` extension so
+             * browsers stop labelling our credentials as "unknown
+             * discoverability".  Per WebAuthn L3 §10.4 the value the
+             * RP sends is a boolean `true`; we treat any presence of
+             * the key as a request to surface credProps in the
+             * response.  All other extension names are silently
+             * skipped (we don't yet implement credProtect,
+             * hmac-secret, etc — those land in later phases). */
+            size_t emap;
+            if (cbor_reader_read_map_header(&r, &emap) < 0) {
+                return -(int) CTAP2_ERR_INVALID_CBOR;
+            }
+            for (size_t j = 0; j < emap; ++j) {
+                const uint8_t *ep; size_t eL;
+                if (cbor_reader_read_text(&r, &ep, &eL) < 0) {
+                    return -(int) CTAP2_ERR_INVALID_CBOR;
+                }
+                if (eL == 9u && memcmp(ep, "credProps", 9) == 0) {
+                    /* Value should be CBOR true; we accept any well-
+                     * formed value because the presence of the key
+                     * alone is the spec-defined trigger. */
+                    if (cbor_reader_skip(&r) < 0) {
+                        return -(int) CTAP2_ERR_INVALID_CBOR;
+                    }
+                    *out_want_credProps = 1;
+                } else {
+                    if (cbor_reader_skip(&r) < 0) {
+                        return -(int) CTAP2_ERR_INVALID_CBOR;
+                    }
                 }
             }
         } else if (key == 8u) {
@@ -399,6 +434,7 @@ static int parse_get_assertion(const uint8_t *req, size_t req_len,
 #define FLAG_UP  0x01u
 #define FLAG_UV  0x04u   /* user-verified (Phase 5 M3: set when pinAuth verified) */
 #define FLAG_AT  0x40u
+#define FLAG_ED  0x80u   /* extension data present (CTAP2 §6.1) */
 
 static int build_authdata(const uint8_t *rp_id_hash, uint8_t flags,
                           uint32_t sign_count,
@@ -444,11 +480,13 @@ int ctap2_make_credential(const uint8_t *req, size_t req_len,
     int     pin_protocol = 0;
     const uint8_t *user_handle_p = NULL;
     size_t  user_handle_len = 0;
+    int     want_credProps = 0;
 
     int err = parse_make_cred(req, req_len, client_hash,
                               &rp_id_p, &rp_id_len, &alg,
                               &has_pin_auth, pin_auth_in, &pin_protocol,
-                              &user_handle_p, &user_handle_len);
+                              &user_handle_p, &user_handle_len,
+                              &want_credProps);
     if (err < 0) {
         resp[0] = (uint8_t)(-err);
         return 1;
@@ -534,7 +572,11 @@ int ctap2_make_credential(const uint8_t *req, size_t req_len,
      * the on-chip counter. */
     uint32_t sc = credstore_peek_signcount();
     uint8_t auth_data[256];
-    int auth_data_len = build_authdata(rp_id_hash, FLAG_UP | uv_flag | FLAG_AT,
+    uint8_t auth_flags = FLAG_UP | uv_flag | FLAG_AT;
+    if (want_credProps) {
+        auth_flags |= FLAG_ED;
+    }
+    int auth_data_len = build_authdata(rp_id_hash, auth_flags,
                                        sc,
                                        cred_id, CREDSTORE_CRED_ID_LEN,
                                        cose_pub, (size_t) cose_pub_len,
@@ -542,6 +584,36 @@ int ctap2_make_credential(const uint8_t *req, size_t req_len,
     if (auth_data_len < 0) {
         resp[0] = CTAP2_ERR_OTHER;
         return 1;
+    }
+
+    /* Phase 8 M2 — append extensions area when credProps was requested.
+     * Wire layout per CTAP2.1 §6.1:
+     *   authData = rpIdHash || flags || signCount
+     *              || (attestedCredentialData if AT)
+     *              || (extensions CBOR map if ED)
+     *
+     * Our extensions map carries one entry:
+     *   { "credProps": { "rk": true } }
+     *
+     * Every credential we mint is resident (TROPIC01 R-mem slot
+     * indexed by `slot_idx` is the storage), so `rk` is always true.
+     * If we ever support non-discoverable creds we'd source the
+     * value from the request's options.rk instead. */
+    if (want_credProps) {
+        cbor_writer_t ew;
+        cbor_writer_init(&ew,
+                         &auth_data[auth_data_len],
+                         sizeof auth_data - (size_t) auth_data_len);
+        cbor_write_map_header(&ew, 1);
+        cbor_write_text(&ew, "credProps");
+        cbor_write_map_header(&ew, 1);
+        cbor_write_text(&ew, "rk");
+        cbor_write_bool(&ew, true);
+        if (cbor_writer_error(&ew)) {
+            resp[0] = CTAP2_ERR_OTHER;
+            return 1;
+        }
+        auth_data_len += (int) cbor_writer_len(&ew);
     }
 
     /* Signature over authData || clientDataHash, signed by the fresh

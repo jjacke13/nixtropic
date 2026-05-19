@@ -155,6 +155,16 @@ in
           ENV{ID_MM_DEVICE_IGNORE}="1", \
           TAG+="uaccess"
 
+        # ----- nixtropic open firmware HID interfaces (FIDO + lt-rpc) -----
+        # The FIDO2 HID interface uses usage page 0xF1D0 + usage 0x01;
+        # systemd's built-in hwdb auto-tags it with `security-device` on
+        # most distros, but Wayland / split-userspace setups occasionally
+        # drop the tag.  Pin the rule explicitly so browsers can always
+        # open /dev/hidrawN without sudo.  See docs/WEBAUTHN-NOTES.md §7.
+        SUBSYSTEM=="hidraw", ATTRS{idVendor}=="cafe", ATTRS{idProduct}=="4001", \
+          GROUP="${cfg.groupName}", MODE="0660", \
+          TAG+="uaccess"
+
         # ----- DFU bootloader (any TS1302 firmware can drop into DFU) -----
         SUBSYSTEM=="usb", ATTRS{idVendor}=="0483", ATTRS{idProduct}=="df11", \
           GROUP="${cfg.groupName}", MODE="0660", \
