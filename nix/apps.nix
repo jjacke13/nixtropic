@@ -223,7 +223,7 @@ let
     runtimeInputs = [ usbutils coreutils gnugrep pkgs.libfido2 ];
     text = ''
       set -uo pipefail
-      exec ${../tools/validate-fido.sh} "$@"
+      exec ${../tools}/validate-fido.sh "$@"
     '';
   };
 
@@ -232,7 +232,7 @@ let
     runtimeInputs = [ usbutils coreutils gnugrep pkgs.opensc pkgs.pcsc-tools pkgs.pcsclite pkgs.gnupg ];
     text = ''
       set -uo pipefail
-      exec ${../tools/validate-openpgp.sh} "$@"
+      exec ${../tools}/validate-openpgp.sh "$@"
     '';
   };
 
@@ -248,7 +248,7 @@ let
       # validate.sh dispatches to validate-fido.sh + validate-openpgp.sh
       # via $SCRIPT_DIR; we re-execute the top-level wrapper directly so
       # the same env reaches both sub-suites.
-      exec ${../tools/validate.sh} "$@"
+      exec ${../tools}/validate.sh "$@"
     '';
   };
 
@@ -307,7 +307,7 @@ let
 
           echo ""
           echo "Step 2/2: full validation (FIDO + OpenPGP)..."
-          exec ${../tools/validate.sh}
+          exec ${../tools}/validate.sh
         '';
       };
 
