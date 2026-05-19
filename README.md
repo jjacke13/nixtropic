@@ -99,7 +99,41 @@ gpgconf --reload scdaemon
 gpg-connect-agent updatestartuptty /bye
 ```
 
-### 5. Initialize keys on the card
+### 5. Smart-card session bring-up — the exact plug sequence
+
+The dongle's CCID interface needs **three pieces** alive on the host:
+`pcscd` (running or socket-activated), the libccid driver patched to
+know `cafe:4001` (provided by the NixOS module above), and a fresh
+`scdaemon` instance with `disable-ccid + pcsc-shared` in its conf
+(set up in step 4).  None of them auto-recover when the dongle is
+physically unplugged and replugged — `scdaemon` caches a PC/SC handle
+that points at the old USB device number, so the first replug after
+flash often fails with `gpg: selecting card failed: No such device`.
+
+Do this exactly once after every flash, every reboot, and every
+physical unplug/replug:
+
+```bash
+# 1. Confirm the dongle is back on USB and pcsc-lite sees it.
+lsusb | grep cafe:4001
+# Bus 001 Device NNN: ID cafe:4001
+
+# 2. Drop scdaemon's stale handle.  No card-state is lost — only
+#    the host-side PC/SC context — and gpg-agent will respawn it
+#    on the next request.
+gpgconf --kill scdaemon
+
+# 3. Verify the new session.  Touch SW1 only if asked.
+gpg --card-status
+```
+
+If `gpg --card-status` still says "No such device" after step 2,
+restart pcscd as well (`sudo systemctl restart pcscd`) **and then
+physically replug** — libccid's libusb hot-plug listener only fires
+on actual USB enumeration events, so a pcscd restart while the
+dongle is plugged in does NOT re-attach it.
+
+### 6. Initialize keys on the card
 
 ```bash
 gpg --card-edit
@@ -112,7 +146,7 @@ gpg --card-edit
 gpg --card-status   # verify keys are bound
 ```
 
-### 6. Use it daily
+### 7. Use it daily
 
 ```bash
 # Sign a git commit with the dongle (touch SW1 when LED blinks)
