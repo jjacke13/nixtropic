@@ -119,9 +119,12 @@ echo " 5/17  GET DATA C4 (PW status)..."
 PW_OUT=$(timeout 5 opensc-tool --reader 0 --card-driver default \
   --send-apdu "$SELECT_APDU" \
   --send-apdu "00:CA:00:C4:00" 2>&1 | tail -5 || true)
-# Expect: 01 40 40 40 03 00 03 then SW=9000 (force_verify, 64,64,64, retries 3,0,3)
-if echo "$PW_OUT" | grep -qiE "01.{0,2}40.{0,2}40.{0,2}40.{0,2}03.{0,2}00.{0,2}03"; then
-  echo "  ✓ PW status = 01 40 40 40 03 00 03 (default state)"
+# Expect: NN 40 40 40 03 00 03 then SW=9000 (force_verify, 64,64,64, retries 3,0,3)
+# where NN is 00 after Phase 8 M4.0 (PIN cached for session) or 01 on
+# pre-M4.0 firmware (PIN re-prompted per PSO).  Both byte sequences
+# are spec-valid, just policy differences — accept either.
+if echo "$PW_OUT" | grep -qiE "0[01].{0,2}40.{0,2}40.{0,2}40.{0,2}03.{0,2}00.{0,2}03"; then
+  echo "  ✓ PW status = .. 40 40 40 03 00 03 (default state)"
 else
   echo "  ✗ PW status didn't match expected:"
   echo "$PW_OUT" | sed 's/^/      /'
