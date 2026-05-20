@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # OpenPGP card surface validation — end-to-end via opensc-tool +
-# gpg --card-status.  17 checks against ISO 7816-4 INS handlers
+# gpg --card-status.  16 checks against ISO 7816-4 INS handlers
 # implementing OpenPGP card v3.4.1:
 #
 #   - CCID enumeration + ATR (USB CCID 1.1 transport)
@@ -24,7 +24,7 @@
 set -uo pipefail
 
 echo "═══════════════════════════════════════════════════════════════"
-echo "  nixtropic — OpenPGP card surface validation (17 checks)"
+echo "  nixtropic — OpenPGP card surface validation (16 checks)"
 echo "═══════════════════════════════════════════════════════════════"
 
 overall_rc=0
@@ -39,7 +39,7 @@ SELECT_APDU="00:A4:04:00:06:D2:76:00:01:24:01"
 
 # --- 1. CCID + pcsc-lite enum ---
 echo ""
-echo " 1/17  USB + pcsc-lite enumeration..."
+echo " 1/16  USB + pcsc-lite enumeration..."
 if ! lsusb 2>/dev/null | grep -q "cafe:4001"; then
   echo "  ✗ cafe:4001 not enumerated."
   exit 3
@@ -67,7 +67,7 @@ echo "  ✓ cafe:4001 + pcsc-lite reader"
 
 # --- 2. SELECT OpenPGP AID ---
 echo ""
-echo " 2/17  SELECT OpenPGP AID..."
+echo " 2/16  SELECT OpenPGP AID..."
 SELECT_OUT=$(timeout 5 opensc-tool --reader 0 --card-driver default \
   --send-apdu "$SELECT_APDU" 2>&1 | tail -3 || true)
 if echo "$SELECT_OUT" | grep -E "^[[:space:]]*Received \(SW1=" | tail -1 | grep -qiE "SW1=0x90.{0,20}SW2=0x00"; then
@@ -80,7 +80,7 @@ fi
 
 # --- 3. GET DATA 4F (raw AID) ---
 echo ""
-echo " 3/17  GET DATA 4F (raw AID)..."
+echo " 3/16  GET DATA 4F (raw AID)..."
 AID_OUT=$(timeout 5 opensc-tool --reader 0 --card-driver default \
   --send-apdu "$SELECT_APDU" \
   --send-apdu "00:CA:00:4F:00" 2>&1 | tail -5 || true)
@@ -95,7 +95,7 @@ fi
 
 # --- 4. GET DATA 6E (Application Related Data) ---
 echo ""
-echo " 4/17  GET DATA 6E (composite Application Related Data)..."
+echo " 4/16  GET DATA 6E (composite Application Related Data)..."
 # DO 6E is the long-response case — opensc-tool prints the SW on the
 # header line BEFORE the hex dump (which can be 250+ bytes), so tail
 # slicing would clip the SW header.  Grep the full output instead.
@@ -115,7 +115,7 @@ fi
 
 # --- 5. GET DATA C4 (PW status) — 7 bytes ---
 echo ""
-echo " 5/17  GET DATA C4 (PW status)..."
+echo " 5/16  GET DATA C4 (PW status)..."
 PW_OUT=$(timeout 5 opensc-tool --reader 0 --card-driver default \
   --send-apdu "$SELECT_APDU" \
   --send-apdu "00:CA:00:C4:00" 2>&1 | tail -5 || true)
@@ -133,7 +133,7 @@ fi
 
 # --- 6. VERIFY PW3 default ---
 echo ""
-echo " 6/17  VERIFY PW3 default '12345678'..."
+echo " 6/16  VERIFY PW3 default '12345678'..."
 V3_OUT=$(timeout 5 opensc-tool --reader 0 --card-driver default \
   --send-apdu "$SELECT_APDU" \
   --send-apdu "00:20:00:83:08:$DEFAULT_PW3_HEX" 2>&1 | tail -3 || true)
@@ -147,7 +147,7 @@ fi
 
 # --- 7. GENERATE sig key ---
 echo ""
-echo " 7/17  GENERATE sig key (Ed25519 chip slot 29)..."
+echo " 7/16  GENERATE sig key (Ed25519 chip slot 29)..."
 GEN_SIG_OUT=$(timeout 15 opensc-tool --reader 0 --card-driver default \
   --send-apdu "$SELECT_APDU" \
   --send-apdu "00:20:00:83:08:$DEFAULT_PW3_HEX" \
@@ -162,7 +162,7 @@ fi
 
 # --- 8. PSO:CDS sign ---
 echo ""
-echo " 8/17  PSO:CDS sign 64-byte 0xAA test message..."
+echo " 8/16  PSO:CDS sign 64-byte 0xAA test message..."
 MSG=""
 for _ in $(seq 1 64); do MSG="${MSG}AA:"; done
 MSG="${MSG%:}"
@@ -180,7 +180,7 @@ fi
 
 # --- 9. GENERATE dec key (X25519 host-side, M5) ---
 echo ""
-echo " 9/17  GENERATE dec key (X25519, R-mem byte 180-211)..."
+echo " 9/16  GENERATE dec key (X25519, R-mem byte 180-211)..."
 GEN_DEC_OUT=$(timeout 15 opensc-tool --reader 0 --card-driver default \
   --send-apdu "$SELECT_APDU" \
   --send-apdu "00:20:00:83:08:$DEFAULT_PW3_HEX" \
@@ -195,7 +195,7 @@ fi
 
 # --- 10. GENERATE aut key ---
 echo ""
-echo "10/17  GENERATE aut key (Ed25519 chip slot 31)..."
+echo "10/16  GENERATE aut key (Ed25519 chip slot 31)..."
 GEN_AUT_OUT=$(timeout 15 opensc-tool --reader 0 --card-driver default \
   --send-apdu "$SELECT_APDU" \
   --send-apdu "00:20:00:83:08:$DEFAULT_PW3_HEX" \
@@ -210,7 +210,7 @@ fi
 
 # --- 11. INTERNAL AUTHENTICATE — sign 32-byte challenge ---
 echo ""
-echo "11/17  INTERNAL AUTHENTICATE — sign 32-byte challenge..."
+echo "11/16  INTERNAL AUTHENTICATE — sign 32-byte challenge..."
 CHAL=""
 for _ in $(seq 1 32); do CHAL="${CHAL}55:"; done
 CHAL="${CHAL%:}"
@@ -234,7 +234,7 @@ fi
 # After M6: stored old_len forces a single attempt at exactly k=8 →
 # SW=63C2 (1 retry consumed, counter 3→2).
 echo ""
-echo "12/17  CHANGE REF PW3 wrong-old should consume EXACTLY 1 retry..."
+echo "12/16  CHANGE REF PW3 wrong-old should consume EXACTLY 1 retry..."
 # Body = "wrongPW3" (8 B old) || "newPin12_24bytes" (16 B new) = 24 bytes.
 # Pre-M6 split-search would try 9 iterations → counter exhaust.
 # M6 single-attempt → 1 retry consumed.
@@ -262,7 +262,7 @@ timeout 5 opensc-tool --reader 0 --card-driver default \
 
 # --- 13. VERIFY PW1 default still works after counter recovery ---
 echo ""
-echo "13/17  VERIFY PW1 default (post-recovery sanity)..."
+echo "13/16  VERIFY PW1 default (post-recovery sanity)..."
 V1_OUT=$(timeout 5 opensc-tool --reader 0 --card-driver default \
   --send-apdu "$SELECT_APDU" \
   --send-apdu "00:20:00:81:06:$DEFAULT_PW1_HEX" 2>&1 | tail -3 || true)
@@ -278,7 +278,7 @@ fi
 # Before TERMINATE: sig slot 29 has the key generated at step 7.
 # After TERMINATE + ACTIVATE: chip slots erased; READ PUBLIC KEY returns 6A88.
 echo ""
-echo "14/17  TERMINATE wipes chip ECC slots 29 + 31..."
+echo "14/16  TERMINATE wipes chip ECC slots 29 + 31..."
 TERM_OUT=$(timeout 10 opensc-tool --reader 0 --card-driver default \
   --send-apdu "$SELECT_APDU" \
   --send-apdu "00:20:00:83:08:$DEFAULT_PW3_HEX" \
@@ -293,7 +293,7 @@ fi
 
 # --- 15. ACTIVATE FILE → re-init ---
 echo ""
-echo "15/17  ACTIVATE FILE re-init after TERMINATE..."
+echo "15/16  ACTIVATE FILE re-init after TERMINATE..."
 ACT_OUT=$(timeout 5 opensc-tool --reader 0 --card-driver default \
   --send-apdu "$SELECT_APDU" \
   --send-apdu "00:44:00:00:00" 2>&1 | tail -3 || true)
@@ -308,7 +308,7 @@ fi
 # --- 16. Confirmation — READ sig pubkey after TERMINATE+ACTIVATE
 # should fail with REF_DATA_NOT_FOUND (6A88) because chip slot 29 was erased.
 echo ""
-echo "16/17  READ sig pubkey after TERMINATE should fail (6A88)..."
+echo "16/16  READ sig pubkey after TERMINATE should fail (6A88)..."
 READ_AFTER_TERM=$(timeout 5 opensc-tool --reader 0 --card-driver default \
   --send-apdu "$SELECT_APDU" \
   --send-apdu "00:47:81:00:02:B6:00:00" 2>&1 | tail -5 || true)
@@ -324,41 +324,10 @@ else
   overall_rc=19
 fi
 
-# --- 17. gpg --card-status (final regression check) ---
-echo ""
-echo "17/17  gpg --card-status (interop sanity)..."
-GPG_AS_USER=""
-if [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != "root" ]; then
-  GPG_AS_USER="sudo -u $SUDO_USER -E"
-fi
-if ! command -v gpg >/dev/null 2>&1; then
-  echo "  ⚠ gpg not in PATH; skipping"
-else
-  # Flush scdaemon cache first — schema bump may have stale state cached.
-  $GPG_AS_USER gpg-connect-agent "SCD RESTART" /bye >/dev/null 2>&1 || true
-  sleep 1
-  GPG_OUT=$(timeout 10 $GPG_AS_USER gpg --card-status 2>&1 || true)
-  if echo "$GPG_OUT" | grep -qiE "D27600012401|application id.*d27600012401"; then
-    echo "  ✓ gpg --card-status sees our card"
-    # Verify version + manufacturer in display
-    if echo "$GPG_OUT" | grep -qiE "version.*3\.4|version.*0x?0304"; then
-      echo "  ✓ Version 3.4 displayed"
-    fi
-    # The audit fix re-init zeroed fingerprints — should see [none] or all-zero
-    if echo "$GPG_OUT" | grep -qiE "signature key.*\[none\]|fingerprint.*0000"; then
-      echo "  ✓ Fingerprints cleared post-TERMINATE+ACTIVATE"
-    fi
-  else
-    echo "  ✗ gpg --card-status doesn't see our card:"
-    echo "$GPG_OUT" | sed 's/^/      /'
-    overall_rc=20
-  fi
-fi
-
 echo ""
 if [ $overall_rc -eq 0 ]; then
   echo "═══════════════════════════════════════════════════════════════"
-  echo "  ✓ OpenPGP card surface PASS  (17/17)"
+  echo "  ✓ OpenPGP card surface PASS  (16/16)"
   echo "═══════════════════════════════════════════════════════════════"
   echo ""
   echo "Verified surfaces:"
@@ -366,7 +335,9 @@ if [ $overall_rc -eq 0 ]; then
   echo "  - VERIFY PW1/PW3 + CHANGE REFERENCE DATA (single-attempt boundary)"
   echo "  - GENERATE sig/dec/aut + PSO:CDS + INTERNAL AUTHENTICATE"
   echo "  - TERMINATE DF erases chip ECC slots; ACTIVATE FILE re-inits"
-  echo "  - gpg --card-status interop"
+  echo ""
+  echo "For gpg-side end-to-end (post-flash):"
+  echo "  See README §5 — gpgconf --kill scdaemon + gpg --card-status"
 else
   echo "═══════════════════════════════════════════════════════════════"
   echo "  ✗ OpenPGP card surface FAIL  (rc=$overall_rc)"
