@@ -7,6 +7,7 @@
 
 #include "pgp_pin.h"
 #include "openpgp_state.h"
+#include "openpgp_pin_md.h"   /* Phase 8 M4.C — chip-side retry counter */
 
 #include <stdint.h>
 #include <stddef.h>
@@ -14,6 +15,21 @@
 
 #include "sha2.h"     /* trezor_crypto SHA-256 */
 #include "memzero.h"  /* trezor_crypto secure-zero */
+
+/* Map our software-PIN index to the M&D enum.  The two enums are
+ * value-compatible by design (both 0=PW1, 1=PW3, 2=RC) but the
+ * helper makes the dependency explicit. */
+_Static_assert(OPENPGP_PIN_PW1 == (int) OPENPGP_PIN_MD_PW1, "PW1 enum mismatch");
+_Static_assert(OPENPGP_PIN_PW3 == (int) OPENPGP_PIN_MD_PW3, "PW3 enum mismatch");
+_Static_assert(OPENPGP_PIN_RC  == (int) OPENPGP_PIN_MD_RC,  "RC enum mismatch");
+_Static_assert(OPENPGP_PIN_HASH_LEN == OPENPGP_PIN_MD_MATERIAL_LEN,
+               "PIN hash length must match M&D material length");
+
+static enum openpgp_pin_md_which pin_md_which_for(int which)
+{
+    /* Bounds-checked by caller. */
+    return (enum openpgp_pin_md_which) which;
+}
 
 /* Session state — RAM-only, lost on USB reset / power cycle. */
 static uint8_t s_verified[OPENPGP_PIN_COUNT];
@@ -88,6 +104,57 @@ int pgp_pin_verify(int which, const uint8_t *pin, size_t len)
     uint8_t submitted[OPENPGP_PIN_HASH_LEN];
     pgp_pin_hash(pin, len, submitted);
 
+    /* Phase 8 M4.C — if the M&D retry counter is active for this PIN
+     * (any prior pgp_pin_change / reset_pw1_via_* / set_rc has run),
+     * the chip-side verify is authoritative.  Software hash + counter
+     * still tracked alongside so DO C4 PW status and gpg-side display
+     * stay accurate, but the lockout / unlock decision comes from M&D.
+     *
+     * Threat-model win: an attacker who reflashes the STM32 with
+     * malicious firmware cannot bypass the counter — wrong attempts
+     * destroyed chip-side slots that can only be re-initialised by
+     * the recovered master_secret (i.e. by a correct PIN).
+     *
+     * Software fallback path stays for fresh-defaults state (PIN at
+     * factory 123456 / 12345678, no M&D set up yet — first PIN
+     * change wires M&D in via the state-write helpers below). */
+    if (openpgp_pin_md_is_active(pin_md_which_for(which))) {
+        int correct = 0;
+        int md_rc = openpgp_pin_md_verify(pin_md_which_for(which),
+                                          submitted, &correct);
+        memzero(submitted, sizeof submitted);
+
+        if (md_rc == -2) {
+            /* HW lockout — chip refuses further verifies.  Force the
+             * software-mirror counter to 0 so DO C4 / gpg agree. */
+            s_verified[which] = 0;
+            (void) openpgp_state_pin_retries_set(which, 0u);
+            return PGP_PIN_BLOCKED;
+        }
+        if (md_rc != 0) {
+            s_verified[which] = 0;
+            return PGP_PIN_CHIP_ERR;
+        }
+        if (correct) {
+            if (openpgp_state_pin_retries_set(which,
+                                              initial_retries(which)) != 0) {
+                return PGP_PIN_CHIP_ERR_RETRIES_MATCH;
+            }
+            s_verified[which] = 1;
+            return PGP_PIN_OK;
+        }
+
+        /* Wrong PIN — the chip slot was consumed by the M&D op.
+         * Mirror in the software counter for display + return. */
+        s_verified[which] = 0;
+        uint8_t new_count = (uint8_t)(cur - 1u);
+        if (openpgp_state_pin_retries_set(which, new_count) != 0) {
+            return PGP_PIN_CHIP_ERR_RETRIES_BAD;
+        }
+        return (new_count == 0u) ? PGP_PIN_BLOCKED : PGP_PIN_BAD;
+    }
+
+    /* Legacy / fresh-state software-only path. */
     uint8_t stored[OPENPGP_PIN_HASH_LEN];
     int hg = openpgp_state_pin_hash_get(which, stored);
     if (hg != 0) {
@@ -125,6 +192,17 @@ int pgp_pin_verify(int which, const uint8_t *pin, size_t len)
     return (new_count == 0u) ? PGP_PIN_BLOCKED : PGP_PIN_BAD;
 }
 
+/* Helper used by every path that writes a new PIN hash to R-mem.
+ * Sets up (or re-initialises) the M&D state for the PIN so subsequent
+ * verifies are chip-enforced.  On chip error the M&D state is left
+ * unchanged — caller decides whether to surface that as a failure
+ * (we currently log + continue; software-only verify keeps working). */
+static int pin_md_setup_for(int which,
+                            const uint8_t hash[OPENPGP_PIN_HASH_LEN])
+{
+    return openpgp_pin_md_setup(pin_md_which_for(which), hash);
+}
+
 int pgp_pin_change(int which,
                    const uint8_t *old_pin, size_t old_len,
                    const uint8_t *new_pin, size_t new_len)
@@ -141,9 +219,18 @@ int pgp_pin_change(int which,
     uint8_t new_hash[OPENPGP_PIN_HASH_LEN];
     pgp_pin_hash(new_pin, new_len, new_hash);
     int store_rc = openpgp_state_pin_hash_set(which, new_hash);
+    if (store_rc != 0) {
+        memzero(new_hash, sizeof new_hash);
+        return PGP_PIN_CHIP_ERR;
+    }
+    /* Phase 8 M4.C — (re-)initialise the M&D retry counter with the
+     * fresh PIN hash so subsequent verifies are chip-enforced.  Best
+     * effort: if M&D setup fails (chip error), software hash still
+     * lets the user authenticate; the protection just doesn't engage
+     * until the next successful pgp_pin_change. */
+    (void) pin_md_setup_for(which, new_hash);
     memzero(new_hash, sizeof new_hash);
 
-    if (store_rc != 0) return PGP_PIN_CHIP_ERR;
     /* M6 audit H2 — record new PIN length so the next CHANGE REF can
      * split at the canonical boundary without a search loop. */
     if (openpgp_state_pin_len_set(which, (uint8_t) new_len) != 0) {
@@ -164,8 +251,13 @@ int pgp_pin_reset_pw1_via_rc(const uint8_t *rc_bytes, size_t rc_len,
     uint8_t new_hash[OPENPGP_PIN_HASH_LEN];
     pgp_pin_hash(new_pw1, new_pw1_len, new_hash);
     int store_rc = openpgp_state_pin_hash_set(OPENPGP_PIN_PW1, new_hash);
+    if (store_rc != 0) {
+        memzero(new_hash, sizeof new_hash);
+        return PGP_PIN_CHIP_ERR;
+    }
+    /* Phase 8 M4.C — rebind the M&D retry counter to the new PW1. */
+    (void) pin_md_setup_for(OPENPGP_PIN_PW1, new_hash);
     memzero(new_hash, sizeof new_hash);
-    if (store_rc != 0) return PGP_PIN_CHIP_ERR;
 
     /* M6 audit H2 — record new PW1 length. */
     if (openpgp_state_pin_len_set(OPENPGP_PIN_PW1, (uint8_t) new_pw1_len) != 0) {
@@ -189,8 +281,13 @@ int pgp_pin_reset_pw1_via_pw3(const uint8_t *new_pw1, size_t new_pw1_len)
     uint8_t new_hash[OPENPGP_PIN_HASH_LEN];
     pgp_pin_hash(new_pw1, new_pw1_len, new_hash);
     int store_rc = openpgp_state_pin_hash_set(OPENPGP_PIN_PW1, new_hash);
+    if (store_rc != 0) {
+        memzero(new_hash, sizeof new_hash);
+        return PGP_PIN_CHIP_ERR;
+    }
+    /* Phase 8 M4.C — rebind the M&D retry counter to the new PW1. */
+    (void) pin_md_setup_for(OPENPGP_PIN_PW1, new_hash);
     memzero(new_hash, sizeof new_hash);
-    if (store_rc != 0) return PGP_PIN_CHIP_ERR;
 
     /* M6 audit H2 — record new PW1 length. */
     if (openpgp_state_pin_len_set(OPENPGP_PIN_PW1, (uint8_t) new_pw1_len) != 0) {
@@ -230,8 +327,13 @@ int pgp_pin_set_rc(const uint8_t *rc_bytes, size_t rc_len)
     uint8_t new_hash[OPENPGP_PIN_HASH_LEN];
     pgp_pin_hash(rc_bytes, rc_len, new_hash);
     int store_rc = openpgp_state_pin_hash_set(OPENPGP_PIN_RC, new_hash);
+    if (store_rc != 0) {
+        memzero(new_hash, sizeof new_hash);
+        return PGP_PIN_CHIP_ERR;
+    }
+    /* Phase 8 M4.C — wire RC into the M&D retry counter. */
+    (void) pin_md_setup_for(OPENPGP_PIN_RC, new_hash);
     memzero(new_hash, sizeof new_hash);
-    if (store_rc != 0) return PGP_PIN_CHIP_ERR;
 
     /* M6 audit H2 — record new RC length. */
     if (openpgp_state_pin_len_set(OPENPGP_PIN_RC, (uint8_t) rc_len) != 0) {
