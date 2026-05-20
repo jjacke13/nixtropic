@@ -68,7 +68,7 @@ int pin_md_kernel_is_active(const pin_md_layout_t *L)
 {
     if (!valid_layout(L)) return 0;
     uint8_t active = 0;
-    if (L->state_get(&active, NULL, NULL, NULL) != 0) {
+    if (L->state_get(L->user_ctx, &active, NULL, NULL, NULL) != 0) {
         return 0;
     }
     return active ? 1 : 0;
@@ -79,7 +79,7 @@ int pin_md_kernel_attempts_remaining(const pin_md_layout_t *L)
     if (!valid_layout(L)) return 0;
     uint8_t active = 0;
     uint8_t next_slot = 0;
-    if (L->state_get(&active, &next_slot, NULL, NULL) != 0) {
+    if (L->state_get(L->user_ctx, &active, &next_slot, NULL, NULL) != 0) {
         return 0;
     }
     if (!active) return (int) L->rounds;
@@ -129,7 +129,7 @@ int pin_md_kernel_setup(const pin_md_layout_t *L,
               &ci_all[(size_t) i * PIN_MD_KERNEL_SLOT_SIZE]);
     }
 
-    if (L->state_set(1u, 0u, tag, ci_all) != 0) {
+    if (L->state_set(L->user_ctx, 1u, 0u, tag, ci_all) != 0) {
         goto cleanup;
     }
     rc = 0;
@@ -160,7 +160,8 @@ int pin_md_kernel_verify(const pin_md_layout_t *L,
     uint8_t stored_tag[PIN_MD_KERNEL_TAG_LEN] = {0};
     uint8_t stored_ci[PIN_MD_KERNEL_CI_LEN_MAX] = {0};
 
-    if (L->state_get(&active, &next_slot, stored_tag, stored_ci) != 0) {
+    if (L->state_get(L->user_ctx, &active, &next_slot,
+                     stored_tag, stored_ci) != 0) {
         return -1;
     }
     if (!active) {
@@ -173,7 +174,7 @@ int pin_md_kernel_verify(const pin_md_layout_t *L,
     /* Commit the advance BEFORE the destructive chip op (power-loss
      * safe — mid-op crash still counts the slot as consumed). */
     uint8_t slot_idx = next_slot;
-    if (L->state_advance(NULL) != 0) {
+    if (L->state_advance(L->user_ctx, NULL) != 0) {
         return -1;
     }
 
@@ -225,7 +226,7 @@ int pin_md_kernel_verify(const pin_md_layout_t *L,
             rc = -1;
             goto cleanup;
         }
-        if (L->state_set(1u, 0u, stored_tag, stored_ci) != 0) {
+        if (L->state_set(L->user_ctx, 1u, 0u, stored_tag, stored_ci) != 0) {
             rc = -1;
             goto cleanup;
         }

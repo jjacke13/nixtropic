@@ -31,13 +31,18 @@ _Static_assert(PIN_MD_KERNEL_TAG_LEN == SLOTS_MD_TAG_LEN,
 
 /* ----- Adapter callbacks ----- */
 
-/* slots_global_md_get takes `int *out_active`; kernel wants
- * `uint8_t *out_active`.  Adapt. */
-static int adapt_state_get(uint8_t *out_active,
+/* FIDO doesn't need a per-call context — the entire state is at a
+ * single fixed R-mem slot, addressed by slots_global_md_*.  The ctx
+ * parameter is here only for API symmetry with OpenPGP, which uses
+ * it to carry the per-PIN R-mem slot index. */
+
+static int adapt_state_get(void *ctx,
+                           uint8_t *out_active,
                            uint8_t *out_next_slot,
                            uint8_t  out_tag[PIN_MD_KERNEL_TAG_LEN],
                            uint8_t *out_ci)
 {
+    (void) ctx;
     int active_int = 0;
     int rc = slots_global_md_get(out_active ? &active_int : NULL,
                                  out_next_slot,
@@ -50,16 +55,19 @@ static int adapt_state_get(uint8_t *out_active,
     return 0;
 }
 
-static int adapt_state_set(uint8_t active,
+static int adapt_state_set(void *ctx,
+                           uint8_t active,
                            uint8_t next_slot,
                            const uint8_t tag[PIN_MD_KERNEL_TAG_LEN],
                            const uint8_t *ci)
 {
+    (void) ctx;
     return slots_global_md_set((int) active, next_slot, tag, ci);
 }
 
-static int adapt_state_advance(uint8_t *out_new)
+static int adapt_state_advance(void *ctx, uint8_t *out_new)
 {
+    (void) ctx;
     return slots_global_md_advance(out_new);
 }
 
@@ -69,6 +77,7 @@ static const pin_md_layout_t FIDO_LAYOUT = {
     .md_slot_base    = 0u,
     .rounds          = SLOTS_MD_ROUNDS,
     .pin_material_len = PIN_MD_MATERIAL_LEN,
+    .user_ctx        = NULL,
     .state_get       = adapt_state_get,
     .state_set       = adapt_state_set,
     .state_advance   = adapt_state_advance,

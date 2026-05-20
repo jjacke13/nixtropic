@@ -53,6 +53,10 @@ typedef struct pin_md_layout_t {
     uint8_t rounds;
     /* PIN material length (caller-supplied hash output length). */
     uint8_t pin_material_len;
+    /* Opaque per-PIN context (e.g. R-mem slot index for OpenPGP);
+     * forwarded verbatim to every callback.  NULL is fine for callers
+     * that don't need it. */
+    void *user_ctx;
 
     /* R-mem state accessors.
      *
@@ -64,18 +68,24 @@ typedef struct pin_md_layout_t {
      *   state_advance  increments next_slot in R-mem.  Sets *out_new
      *                  to the post-increment value.  Returns 0 / non-zero.
      *
+     * Each callback receives `user_ctx` as its first argument so a
+     * single callback impl can serve multiple PINs differing only in
+     * which R-mem slot they live in.
+     *
      * The kernel never re-orders these calls; persistence ordering is
      * power-loss-safe (advance committed BEFORE the destructive chip
      * op, so a mid-op crash counts the slot as consumed). */
-    int (*state_get)(uint8_t *out_active,
+    int (*state_get)(void *ctx,
+                     uint8_t *out_active,
                      uint8_t *out_next_slot,
                      uint8_t  out_tag[PIN_MD_KERNEL_TAG_LEN],
                      uint8_t *out_ci);
-    int (*state_set)(uint8_t active,
+    int (*state_set)(void *ctx,
+                     uint8_t active,
                      uint8_t next_slot,
                      const uint8_t tag[PIN_MD_KERNEL_TAG_LEN],
                      const uint8_t *ci);
-    int (*state_advance)(uint8_t *out_new);
+    int (*state_advance)(void *ctx, uint8_t *out_new);
 } pin_md_layout_t;
 
 /* Set up the M&D scheme for the configured layout.

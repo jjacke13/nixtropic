@@ -220,6 +220,7 @@ set(APP_SOURCES
     src/openpgp/openpgp_applet.c
     src/openpgp/pgp_pin.c
     src/openpgp/pgp_keys.c
+    src/openpgp/openpgp_pin_md.c
     src/cdc_protocol/protocol.c
     src/cdc_protocol/parser.c
     src/cdc_protocol/hex.c
