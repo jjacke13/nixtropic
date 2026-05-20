@@ -33,6 +33,7 @@
 #include "openpgp_applet.h"
 #include "openpgp_aid.h"
 #include "openpgp_state.h"
+#include "openpgp_pin_md.h"           /* Phase 8 M4.E — wipe M&D on TERMINATE */
 #include "pgp_pin.h"
 #include "pgp_keys.h"
 #include "ccid/ccid_proto.h"
@@ -1039,6 +1040,19 @@ static int handle_terminate_df(uint8_t p1, uint8_t p2,
     if (openpgp_state_terminate() != 0) {
         return emit_sw(SW_UNKNOWN_ERROR, out, out_max, out_len);
     }
+    /* Phase 8 M4.E — wipe the M&D retry-counter state for PW1 / PW3 /
+     * RC.  Slot indices 50 / 51 / 52 in R-mem are erased; the
+     * TROPIC01 chip-side M&D slots themselves (8..16) will be
+     * consumed-and-reinitialised lazily on the next pgp_pin_change
+     * call (= when the user sets a fresh PIN post-ACTIVATE), exactly
+     * the same lifecycle as the FIDO authenticatorReset path.
+     *
+     * Failure here is non-fatal: TERMINATE has already succeeded
+     * w.r.t. the R-mem slot 1 wipe; leaving stale M&D state in
+     * slots 50/51/52 just means a future `openpgp_pin_md_setup`
+     * will overwrite them anyway.  The spec doesn't require us to
+     * touch slots 50/51/52 — they're our private extension. */
+    (void) openpgp_pin_md_factory_reset_all();
     pgp_pin_clear_session();
     return emit_sw(SW_OK, out, out_max, out_len);
 }
