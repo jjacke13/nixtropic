@@ -30,6 +30,7 @@
 #include "tropic/tropic.h"
 #include "fido_hid/slots.h"
 #include "fido_hid/pin.h"
+#include "openpgp/openpgp_state.h"   /* Phase 8 M4.0 — PGP_FORCE_VERIFY + PGP_TOUCH RPCs */
 
 #include "stm32u5xx_hal.h"
 
@@ -249,6 +250,57 @@ static int handle_force_uv_set(const uint8_t *req, size_t req_len,
     return 0;
 }
 
+/* ===== Phase 8 M4.0 — OpenPGP runtime policy =====
+ *
+ * Four small read/write RPCs for the two OpenPGP knobs we want a
+ * future CLI to be able to flip without going through `gpg --card-edit`:
+ *
+ *   - force_verify: PW1 cache-across-session flag (DO C4 byte 0).
+ *   - touch_required: global SW1 gate for every PSO/INTERNAL_AUTH.
+ *
+ * Set paths are PIN-gated through the same FIDO pinUvAuthToken
+ * mechanism as Force-UV.  GET paths are unauthenticated (the values
+ * are also readable via OpenPGP GET DATA C4 / D6-D8, no leak). */
+static int handle_pgp_force_verify_get(const uint8_t *req, size_t req_len,
+                                       uint8_t *resp, size_t resp_max)
+{
+    (void) req; (void) req_len;
+    if (resp_max < 1u) return -1;
+    resp[0] = openpgp_state_force_verify_get();
+    return 1;
+}
+
+static int handle_pgp_force_verify_set(const uint8_t *req, size_t req_len,
+                                       uint8_t *resp, size_t resp_max)
+{
+    (void) resp; (void) resp_max;
+    if (req_len < 1u) return -1;
+    if (!pin_token_is_valid()) return -1;
+    uint8_t value = (req[0] != 0u) ? 1u : 0u;
+    if (openpgp_state_force_verify_set(value) != 0) return -1;
+    return 0;
+}
+
+static int handle_pgp_touch_get(const uint8_t *req, size_t req_len,
+                                uint8_t *resp, size_t resp_max)
+{
+    (void) req; (void) req_len;
+    if (resp_max < 1u) return -1;
+    resp[0] = openpgp_state_touch_required_get();
+    return 1;
+}
+
+static int handle_pgp_touch_set(const uint8_t *req, size_t req_len,
+                                uint8_t *resp, size_t resp_max)
+{
+    (void) resp; (void) resp_max;
+    if (req_len < 1u) return -1;
+    if (!pin_token_is_valid()) return -1;
+    uint8_t value = (req[0] != 0u) ? 1u : 0u;
+    if (openpgp_state_touch_required_set(value) != 0) return -1;
+    return 0;
+}
+
 /* ===== Table + lookup ===== */
 
 typedef struct {
@@ -271,6 +323,10 @@ static const rpc_entry_t HANDLERS[] = {
     { LT_RPC_CMD_SLOTS_RESET,  handle_slots_reset },
     { LT_RPC_CMD_FORCE_UV_GET, handle_force_uv_get },
     { LT_RPC_CMD_FORCE_UV_SET, handle_force_uv_set },
+    { LT_RPC_CMD_PGP_FORCE_VERIFY_GET, handle_pgp_force_verify_get },
+    { LT_RPC_CMD_PGP_FORCE_VERIFY_SET, handle_pgp_force_verify_set },
+    { LT_RPC_CMD_PGP_TOUCH_GET,        handle_pgp_touch_get },
+    { LT_RPC_CMD_PGP_TOUCH_SET,        handle_pgp_touch_set },
     { 0, NULL },  /* sentinel */
 };
 

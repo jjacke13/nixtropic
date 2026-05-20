@@ -37,8 +37,14 @@
  * so `gpg --card-status` shows "Language: en" out of the box rather
  * than the raw `\xff\xff` / `\x00\x00` placeholder.  PG7N state is
  * wiped: PINs go back to defaults (123456 / 12345678). */
-static const uint8_t PGP_MAGIC[4]    = { 'P', 'G', '7', 'O' };
-#define PGP_SCHEMA_VERSION  3u
+/* Bumped 'PG7O' → 'PG7P' at Phase 8 M4.0 (2026-05-20) — `force_verify`
+ * default flipped 1 → 0 so `gpg` prompts for PW1 once per dongle
+ * plug-in instead of for every PSO:CDS / PSO:DEC.  Daily-driver model
+ * is now "PIN once, touch every op", matching Yubikey defaults.  PG7O
+ * state is wiped: PINs go back to defaults (123456 / 12345678) and
+ * user must re-run `gpg --card-edit > admin > generate`. */
+static const uint8_t PGP_MAGIC[4]    = { 'P', 'G', '7', 'P' };
+#define PGP_SCHEMA_VERSION  4u
 
 /* pgp_state_present byte values (M3 — 3-state machine):
  *   0 = factory fresh (never bootstrapped) — next init auto-activates
@@ -141,7 +147,14 @@ static int write_activated_defaults(void)
     buf[OFF_PW1_RETRIES]       = OPENPGP_PW1_RETRIES_INITIAL;
     buf[OFF_PW3_RETRIES]       = OPENPGP_PW3_RETRIES_INITIAL;
     buf[OFF_RC_RETRIES]        = OPENPGP_RC_UNSET;
-    buf[OFF_FORCE_VERIFY]      = 1;
+    /* Phase 8 M4.0 — default force_verify = 0 so the user is prompted
+     * for PW1 once per plug-in instead of for every PSO:CDS / PSO:DEC
+     * / INTERNAL AUTHENTICATE.  Combined with the UIF gate (commit
+     * 98486f4) the daily-driver model is "PIN once, touch every op",
+     * matching Yubikey defaults.  Toggle at runtime via DO C4 PUT DATA
+     * (gpg --card-edit > admin > forcesig) OR the lt-rpc
+     * PGP_FORCE_VERIFY_SET vendor command (future CLI). */
+    buf[OFF_FORCE_VERIFY]      = 0;
     buf[OFF_TOUCH_REQUIRED]    = 1;
     buf[OFF_SEX]               = 0x39;  /* ISO 5218 "not applicable" */
     /* DO 5F2D Language preference — default to "en" (ISO 639-1) so

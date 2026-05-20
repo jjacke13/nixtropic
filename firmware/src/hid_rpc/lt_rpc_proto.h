@@ -58,6 +58,26 @@
 #define LT_RPC_CMD_FORCE_UV_GET   0x15u  /* req: empty;  resp: 1 B (0=off, 1=on). */
 #define LT_RPC_CMD_FORCE_UV_SET   0x16u  /* req: 1 B (0|1);  resp: empty. */
 
+/* OpenPGP policy accessors (Phase 8 M4.0).  Mirror the Force-UV pair
+ * for the two OpenPGP-side runtime knobs the user is most likely to
+ * want a CLI for, without having to go through `gpg --card-edit`.
+ *
+ *   PGP_FORCE_VERIFY  — PW1 cache-across-session flag (DO C4 byte 0).
+ *                       0 = cache (default after M4.0; PIN once per plug).
+ *                       1 = force re-verify before each PSO:CDS.
+ *   PGP_TOUCH         — global SW1 touch requirement (UIF DO D6/D7/D8).
+ *                       0 = no touch needed for sign / dec / auth.
+ *                       1 = SW1 press required for each crypto op.
+ *
+ * Both are PIN-gated server-side (require an active pinUvAuthToken,
+ * mirroring force-uv-set).  No spec-defined OpenPGP API exposes these
+ * directly to the host except via card-edit; we expose them over
+ * lt-rpc so a future nixtropic CLI can wrap them. */
+#define LT_RPC_CMD_PGP_FORCE_VERIFY_GET 0x17u  /* req: empty; resp: 1 B (0|1). */
+#define LT_RPC_CMD_PGP_FORCE_VERIFY_SET 0x18u  /* req: 1 B; resp: empty. */
+#define LT_RPC_CMD_PGP_TOUCH_GET        0x19u  /* req: empty; resp: 1 B (0|1). */
+#define LT_RPC_CMD_PGP_TOUCH_SET        0x1Au  /* req: 1 B; resp: empty. */
+
 /* Reserved: device-emitted error response */
 #define LT_RPC_CMD_ERROR        0x3Fu
 
