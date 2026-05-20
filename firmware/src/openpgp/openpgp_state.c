@@ -11,6 +11,7 @@
  */
 
 #include "openpgp_state.h"
+#include "openpgp_pin_md.h"   /* Phase 8 — wipe M&D state on schema bump */
 
 #include <stdint.h>
 #include <stddef.h>
@@ -220,7 +221,15 @@ int openpgp_state_init(void)
         /* PGP_STATE_FRESH (0) → fall through to bootstrap */
     }
 
-    /* First-boot init OR upgrade-from-M2-state — write defaults. */
+    /* First-boot init OR magic-mismatch (schema bump) — write fresh
+     * defaults.  ALSO wipe the per-PIN M&D state slots so the stale
+     * tag bound to the user's prior PIN doesn't get treated as
+     * authoritative against the new default hashes.  Without this
+     * step, a schema-bump on a dongle whose user had set a custom
+     * PIN would HW-lock that PIN inside 3 verify attempts (default
+     * PIN material vs. old PIN's M&D tag = mismatch). */
+    (void) openpgp_pin_md_factory_reset_all();
+
     return write_activated_defaults();
 }
 
