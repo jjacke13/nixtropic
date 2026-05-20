@@ -1,14 +1,14 @@
 /*
- * OpenPGP applet state on TROPIC01 R-mem slot 1.  Persisted state
+ * OpenPGP applet state on TROPIC01 R-mem slot 33.  Persisted state
  * + accessors for the OpenPGP card surface.
  *
- * Slot 1 layout (256 B) — magic "PG7P" / schema v4 (current after the
- * Phase-8 M4.0 force_verify default flip):
+ * Slot 33 layout (256 B) — magic "PG7Q" / schema v5 (current after
+ * the Phase-8 R-mem collision fix moved this slot away from slot 1):
  *
  *   offset  size   field
  *   ------  ----   -----
- *      0      4    magic "PG7P" (0x50,0x47,0x37,0x50)
- *      4      2    schema_version = 4
+ *      0      4    magic "PG7Q" (0x50,0x47,0x37,0x51)
+ *      4      2    schema_version = 5
  *      6      1    pgp_state_present (1 once activated, 2 terminated)
  *      7      1    PW1 retry counter cache (0..3)
  *      8      1    PW3 retry counter cache (0..3)
@@ -37,7 +37,7 @@
  *                                                              ----
  *   total = 256 B (matches TROPIC01 default per-slot size)
  *
- * Magic bumps: PG7K → PG7L → PG7M → PG7N → PG7O → PG7P as schema evolves.  Magic
+ * Magic bumps: PG7K → PG7L → PG7M → PG7N → PG7O → PG7P → PG7Q as schema evolves.  Magic
  * mismatch on read triggers a clean write of defaults
  * (write_activated_defaults), which is the user-visible side effect
  * of every M5/M6 upgrade.
@@ -53,7 +53,12 @@
 #include <stdint.h>
 #include <stddef.h>
 
-#define OPENPGP_RMEM_PRIMARY_SLOT    1u
+/* Phase 8 collision fix (2026-05-20) — moved from R-mem slot 1 to
+ * slot 33.  FIDO per-credential metadata lives at SLOTS_RMEM_SLOT_FOR(0)
+ * = slot 1, so any FIDO credential allocation (e.g. webauthn.io
+ * registration) was overwriting OpenPGP state.  Slot 33 is clear of
+ * the entire FIDO range (per-cred slots 1..32 for SLOTS_MAX=32). */
+#define OPENPGP_RMEM_PRIMARY_SLOT    33u
 /* 256 bytes — matches Phase 5 slots.c (SLOTS_RMEM_GLOBAL_SIZE).  475
  * was the chip's *max* slot capacity per the inventory doc, but the
  * default per-slot configuration on this silicon is smaller — writes
@@ -62,7 +67,7 @@
 #define OPENPGP_RMEM_PRIMARY_SIZE    256u
 
 /* PIN retry-counter defaults — match OpenPGP card spec.  Stored in the
- * cache bytes of slot 1; the actual M&D enforcement lives in chip M&D
+ * cache bytes of the primary slot; the actual M&D enforcement lives in chip M&D
  * slots 8..16 (M3). */
 #define OPENPGP_PW1_RETRIES_INITIAL  3u
 #define OPENPGP_PW3_RETRIES_INITIAL  3u
@@ -79,7 +84,7 @@
 #define OPENPGP_SIG_COUNTER_LEN      3u   /* DO 93, BCD encoded */
 
 /* PIN hash storage — SHA-256(PIN)[:16].  Same convention as Phase 5's
- * pin.c.  Stored in R-mem slot 1 at v2 layout offsets 132..179. */
+ * pin.c.  Stored in R-mem primary slot at v2 layout offsets 132..179. */
 #define OPENPGP_PIN_HASH_LEN         16u
 
 /* M5 — X25519 private key for the dec slot.  TROPIC01 doesn't expose
@@ -103,7 +108,7 @@
 #define OPENPGP_PIN_MAX_LEN          64u
 
 /**
- * @brief First-call init: ensure R-mem slot 1 has the PGP state magic.
+ * @brief First-call init: ensure R-mem primary slot has the PGP state magic.
  *        Idempotent — safe to call from openpgp_applet open hook.
  *        If the slot is uninitialised (or wrong magic), writes a
  *        default-state v1 layout (pgp_state_present=0, PIN retry
@@ -207,7 +212,7 @@ int openpgp_state_pin_retries_set(int which, uint8_t v);
 
 /**
  * @brief Get/set the recorded length of a PIN (M6 audit H2 fix —
- *        schema v4 PG7P).  Used by CHANGE REFERENCE DATA / RESET
+ *        schema v5 PG7Q).  Used by CHANGE REFERENCE DATA / RESET
  *        RETRY COUNTER to split the APDU body at the canonical
  *        old/new boundary on a single verify attempt.
  *        Returns 0 OK, -1 bad index, -2 chip error.
@@ -258,7 +263,7 @@ int openpgp_state_sig_counter_increment(void);
 /* ---- TERMINATE DF / ACTIVATE FILE ---- */
 
 /**
- * @brief Wipe all PGP state in R-mem slot 1 (PIN hashes, fingerprints,
+ * @brief Wipe all PGP state in R-mem primary slot (PIN hashes, fingerprints,
  *        cardholder data, etc).  Sets pgp_state_present = 0.  After
  *        TERMINATE, the only valid INS is ACTIVATE FILE.
  *        Does NOT erase chip ECC slots — that happens in M4 GENERATE
@@ -283,7 +288,7 @@ int openpgp_state_dec_priv_get(uint8_t out[OPENPGP_DEC_PRIV_LEN]);
 int openpgp_state_dec_priv_set(const uint8_t key[OPENPGP_DEC_PRIV_LEN]);
 
 /**
- * @brief Re-init R-mem slot 1 with spec-default PINs ("123456" / "12345678" /
+ * @brief Re-init R-mem primary slot with spec-default PINs ("123456" / "12345678" /
  *        RC unset), default retry counters (3/3/0), touch_required=1,
  *        force_verify=1, sex=0x39.  Sets pgp_state_present = 1.
  *        Called from openpgp_state_init on first boot, AND from

@@ -1,5 +1,7 @@
 /*
- * Phase 7 M2 — OpenPGP applet state, persisted in R-mem slot 1.
+ * Phase 7 M2 — OpenPGP applet state, persisted in R-mem slot 33 (was
+ * slot 1 pre Phase 8 collision fix — see PRIMARY_SLOT comment in the
+ * header).
  * See openpgp_state.h for the byte-level layout.
  *
  * For M2 the only callers are the read-only GET DATA paths; we read
@@ -43,8 +45,16 @@
  * is now "PIN once, touch every op", matching Yubikey defaults.  PG7O
  * state is wiped: PINs go back to defaults (123456 / 12345678) and
  * user must re-run `gpg --card-edit > admin > generate`. */
-static const uint8_t PGP_MAGIC[4]    = { 'P', 'G', '7', 'P' };
-#define PGP_SCHEMA_VERSION  4u
+/* Bumped 'PG7P' → 'PG7Q' at Phase 8 R-mem collision fix (2026-05-20) —
+ * OpenPGP primary state moved from R-mem slot 1 to slot 33 to avoid
+ * being overwritten by FIDO per-credential allocation (slot_idx=0
+ * lands on R-mem slot 1).  Old slot-1 PG7P state is no longer read;
+ * fresh PG7Q state initialises with defaults in slot 33.  User must
+ * regenerate keys via `gpg --card-edit > admin > generate`.
+ * FIDO credentials previously co-resident in slot 1 are also lost —
+ * webauthn.io re-registration required. */
+static const uint8_t PGP_MAGIC[4]    = { 'P', 'G', '7', 'Q' };
+#define PGP_SCHEMA_VERSION  5u
 
 /* pgp_state_present byte values (M3 — 3-state machine):
  *   0 = factory fresh (never bootstrapped) — next init auto-activates
@@ -60,7 +70,7 @@ static const uint8_t PGP_MAGIC[4]    = { 'P', 'G', '7', 'P' };
 static const char PGP_DEFAULT_PW1[] = "123456";
 static const char PGP_DEFAULT_PW3[] = "12345678";
 
-/* Wire offsets (in R-mem slot 1 payload). */
+/* Wire offsets (in R-mem primary payload). */
 #define OFF_MAGIC               0
 #define OFF_MAGIC_LEN           4
 #define OFF_SCHEMA              4
@@ -123,7 +133,7 @@ static int read_payload(uint8_t out[OPENPGP_RMEM_PRIMARY_SIZE])
     return 0;
 }
 
-/* Write a fully-formed payload back to R-mem slot 1.  Caller fills the
+/* Write a fully-formed payload back to R-mem primary slot.  Caller fills the
  * buffer; we erase + write. */
 static int write_payload(const uint8_t buf[OPENPGP_RMEM_PRIMARY_SIZE])
 {
