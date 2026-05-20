@@ -111,18 +111,31 @@ static const char PGP_DEFAULT_PW3[] = "12345678";
 
 /* Read the full payload.
  *
- * Return codes (distinct for HW debug — Phase 7 M3 iteration
- * 2026-05-12):
+ * Return codes:
  *   0   OK
- *  -1   magic mismatch (slot present but our magic missing)
- *  -3   chip read error (tropic_rmem_read returned non-zero)
- *  -4   short read (got fewer bytes than minimum-viable header) */
+ *  -1   magic mismatch (slot present but our magic missing) OR slot
+ *       physically empty (chip-reported "never written").  Both
+ *       trigger the same bootstrap-defaults flow.
+ *  -3   chip read error — distinct from "slot empty" so a transient
+ *       SPI / L3 glitch doesn't silently factory-wipe state.
+ *  -4   short read (got fewer bytes than minimum-viable header). */
 static int read_payload(uint8_t out[OPENPGP_RMEM_PRIMARY_SIZE])
 {
     size_t got = 0;
     int rc = tropic_rmem_read(OPENPGP_RMEM_PRIMARY_SLOT, out,
                               OPENPGP_RMEM_PRIMARY_SIZE, &got);
     if (rc != 0) {
+        /* tropic_rmem_read returns -(lt_ret_t).  A fresh R-mem slot
+         * that has never been written yields
+         * LT_L3_R_MEM_DATA_READ_SLOT_EMPTY (28), so the wrapper
+         * returns -28.  Treat that as "first boot on this slot" and
+         * route through the magic-mismatch bootstrap path — without
+         * this, the M6 M3 audit fix would refuse to initialise the
+         * slot on the very first boot after a schema bump that
+         * relocated the primary slot to virgin R-mem territory. */
+        if (rc == -28) {
+            return -1;
+        }
         return -3;
     }
     if (got < (OFF_TOUCH_REQUIRED + 1u)) {
