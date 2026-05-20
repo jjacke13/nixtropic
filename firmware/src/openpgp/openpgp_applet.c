@@ -36,6 +36,7 @@
 #include "pgp_pin.h"
 #include "pgp_keys.h"
 #include "ccid/ccid_proto.h"
+#include "fido_hid/user_presence.h"   /* Phase 8 M3 — SW1 gate for UIF */
 #include "memzero.h"   /* M6 audit M1 — zeroize ECDH shared secret on stack */
 
 #include <stdint.h>
@@ -904,6 +905,25 @@ static int parse_pso_dec_body(const uint8_t *body, size_t body_len,
     return 0;
 }
 
+/* Phase 8 M3 — gate every chip-side crypto op on a fresh SW1 press
+ * when the global `touch_required` flag (UIF DO D6/D7/D8, aliased to a
+ * single byte in our impl) is non-zero.  Returns 0 if the gate passes
+ * (either disabled or user pressed within timeout); -1 on timeout /
+ * already-held / debouncer failure.  Spec OpenPGP card v3.4.1 §4.4.3.13
+ * allows the card to refuse the op with SW=6982 ("security status not
+ * satisfied") when the UIF check fails. */
+#define OPENPGP_TOUCH_TIMEOUT_MS  15000u
+static int require_touch_if_enabled(void)
+{
+    if (openpgp_state_touch_required_get() == 0u) {
+        return 0;
+    }
+    if (user_presence_check(OPENPGP_TOUCH_TIMEOUT_MS) != UP_OK) {
+        return -1;
+    }
+    return 0;
+}
+
 static int handle_pso(uint8_t p1, uint8_t p2,
                        const uint8_t *body, size_t body_len,
                        uint8_t *out, size_t out_max, size_t *out_len)
@@ -916,6 +936,9 @@ static int handle_pso(uint8_t p1, uint8_t p2,
         /* PW1.82 (decrypt/auth) must be session-verified.  M3 doesn't
          * distinguish PW1.81 vs PW1.82; accept any PW1 verified. */
         if (!pgp_pin_is_verified(OPENPGP_PIN_PW1)) {
+            return emit_sw(SW_SECURITY_NOT_SATISFIED, out, out_max, out_len);
+        }
+        if (require_touch_if_enabled() != 0) {
             return emit_sw(SW_SECURITY_NOT_SATISFIED, out, out_max, out_len);
         }
 
@@ -957,6 +980,9 @@ static int handle_pso(uint8_t p1, uint8_t p2,
      * verified flag, so we accept either 81 or 82.  Force_verify
      * semantics (consume after one sig) deferred to M6 polish. */
     if (!pgp_pin_is_verified(OPENPGP_PIN_PW1)) {
+        return emit_sw(SW_SECURITY_NOT_SATISFIED, out, out_max, out_len);
+    }
+    if (require_touch_if_enabled() != 0) {
         return emit_sw(SW_SECURITY_NOT_SATISFIED, out, out_max, out_len);
     }
 
@@ -1169,6 +1195,9 @@ int openpgp_applet_dispatch(const uint8_t *in, size_t in_len,
             return emit_sw(SW_INCORRECT_P1P2, out, out_max, out_len);
         }
         if (!pgp_pin_is_verified(OPENPGP_PIN_PW1)) {
+            return emit_sw(SW_SECURITY_NOT_SATISFIED, out, out_max, out_len);
+        }
+        if (require_touch_if_enabled() != 0) {
             return emit_sw(SW_SECURITY_NOT_SATISFIED, out, out_max, out_len);
         }
         if (body == NULL || body_len == 0u) {
