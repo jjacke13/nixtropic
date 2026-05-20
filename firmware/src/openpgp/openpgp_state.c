@@ -54,8 +54,17 @@
  * regenerate keys via `gpg --card-edit > admin > generate`.
  * FIDO credentials previously co-resident in slot 1 are also lost —
  * webauthn.io re-registration required. */
-static const uint8_t PGP_MAGIC[4]    = { 'P', 'G', '7', 'Q' };
-#define PGP_SCHEMA_VERSION  5u
+/* Bumped 'PG7Q' → 'PG7R' at Phase 8 follow-up (2026-05-20) — earlier
+ * PG7Q firmware (commit 264a192) bootstrapped slot 33 but didn't
+ * wipe the M&D state slots 50/51/52, leaving stale active state
+ * from the user's prior PIN.  Subsequent VERIFYs hit the
+ * M&D-active branch, mismatched against default PINs, and drained
+ * the retry counter to 0.  The fix in 6d7a4bf added the M&D wipe
+ * to the bootstrap path — but the bootstrap doesn't re-trigger
+ * once PG7Q magic is in place.  Schema bump forces re-bootstrap so
+ * the wipe runs and the user recovers. */
+static const uint8_t PGP_MAGIC[4]    = { 'P', 'G', '7', 'R' };
+#define PGP_SCHEMA_VERSION  6u
 
 /* pgp_state_present byte values (M3 — 3-state machine):
  *   0 = factory fresh (never bootstrapped) — next init auto-activates

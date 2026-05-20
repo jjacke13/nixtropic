@@ -2,13 +2,13 @@
  * OpenPGP applet state on TROPIC01 R-mem slot 33.  Persisted state
  * + accessors for the OpenPGP card surface.
  *
- * Slot 33 layout (256 B) — magic "PG7Q" / schema v5 (current after
+ * Slot 33 layout (256 B) — magic "PG7R" / schema v6 (current after
  * the Phase-8 R-mem collision fix moved this slot away from slot 1):
  *
  *   offset  size   field
  *   ------  ----   -----
- *      0      4    magic "PG7Q" (0x50,0x47,0x37,0x51)
- *      4      2    schema_version = 5
+ *      0      4    magic "PG7R" (0x50,0x47,0x37,0x52)
+ *      4      2    schema_version = 6
  *      6      1    pgp_state_present (1 once activated, 2 terminated)
  *      7      1    PW1 retry counter cache (0..3)
  *      8      1    PW3 retry counter cache (0..3)
@@ -37,7 +37,7 @@
  *                                                              ----
  *   total = 256 B (matches TROPIC01 default per-slot size)
  *
- * Magic bumps: PG7K → PG7L → PG7M → PG7N → PG7O → PG7P → PG7Q as schema evolves.  Magic
+ * Magic bumps: PG7K → PG7L → PG7M → PG7N → PG7O → PG7P → PG7Q → PG7R as schema evolves.  Magic
  * mismatch on read triggers a clean write of defaults
  * (write_activated_defaults), which is the user-visible side effect
  * of every M5/M6 upgrade.
@@ -212,7 +212,7 @@ int openpgp_state_pin_retries_set(int which, uint8_t v);
 
 /**
  * @brief Get/set the recorded length of a PIN (M6 audit H2 fix —
- *        schema v5 PG7Q).  Used by CHANGE REFERENCE DATA / RESET
+ *        schema v6 PG7R).  Used by CHANGE REFERENCE DATA / RESET
  *        RETRY COUNTER to split the APDU body at the canonical
  *        old/new boundary on a single verify attempt.
  *        Returns 0 OK, -1 bad index, -2 chip error.
