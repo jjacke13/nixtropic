@@ -114,7 +114,7 @@ about it.  No code change.
 
 ---
 
-## 2. M1 — `hidraw` udev rule for FIDO (BACKLOG §2.3)
+## 2. M1 — `hidraw` udev rule for FIDO (BACKLOG §2.2)
 
 **Tier**: tiny.  No firmware change.  ~10 LOC in `nixos/tropic.nix`.
 **Risk**: zero — udev rule is additive.
@@ -143,8 +143,10 @@ HID device reports `TAGS=...:uaccess:...`.
 
 ### Out-of-scope
 
-The Chromium/Brave detection issue (BACKLOG §2.2) is a *different*
-problem — it lives on the Chromium side, not in udev.  Defer.
+(none — Chromium/Brave previously suspected as broken was a
+host-side scdaemon-libusb claim wedge, not a Chromium FIDO HID
+detection bug; closed once `disable-ccid` + `pcsc-shared` landed in
+README §4.)
 
 ---
 
@@ -596,17 +598,7 @@ vectors pass.
 
 ---
 
-## 11. M10 — Chromium / Brave / Linux WebAuthn detection (BACKLOG §2.2)
-
-**Tier**: defer-to-upstream.  No firmware work.
-
-Status: report a Chromium bug with USB HID descriptor + GetInfo
-capture; await fix.  Document in WEBAUTHN-NOTES.md.  Firefox works
-fine, so this is genuinely lower priority.
-
----
-
-## 12. M11 — AID manufacturer ID (BACKLOG §4.2)
+## 11. M11 — AID manufacturer ID (BACKLOG §4.2)
 
 **Tier**: small.  No firmware work; upstream gnupg PR.
 
@@ -620,7 +612,7 @@ our brand identity in `gpg --card-status` and invalidates state.
 
 ---
 
-## 13. M12 — TROPIC01 TRNG SP 800-90B compliance (BACKLOG §5.3)
+## 12. M12 — TROPIC01 TRNG SP 800-90B compliance (BACKLOG §5.3)
 
 **Tier**: documentation + audit.
 
@@ -631,7 +623,7 @@ Required before any "production-grade" marketing.
 
 ---
 
-## 14. M13 — pid.codes VID:PID allocation + libccid PR (BACKLOG §5.2)
+## 13. M13 — pid.codes VID:PID allocation + libccid PR (BACKLOG §5.2)
 
 **Tier**: small + slow.
 
@@ -644,7 +636,7 @@ Once merged + released, drop the patch from `nixos/tropic.nix`.
 
 ---
 
-## 15. M14 — picocom termios hang on TinyUSB CDC (BACKLOG §6.1)
+## 14. M14 — picocom termios hang on TinyUSB CDC (BACKLOG §6.1)
 
 **Tier**: defer-to-upstream.  Workaround documented.
 
@@ -655,7 +647,7 @@ README.
 
 ---
 
-## 16. M15 — Validate-script reader substring (BACKLOG §6.2)
+## 15. M15 — Validate-script reader substring (BACKLOG §6.2)
 
 **Tier**: tiny.  ~20 LOC in `tools/validate-openpgp.sh`.
 
@@ -665,7 +657,7 @@ by friendly name).  Failover keeps current behaviour.
 
 ---
 
-## 17. M16 — Rust CLI (BACKLOG §5.4)
+## 16. M16 — Rust CLI (BACKLOG §5.4)
 
 **Tier**: out of scope for Phase 8.
 
@@ -680,7 +672,7 @@ Defer until Phase 9 or post-1.0.
 
 ---
 
-## 18. M17 — Nixpkgs upstreaming (BACKLOG §5.1)
+## 17. M17 — Nixpkgs upstreaming (BACKLOG §5.1)
 
 **Tier**: out of scope until items above are done.
 
@@ -693,7 +685,7 @@ When ready:
 
 ---
 
-## 19. Flash budget tracking
+## 18. Flash budget tracking
 
 Current `firmware.bin`: 217 128 B / 256 KB (82.81%).  ~38 KB headroom.
 
@@ -723,7 +715,7 @@ escape hatches in BACKLOG §7 apply:
 
 ---
 
-## 20. Cpp-reviewer audit gates
+## 19. Cpp-reviewer audit gates
 
 Every milestone that touches the OpenPGP / FIDO / PIN state machine
 ships AFTER a `cpp-reviewer` agent pass on the new code (per the
@@ -740,7 +732,7 @@ Pattern:
 
 ---
 
-## 21. Validation suite expansion
+## 20. Validation suite expansion
 
 Each milestone adds at least one non-interactive check to
 `tools/validate-fido.sh` or `tools/validate-openpgp.sh`.  Current
@@ -752,7 +744,7 @@ M&D wrong-PIN-counter behaviour).
 
 ---
 
-## 22. Ordering summary
+## 21. Ordering summary
 
 Concrete sequence to follow (after writing this plan, the order is
 locked unless we hit a blocker):
@@ -773,7 +765,6 @@ M9  PIN protocol v2        [large]
 ```
 
 Non-firmware items run in parallel:
-- M10 Chromium bug report (block: external).
 - M11 gnupg upstream PR.
 - M12 SP 800-90B documentation.
 - M13 pid.codes + libccid PR (block: external).
@@ -781,7 +772,7 @@ Non-firmware items run in parallel:
 
 ---
 
-## 23. Open questions
+## 22. Open questions
 
 1. Should PIV's PIN tie into the same M&D framework, or get its own
    isolated slots?  Current sketch in M8 says isolated; happy to

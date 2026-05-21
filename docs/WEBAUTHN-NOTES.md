@@ -106,8 +106,8 @@ Exhausts after ~136 years at 1 sig/sec continuous.
 | Browser / OS | Works? | Notes |
 |---|---|---|
 | Firefox / Linux | ✅ | Default WebAuthn UI.  Just works. |
-| Chrome / Linux | ⚠ | Greyed out in WebAuthn modal — tracked in `docs/BACKLOG.md §2.2`.  Suspected Chromium-side FIDO HID detection mismatch. |
-| Brave / Linux | ⚠ | Same as Chrome (Chromium-based). |
+| Brave / Linux | ✅ | Verified post-Phase-8 (register + authenticate on webauthn.io). |
+| Chrome / Linux | ✅ | Expected to work (Brave is Chromium-based and works); not independently re-verified. |
 | Safari / macOS | ? | Untested. |
 | Chrome / Windows | ? | Untested. |
 
@@ -140,7 +140,7 @@ sudo udevadm control --reload-rules
 sudo udevadm trigger --subsystem-match=hidraw
 ```
 
-Permanent fix tracked in `docs/BACKLOG.md §2.3`.
+Permanent fix landed in Phase 8 M1 (BACKLOG §2.2).
 
 ## RP debugging ladder
 

@@ -55,15 +55,7 @@ Landed in commit `bcff8fb`.  CTAP2 MakeCredential now parses incoming
 attestation extension map.  webauthn.io shows
 `device-bound credential of unknown discoverability` no more.
 
-### 2.2 Brave / Chromium / Linux WebAuthn detection
-
-Brave's WebAuthn modal greys out our device on Linux even though
-libfido2 + Firefox work fine.  Chromium does its own FIDO HID
-detection that differs from libfido2's.  See
-`docs/WEBAUTHN-NOTES.md §8`.  Likely needs a Chromium-side patch OR
-a HID descriptor tweak.  Lower priority since Firefox works.
-
-### 2.3 hidraw udev rule for FIDO — ✅ DONE (Phase 8 M1)
+### 2.2 hidraw udev rule for FIDO — ✅ DONE (Phase 8 M1)
 
 Landed in commit `bcff8fb`.  `nixos/tropic.nix` now installs a udev
 rule tagging `cafe:4001` with `ID_SECURITY_TOKEN=1` + group access
