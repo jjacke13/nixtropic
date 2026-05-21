@@ -4,7 +4,7 @@ Open-source firmware project turning the **Tropic Square TS1302 USB devkit** int
 
 > Yubikey-class hardware. Open silicon. Open SDK. Reproducible Nix builds. Daily-driver-tested.
 
-## NOTE: THIS IS *NOT* PRODUCTION READY YET. BASIC FUNCTIONALITY HAS BEEN TESTED OK
+## NOTE: THIS IS *NOT* PRODUCTION READY YET. FIDO2 & OPENPGP smart card FUNCTIONALITY HAVE BEEN TESTED OK
 ## BUGS MAY EXIST AND CODE NEEDS MORE AUDITING AND TESTS
 
 ## Flash the dongle (TL;DR)
@@ -21,7 +21,7 @@ Flashes the open firmware and runs the 22-check validation suite.  For the full 
 
 The full daily-driver feature set works end-to-end on real hardware:
 
-- 🔐 **FIDO2 / WebAuthn** — register + login via `webauthn.io` in Firefox; hardware PIN protection; user-presence button (SW1) gates every operation
+- 🔐 **FIDO2 / WebAuthn** — register + login via `webauthn.io`; hardware PIN protection; user-presence button (SW1) gates every operation
 - ✍️ **GPG signing** — `git commit -S` works; private key never leaves the TROPIC01 chip
 - 🔓 **GPG decryption** — `gpg --encrypt -r self … | gpg --decrypt` round-trip works
 - 🔑 **SSH via gpg-agent** — ssh to remote host with the authentication key only inside the chip
@@ -71,7 +71,7 @@ sudo nix run github:jjacke13/nixtropic#fw-update-chip
 
 ### 3. Enter DFU mode and flash the latest firmware
 
-Hold SW1 (the button on the back of the dongle) while plugging USB. The dongle enumerates as `STMicroelectronics STM Device in DFU Mode` (`0483:df11`).
+Hold SW1 (the button on the dongle) while plugging USB. The dongle enumerates as `STMicroelectronics STM Device in DFU Mode` (`0483:df11`).
 
 ```bash
 sudo nix run github:jjacke13/nixtropic#flash-and-validate
@@ -198,7 +198,6 @@ echo "secret" | gpg --encrypt -r self | gpg --decrypt
 # SSH via the dongle's auth key
 ssh-add -L                       # print the auth key
 # (add it to GitHub/GitLab/your server's authorized_keys)
-ssh -T git@github.com            # touch SW1 when prompted
 ```
 
 ## Demo recipes
