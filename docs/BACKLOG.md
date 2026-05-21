@@ -11,31 +11,14 @@ most items are independent.
 Real defense-in-depth wins deferred because the original threat model
 didn't make them blocking.
 
-### 1.1 M&D-backed PIN counters for OpenPGP PW1 / PW3 / RC
+### 1.1 M&D-backed PIN counters for OpenPGP PW1 / PW3 / RC — ✅ DONE (Phase 8 M4)
 
-OpenPGP currently ships software-only PIN retry counters (R-mem cache
-+ SHA-256 hash, decremented in firmware).  A firmware-reflash attacker
-can bypass the counter and brute-force PINs offline.
-
-Add MAC-and-Destroy-backed retries: wrong PIN attempts physically
-consume TROPIC01 chip slots; after N wrong attempts the slots are
-gone at the silicon level and PIN entry is permanently blocked until
-factory reset.
-
-**Implementation sketch (~600 LOC):**
-
-- Extract `pin_md_kernel` from existing `firmware/src/fido_hid/pin_md.c`.
-  Parameterize on (M&D slot base, ROUNDS, R-mem accessor callbacks).
-  Existing FIDO PIN scheme becomes a thin wrapper.
-- New `firmware/src/openpgp/openpgp_pin_md.c` with 3 PIN-specific
-  wrappers using M&D slots 8-16 (3 slots × 3 PINs).
-- New R-mem slot 2 schema for the M&D state (~390 B total).
-- Integrate into `pgp_pin.c`: VERIFY calls M&D first, then software
-  counter (M&D wins on lockout decision).
-- HW-in-the-loop validation: confirm wrong PINs consume chip slots.
-
-**Acceptance:** wrong PW3 nine times → all 9 chip slots gone → only
-TERMINATE+ACTIVATE+re-init recovers.
+Landed in commits leading up to `561e040` (schema PG7R).  `pin_md_kernel`
+extracted to `firmware/src/tropic/pin_md_kernel.{c,h}`; OpenPGP wrappers
+live in `firmware/src/openpgp/openpgp_pin_md.{c,h}` using M&D slots 8-16
+and R-mem slots 50/51/52 (per-PIN state).  `pgp_pin.c` VERIFY routes
+through M&D first.  Bootstrap path wipes M&D state on schema bump to
+avoid PIN brick.  Acceptance verified by `tools/validate-pin-md.sh`.
 
 ### 1.2 M&D-KEK wrap for X25519 dec priv key
 
@@ -44,14 +27,16 @@ The X25519 dec key for `gpg --decrypt` lives in R-mem slot 1 byte
 read it.  Wrap it with a PW1-derived KEK released only via M&D —
 mirrors Trezor's PIN-encrypted-seed design.
 
-**Implementation sketch (~200 LOC + shared M&D framework with §1.1):**
+**Implementation sketch (~200 LOC, reuses landed M&D framework):**
 
-- KEK = HMAC(PW1-hash, M&D-derived-secret)
+- KEK = HMAC(PW1-hash, M&D-derived-secret) — `pin_md_kernel` already
+  exposes the M&D-derived-secret hook needed for this.
 - Stored ciphertext = AES-GCM(dec_priv, KEK)
-- On `PSO:DEC`: verify PW1 (consumes M&D slot via §1.1), derive KEK,
-  decrypt priv, perform ECDH, zeroize all on return.
+- On `PSO:DEC`: verify PW1 (consumes M&D slot via §1.1's landed
+  wrappers), derive KEK, decrypt priv, perform ECDH, zeroize all on
+  return.
 
-Shares M&D framework with §1.1 — implement them together.
+§1.1's framework already landed in Phase 8 M4, so this is unblocked.
 
 ### 1.3 cpp-reviewer audit followups
 
@@ -63,11 +48,12 @@ STATUS.md entry) and address what still applies post-Phase-7.
 
 ## 2. WebAuthn / FIDO2 polish
 
-### 2.1 credProps extension (~30 LOC)
+### 2.1 credProps extension — ✅ DONE (Phase 8 M2)
 
-Fixes the "unknown discoverability" label in RP UIs (webauthn.io
-shows `device-bound credential of unknown discoverability`).  See
-`docs/WEBAUTHN-NOTES.md §5`.
+Landed in commit `bcff8fb`.  CTAP2 MakeCredential now parses incoming
+`extensions.credProps` request and emits the `rk` flag in the
+attestation extension map.  webauthn.io shows
+`device-bound credential of unknown discoverability` no more.
 
 ### 2.2 Brave / Chromium / Linux WebAuthn detection
 
@@ -77,11 +63,12 @@ detection that differs from libfido2's.  See
 `docs/WEBAUTHN-NOTES.md §8`.  Likely needs a Chromium-side patch OR
 a HID descriptor tweak.  Lower priority since Firefox works.
 
-### 2.3 hidraw udev rule for FIDO
+### 2.3 hidraw udev rule for FIDO — ✅ DONE (Phase 8 M1)
 
-Per `docs/WEBAUTHN-NOTES.md §7`: udev's auto-rule sometimes doesn't
-tag our FIDO HID interface with `security-device`.  Permanent fix =
-add the rule to `nixos/tropic.nix`.
+Landed in commit `bcff8fb`.  `nixos/tropic.nix` now installs a udev
+rule tagging `cafe:4001` with `ID_SECURITY_TOKEN=1` + group access
+to `plugdev`, so libfido2 / browsers see the dongle without a
+manual rule.
 
 ---
 
@@ -102,11 +89,16 @@ Microsoft) request `credProtect: 3` for high-value credentials.
 Scope-limited PIN tokens — token authorizes only specific operations
 (e.g. credential management read but not delete).  CTAP2.1 §6.5.5.7.
 
-### 3.4 OpenPGP per-slot touch policy
+### 3.4 OpenPGP touch policy — ✅ PARTIAL (Phase 8 M3, GLOBAL only)
 
-Yubikey-style: per-key "always require touch on sig", "always require
-touch on dec", "cached (1 touch per session)", "off".  Maps to OpenPGP
-DOs D6/D7/D8.
+Landed in commit `98486f4` + `bcff8fb`.  Global on/off touch toggle
+implemented and enforced in PSO:CDS, PSO:DEC, INTERNAL_AUTHENTICATE.
+Defaults to ON (user-presence required for every signing op).
+
+**Still TODO — per-slot policy + cached mode:** Yubikey-style
+per-key granularity (sig / dec / aut independent) and the "cached
+(1 touch per session)" mode.  Maps to OpenPGP DOs D6/D7/D8 properly.
+Current impl is one boolean for all 3 slots.
 
 ---
 
@@ -218,10 +210,14 @@ Detect opensc-tool version + fall back to substring when supported.
 
 ## 7. Performance / flash budget
 
-Current `firmware.bin` = 217096 B / 256 KB (82.81%).  ~40 KB headroom.
+Current `firmware.elf` text = 218856 B / 256 KB (83.5%) post-Phase-8
+(M&D PIN counters + global touch + credProps + udev rule landed).
+~37 KB headroom.
 
-§1.1 + §1.2 M&D additions: ~5-8 KB together (fits comfortably).
+§1.2 M&D-KEK wrap for X25519 dec priv key: ~3-5 KB (shares framework
+with the already-landed §1.1 wrappers).
 PIV applet (§4.4): ~15-25 KB (also fits).
+Attestation slot (§4.5): ~1 KB.
 
 If we exceed budget:
 
