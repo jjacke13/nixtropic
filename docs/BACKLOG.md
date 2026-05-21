@@ -146,6 +146,32 @@ Windows smartcard logon use cases.  `firmware/src/ccid/apdu_dispatch.c`
 is structured to accept a second applet — just needs AID-based
 routing wired in.
 
+### 4.5 OpenPGP attestation slot (Yubikey-compat)
+
+Yubikey 5.2.3+ adds a vendor extension: an extra "attestation" key
+slot beyond the standard 3 (sig/dec/aut).  Verified at runtime by
+`ykman openpgp keys attest <slot>` — the device signs a statement
+that the user-facing key was generated on-device (not imported), and
+the resulting X.509 attestation is rooted in a Yubico-issued CA cert.
+Useful for compliance scenarios that must distinguish HW-generated
+keys from imported ones.
+
+What it needs on our side:
+- One more TROPIC01 ECC slot (we have headroom — slot 28 or repurpose
+  one FIDO slot, since 29 FIDO creds is generous).
+- An on-device-burned attestation CA (Ed25519 key + cert), or
+  per-device unique attestation key signed at provisioning.
+- Vendor APDU INS 0xF1 (Yubikey-compat) returning the X.509 cert
+  chain.
+- `ykman` / `gpg --card-edit` interop testing.
+
+References:
+- https://developers.yubico.com/PGP/Attestation.html
+- Yubikey docs:
+  https://docs.yubico.com/hardware/yubikey/yk-tech-manual/yk5-apps.html
+
+Cost: ~1 KB flash + 1 ECC slot + one-time provisioning step.
+
 ---
 
 ## 5. Publishing / Nixpkgs upstreaming
