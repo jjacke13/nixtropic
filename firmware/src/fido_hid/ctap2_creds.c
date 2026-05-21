@@ -43,6 +43,7 @@
 
 #include "ctap2.h"
 #include "credstore.h"
+#include "slots.h"
 #include "cbor.h"
 #include "proto.h"
 #include "pin.h"
@@ -456,7 +457,14 @@ static int build_authdata(const uint8_t *rp_id_hash, uint8_t flags,
     be32_store(&out[off], sign_count); off += 4u;
 
     if (have_at) {
-        memcpy(&out[off], NIXTROPIC_AAGUID, 16); off += 16u;
+        /* AAGUID in MakeCredential authData MUST be 16 zero bytes when
+         * the attestation statement is self-attestation (no x5c chain)
+         * — CTAP2.1 §6.4.3 + WebAuthn L2 §8.2.  Strict RPs (e.g. Proton
+         * Account) reject a non-zero AAGUID with a self-attested
+         * statement.  Our `authenticatorGetInfo` still reports the
+         * branded NIXTROPIC_AAGUID for device identity; only the
+         * per-credential authData is zeroed here. */
+        memset(&out[off], 0, 16); off += 16u;
         out[off++] = (uint8_t)(cred_id_len >> 8);
         out[off++] = (uint8_t) cred_id_len;
         memcpy(&out[off], cred_id, cred_id_len); off += cred_id_len;
@@ -512,7 +520,12 @@ int ctap2_make_credential(const uint8_t *req, size_t req_len,
             resp[0] = CTAP2_ERR_PIN_AUTH_INVALID; return 1;
         }
         uv_flag = FLAG_UV;
-    } else if (pin_is_set()) {
+    } else if (pin_is_set() && slots_force_uv_get()) {
+        /* PIN is set AND Force-UV (alwaysUv) is on → RP must send a
+         * pinUvAuthParam.  When Force-UV is off we let RPs that
+         * request `userVerification: discouraged` (e.g. Proton 2FA
+         * flow) succeed with UP-only — UV bit stays 0.  CTAP2.1
+         * §6.1.4 step 5 (PUAT_REQUIRED only when alwaysUv true). */
         resp[0] = CTAP2_ERR_PIN_REQUIRED; return 1;
     }
 
@@ -616,20 +629,23 @@ int ctap2_make_credential(const uint8_t *req, size_t req_len,
         auth_data_len += (int) cbor_writer_len(&ew);
     }
 
-    /* Signature over authData || clientDataHash, signed by the fresh
-     * credential's own key (self-attestation packed format). */
-    uint8_t sig_input[sizeof auth_data + 32];
-    memcpy(sig_input, auth_data, (size_t) auth_data_len);
-    memcpy(&sig_input[auth_data_len], client_hash, 32);
-    uint8_t sig[CREDSTORE_SIG_LEN];
-    if (credstore_sign(handle, sig_input, (size_t) auth_data_len + 32u, sig) != 0) {
-        resp[0] = CTAP2_ERR_OTHER;
-        return 1;
-    }
     credstore_commit_signcount();
 
-    /* Build attestation response.
-     * { 1: "packed", 2: authData, 3: { alg: -8, sig: sig } } */
+    /* Build attestation response — "none" format.
+     *
+     * WebAuthn L2 §8.7: fmt = "none", attStmt = {} (empty map).
+     * Spec requires RPs requesting `attestation: "indirect"` or
+     * `"none"` to accept this.  Some strict RPs (Proton Account)
+     * reject Ed25519 self-attestation in "packed" form because their
+     * server library only verifies ES256 packed signatures.  Going
+     * "none" sidesteps the algorithm-coverage issue and is universally
+     * compatible.  We give up the cryptographic proof that the
+     * credential was created on a genuine nixtropic device — but our
+     * AAGUID is self-allocated anyway and not in FIDO MDS, so the
+     * attestation chain was unverifiable by RPs regardless.
+     *
+     * If we ever pursue FIDO certification, swap this back to "packed"
+     * with a real x5c chain rooted in a registered attestation CA. */
     if (resp_max < 1u) return -1;
     resp[0] = CTAP2_OK;
 
@@ -638,17 +654,13 @@ int ctap2_make_credential(const uint8_t *req, size_t req_len,
     cbor_write_map_header(&w, 3);
 
     cbor_write_uint(&w, 1);
-    cbor_write_text(&w, "packed");
+    cbor_write_text(&w, "none");
 
     cbor_write_uint(&w, 2);
     cbor_write_byte_string(&w, auth_data, (size_t) auth_data_len);
 
     cbor_write_uint(&w, 3);
-    cbor_write_map_header(&w, 2);
-    cbor_write_text(&w, "alg");
-    cbor_write_negint(&w, -8);
-    cbor_write_text(&w, "sig");
-    cbor_write_byte_string(&w, sig, CREDSTORE_SIG_LEN);
+    cbor_write_map_header(&w, 0);
 
     if (cbor_writer_error(&w)) {
         resp[0] = CTAP2_ERR_OTHER;
@@ -689,7 +701,12 @@ int ctap2_get_assertion(const uint8_t *req, size_t req_len,
             resp[0] = CTAP2_ERR_PIN_AUTH_INVALID; return 1;
         }
         uv_flag = FLAG_UV;
-    } else if (pin_is_set()) {
+    } else if (pin_is_set() && slots_force_uv_get()) {
+        /* PIN is set AND Force-UV (alwaysUv) is on → RP must send a
+         * pinUvAuthParam.  When Force-UV is off we let RPs that
+         * request `userVerification: discouraged` (e.g. Proton 2FA
+         * flow) succeed with UP-only — UV bit stays 0.  CTAP2.1
+         * §6.1.4 step 5 (PUAT_REQUIRED only when alwaysUv true). */
         resp[0] = CTAP2_ERR_PIN_REQUIRED; return 1;
     }
 
