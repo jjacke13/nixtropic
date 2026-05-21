@@ -226,9 +226,12 @@ void credstore_commit_signcount(void)
 
 int credstore_factory_reset(void)
 {
-    /* Erase all 32 ECC slots — best-effort. Empty slots return error
-     * but caller intent is "ensure this slot is empty". */
-    for (uint8_t i = 0; i < SLOTS_MAX; ++i) {
+    /* Erase FIDO-owned ECC slots only (0..FIDO_SLOTS_MAX-1).
+     * Slots FIDO_SLOTS_MAX..SLOTS_MAX-1 (29..31) belong to the OpenPGP
+     * applet (sig/dec/aut) — wiping them here would brick gpg --card-status
+     * after CTAP2 authenticatorReset.  Empty slots return error but
+     * caller intent is "ensure this slot is empty". */
+    for (uint8_t i = 0; i < FIDO_SLOTS_MAX; ++i) {
         (void) tropic_ecc_erase(i);
     }
     /* Reset signCount source to MAX. cpp-reviewer audit 2026-05-11 M2:
