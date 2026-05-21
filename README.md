@@ -81,6 +81,11 @@ The validation suite runs immediately after flash and confirms FIDO2 + OpenPGP c
 
 ### 4. Configure GnuPG for the OpenPGP card
 
+These settings apply to **every Linux distro** (NixOS, Ubuntu, Debian,
+Fedora, Arch, …) — the dongle is a composite USB device (CDC + lt-rpc
+HID + FIDO2 HID + CCID) and `scdaemon` must talk to its CCID interface
+via `pcscd`, never via its own internal CCID driver.
+
 ```
 # ~/.gnupg/scdaemon.conf  (create or edit)
 disable-ccid
@@ -98,6 +103,41 @@ Then reload:
 gpgconf --reload scdaemon
 gpg-connect-agent updatestartuptty /bye
 ```
+
+**Why both options are required:**
+
+`scdaemon` has two ways to reach a smart-card reader — its built-in
+CCID driver (libusb-direct) or the external `pcscd` service (libccid).
+
+- `disable-ccid` forces the second path.  Without it, scdaemon claims
+  the CCID USB interface itself via libusb.  As soon as the browser
+  uses the same composite device for FIDO2 / WebAuthn on the adjacent
+  HID interface, the in-kernel URB scheduler stalls scdaemon's libusb
+  session, the claim wedges, and `gpg --card-status` times out until
+  the dongle is physically replugged.  Going through `pcscd` isolates
+  the CCID USB session from FIDO2 HID activity.
+- `pcsc-shared` asks `pcscd` for a *shared* (not exclusive) PC/SC
+  context, so a second app — or a second `scdaemon` instance after a
+  `gpgconf --kill` — can re-attach without rebooting `pcscd`.
+
+**Non-NixOS hosts also need `libccid` to recognise `cafe:4001`.**
+The upstream `libccid` ships a hardcoded VID/PID allow-list and does
+not yet know the nixtropic dongle.  The NixOS module patches this
+automatically; on other distros, append the two lines below to
+`/usr/lib/pcsc/drivers/ifd-ccid.bundle/Contents/Info.plist` — once
+inside the `ifdVendorID` array and once inside the `ifdProductID`
+array, both in the matching position — and restart `pcscd`:
+
+```xml
+<string>0xCAFE</string>   <!-- in ifdVendorID  -->
+<string>0x4001</string>   <!-- in ifdProductID -->
+```
+
+Also add a corresponding `<string>nixtropic CCID Reader</string>`
+entry to the `ifdFriendlyName` array at the same index.  Without
+this patch `pcscd` enumerates the USB device but `libccid` silently
+refuses to drive it, and `gpg --card-status` returns
+`No such device`.
 
 ### 5. Smart-card session bring-up — the exact plug sequence
 
