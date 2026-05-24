@@ -269,10 +269,30 @@ The dongle:
 
 Pre-built firmware lands at ~82.8% of the STM32's 256 KB flash budget. Comfortable headroom for the items in [`docs/BACKLOG.md`](docs/BACKLOG.md) (M&D PIN counters for OpenPGP, PIV applet, etc.).
 
+## Windows compatibility
+
+Runtime use verified on Windows 11 (in a VirtualBox VM with USB passthrough). All four interfaces auto-bind to Windows' in-box class drivers — no third-party kernel driver install needed.
+
+- **FIDO2 / WebAuthn**: works in Brave (and Edge / Chrome / Firefox).  Tested register + login on `webauthn.io` with PIN prompt and SW1 touch.
+- **OpenPGP card**: works via [Gpg4win](https://gpg4win.org).  Kleopatra → "Manage Smart Cards" shows the dongle and its three slots (sig / dec / aut).
+
+  ![Kleopatra showing nixtropic dongle](docs/assets/kleopatra-windows.png)
+
+  Required config — create `%APPDATA%\gnupg\scdaemon.conf` with:
+  ```
+  disable-ccid
+  pcsc-shared
+  ```
+  Then **reboot** (a `gpgconf --kill scdaemon` was not sufficient in our test; reboot picked up the new settings cleanly).  After this `gpg --card-status` succeeds.
+
+- **DFU flashing on Windows is untested.**  Likely needs [Zadig](https://zadig.akeo.ie/) to bind `WinUSB` to the STM32 DFU device (`0483:df11`), then `dfu-util.exe`.  Or use STMicroelectronics' STM32CubeProgrammer (signed driver).  For now: flash from Linux, use the dongle from Windows.
+
+- **SSH via gpg-agent** is plausible (enable `enable-win32-openssh-support` in `gpg-agent.conf`, disable the built-in `ssh-agent` service) but not yet validated end-to-end in this repo.
+
 ## What this is NOT (yet)
 
 - **Not Yubikey-equivalent for every flow.** RSA is out of scope (ECC-only, see [`PROJECT.md §2 decision #11`](PROJECT.md)).
-- **Not on Windows / macOS.** Linux/NixOS first. Other platforms should work but haven't been validated.
+- **macOS untested.** Should mostly work via PCSC + Gpg4mac equivalents, but no validation runs yet.
 - **Not yet in nixpkgs.** Upstreaming tracked in [`docs/BACKLOG.md §5.1`](docs/BACKLOG.md).
 - **AAGUID is self-allocated** (`6e697874726f70696300000000000003` = ASCII `"nixtropic\x00\x00\x00\x00\x00\x00\x03"`). Not FIDO MDS registered ($25k/year not viable for an open-source project). RPs will display "unknown manufacturer" — this is by design. See [`docs/WEBAUTHN-NOTES.md §3`](docs/WEBAUTHN-NOTES.md).
 

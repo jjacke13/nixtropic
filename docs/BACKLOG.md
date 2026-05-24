@@ -198,6 +198,14 @@ Older `opensc-tool` versions don't support substring matching on
 `--reader nixtropic`; current scripts pin `--reader 0` to avoid this.
 Detect opensc-tool version + fall back to substring when supported.
 
+### 6.3 Windows compatibility pass
+
+Runtime use (FIDO2, OpenPGP, CDC) should auto-bind via in-box Win10/11
+class drivers.  Needs: scdaemon.conf docs (same `disable-ccid + pcsc-shared`
+as Linux, via Gpg4win), DFU flashing recipe (Zadig + dfu-util OR
+STM32CubeProgrammer), README "Windows setup" section, HW-in-the-loop
+verification on Win10 22H2 + Win11.  No firmware changes expected.
+
 ---
 
 ## 7. Performance / flash budget
