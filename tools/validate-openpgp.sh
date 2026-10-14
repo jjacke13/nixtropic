@@ -13,6 +13,11 @@
 #   - TERMINATE DF erases chip ECC slots 29 + 31
 #   - gpg --card-status interop sanity
 #
+# MUTATES the card (Phase 9 M0): generates sig/dec/aut keys (ECC 29/31,
+# R-mem 33), spends one PW3 retry on purpose (check 12, restored), then
+# TERMINATE + ACTIVATE: every OpenPGP key erased and the PINs back to the
+# factory defaults.  PINs come from tools/fixture.env (see lib-fixture.sh).
+#
 # Run AFTER `gpg-connect-agent "SCD RESTART" /bye` if testing right after
 # flash, so scdaemon's cache doesn't show stale state.
 #
@@ -29,11 +34,15 @@ echo "════════════════════════�
 
 overall_rc=0
 
-# Defaults — must match write_activated_defaults in openpgp_state.c.
-DEFAULT_PW1_HEX="31:32:33:34:35:36"        # "123456"
-DEFAULT_PW3_HEX="31:32:33:34:35:36:37:38"  # "12345678"
-DEFAULT_PW1_LEN=6
-DEFAULT_PW3_LEN=8
+# PINs come from the fixture (tools/fixture.env); the script never guesses.
+# Every failure stops the run at once, so a wrong fixture costs at most one
+# PIN retry instead of cascading through every later VERIFY.
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=lib-fixture.sh
+. "$SCRIPT_DIR/lib-fixture.sh"
+fixture_load
+PW1_HEX="$(pin_hex "$NIXTROPIC_PW1")";  PW1_LC="$(pin_lc "$NIXTROPIC_PW1")"
+PW3_HEX="$(pin_hex "$NIXTROPIC_PW3")";  PW3_LC="$(pin_lc "$NIXTROPIC_PW3")"
 
 SELECT_APDU="00:A4:04:00:06:D2:76:00:01:24:01"
 
@@ -75,7 +84,7 @@ if echo "$SELECT_OUT" | grep -E "^[[:space:]]*Received \(SW1=" | tail -1 | grep 
 else
   echo "  ✗ SELECT failed:"
   echo "$SELECT_OUT" | sed 's/^/      /'
-  overall_rc=5
+  exit 5
 fi
 
 # --- 3. GET DATA 4F (raw AID) ---
@@ -90,7 +99,7 @@ if echo "$AID_OUT" | grep -qiE "d2.{0,2}76.{0,2}00.{0,2}01.{0,2}24.{0,2}01.{0,2}
 else
   echo "  ✗ AID didn't match expected layout:"
   echo "$AID_OUT" | sed 's/^/      /'
-  overall_rc=6
+  exit 6
 fi
 
 # --- 4. GET DATA 6E (Application Related Data) ---
@@ -110,10 +119,12 @@ if echo "$ARD_OUT" | grep -qiE "SW1=0x90.{0,20}SW2=0x00" \
 else
   echo "  ✗ DO 6E failed:"
   echo "$ARD_OUT" | tail -20 | sed 's/^/      /'
-  overall_rc=7
+  exit 7
 fi
 
 # --- 5. GET DATA C4 (PW status) — 7 bytes ---
+# Also the PREFLIGHT: full retry counters before the first VERIFY.  If this
+# fails we stop here, before spending any PIN attempt.
 echo ""
 echo " 5/16  GET DATA C4 (PW status)..."
 PW_OUT=$(timeout 5 opensc-tool --reader 0 --card-driver default \
@@ -128,7 +139,7 @@ if echo "$PW_OUT" | grep -qiE "0[01].{0,2}40.{0,2}40.{0,2}40.{0,2}03.{0,2}00.{0,
 else
   echo "  ✗ PW status didn't match expected:"
   echo "$PW_OUT" | sed 's/^/      /'
-  overall_rc=8
+  exit 8
 fi
 
 # --- 6. VERIFY PW3 default ---
@@ -136,13 +147,13 @@ echo ""
 echo " 6/16  VERIFY PW3 default '12345678'..."
 V3_OUT=$(timeout 5 opensc-tool --reader 0 --card-driver default \
   --send-apdu "$SELECT_APDU" \
-  --send-apdu "00:20:00:83:08:$DEFAULT_PW3_HEX" 2>&1 | tail -3 || true)
+  --send-apdu "00:20:00:83:$PW3_LC:$PW3_HEX" 2>&1 | tail -3 || true)
 if echo "$V3_OUT" | grep -E "^[[:space:]]*Received \(SW1=" | tail -1 | grep -qiE "SW1=0x90.{0,20}SW2=0x00"; then
   echo "  ✓ VERIFY PW3 → SW=9000"
 else
   echo "  ✗ VERIFY PW3 failed:"
   echo "$V3_OUT" | sed 's/^/      /'
-  overall_rc=9
+  exit 9
 fi
 
 # --- 7. GENERATE sig key ---
@@ -150,14 +161,14 @@ echo ""
 echo " 7/16  GENERATE sig key (Ed25519 chip slot 29)..."
 GEN_SIG_OUT=$(timeout 15 opensc-tool --reader 0 --card-driver default \
   --send-apdu "$SELECT_APDU" \
-  --send-apdu "00:20:00:83:08:$DEFAULT_PW3_HEX" \
+  --send-apdu "00:20:00:83:$PW3_LC:$PW3_HEX" \
   --send-apdu "00:47:80:00:02:B6:00:00" 2>&1 | tail -10 || true)
 if echo "$GEN_SIG_OUT" | grep -qiE "7f.{0,4}49.{0,4}22.{0,4}86.{0,4}20"; then
   echo "  ✓ GENERATE sig returned pubkey TLV"
 else
   echo "  ✗ GENERATE sig failed:"
   echo "$GEN_SIG_OUT" | sed 's/^/      /'
-  overall_rc=10
+  exit 10
 fi
 
 # --- 8. PSO:CDS sign ---
@@ -168,14 +179,14 @@ for _ in $(seq 1 64); do MSG="${MSG}AA:"; done
 MSG="${MSG%:}"
 SIGN_OUT=$(timeout 10 opensc-tool --reader 0 --card-driver default \
   --send-apdu "$SELECT_APDU" \
-  --send-apdu "00:20:00:81:06:$DEFAULT_PW1_HEX" \
+  --send-apdu "00:20:00:81:$PW1_LC:$PW1_HEX" \
   --send-apdu "00:2A:9E:9A:40:${MSG}:00" 2>&1 | tail -10 || true)
 if echo "$SIGN_OUT" | grep -E "^[[:space:]]*Received \(SW1=" | tail -1 | grep -qiE "SW1=0x90.{0,20}SW2=0x00"; then
   echo "  ✓ PSO:CDS produced signature + SW=9000"
 else
   echo "  ✗ PSO:CDS failed:"
   echo "$SIGN_OUT" | sed 's/^/      /'
-  overall_rc=11
+  exit 11
 fi
 
 # --- 9. GENERATE dec key (X25519 host-side, M5) ---
@@ -183,14 +194,14 @@ echo ""
 echo " 9/16  GENERATE dec key (X25519, R-mem byte 180-211)..."
 GEN_DEC_OUT=$(timeout 15 opensc-tool --reader 0 --card-driver default \
   --send-apdu "$SELECT_APDU" \
-  --send-apdu "00:20:00:83:08:$DEFAULT_PW3_HEX" \
+  --send-apdu "00:20:00:83:$PW3_LC:$PW3_HEX" \
   --send-apdu "00:47:80:00:02:B8:00:00" 2>&1 | tail -10 || true)
 if echo "$GEN_DEC_OUT" | grep -qiE "7f.{0,4}49.{0,4}22.{0,4}86.{0,4}20"; then
   echo "  ✓ GENERATE dec returned pubkey TLV"
 else
   echo "  ✗ GENERATE dec failed:"
   echo "$GEN_DEC_OUT" | sed 's/^/      /'
-  overall_rc=12
+  exit 12
 fi
 
 # --- 10. GENERATE aut key ---
@@ -198,14 +209,14 @@ echo ""
 echo "10/16  GENERATE aut key (Ed25519 chip slot 31)..."
 GEN_AUT_OUT=$(timeout 15 opensc-tool --reader 0 --card-driver default \
   --send-apdu "$SELECT_APDU" \
-  --send-apdu "00:20:00:83:08:$DEFAULT_PW3_HEX" \
+  --send-apdu "00:20:00:83:$PW3_LC:$PW3_HEX" \
   --send-apdu "00:47:80:00:02:A4:00:00" 2>&1 | tail -10 || true)
 if echo "$GEN_AUT_OUT" | grep -qiE "7f.{0,4}49.{0,4}22.{0,4}86.{0,4}20"; then
   echo "  ✓ GENERATE aut returned pubkey TLV"
 else
   echo "  ✗ GENERATE aut failed:"
   echo "$GEN_AUT_OUT" | sed 's/^/      /'
-  overall_rc=13
+  exit 13
 fi
 
 # --- 11. INTERNAL AUTHENTICATE — sign 32-byte challenge ---
@@ -216,14 +227,14 @@ for _ in $(seq 1 32); do CHAL="${CHAL}55:"; done
 CHAL="${CHAL%:}"
 INTAUT_OUT=$(timeout 10 opensc-tool --reader 0 --card-driver default \
   --send-apdu "$SELECT_APDU" \
-  --send-apdu "00:20:00:81:06:$DEFAULT_PW1_HEX" \
+  --send-apdu "00:20:00:81:$PW1_LC:$PW1_HEX" \
   --send-apdu "00:88:00:00:20:${CHAL}:00" 2>&1 | tail -10 || true)
 if echo "$INTAUT_OUT" | grep -E "^[[:space:]]*Received \(SW1=" | tail -1 | grep -qiE "SW1=0x90.{0,20}SW2=0x00"; then
   echo "  ✓ INTERNAL AUTHENTICATE produced signature + SW=9000"
 else
   echo "  ✗ INTERNAL AUTHENTICATE failed:"
   echo "$INTAUT_OUT" | sed 's/^/      /'
-  overall_rc=14
+  exit 14
 fi
 
 # --- 12. CHANGE REF PW3 wrong old should consume exactly ONE retry ---
@@ -248,30 +259,30 @@ if echo "$WRONG_CHANGE_OUT" | grep -E "^[[:space:]]*Received \(SW1=" | tail -1 |
 elif echo "$WRONG_CHANGE_OUT" | grep -E "^[[:space:]]*Received \(SW1=" | tail -1 | grep -qiE "SW1=0x63.{0,20}SW2=0xc0|SW1=0x69.{0,20}SW2=0x83"; then
   echo "  ✗ CHANGE REF wrong-old consumed >1 retry — split-search loop still active:"
   echo "$WRONG_CHANGE_OUT" | sed 's/^/      /'
-  overall_rc=15
+  exit 15
 else
   echo "  ✗ CHANGE REF returned unexpected SW:"
   echo "$WRONG_CHANGE_OUT" | sed 's/^/      /'
-  overall_rc=15
+  exit 15
 fi
 
 # Re-verify PW3 with correct default to reset counter for downstream tests.
 timeout 5 opensc-tool --reader 0 --card-driver default \
   --send-apdu "$SELECT_APDU" \
-  --send-apdu "00:20:00:83:08:$DEFAULT_PW3_HEX" >/dev/null 2>&1 || true
+  --send-apdu "00:20:00:83:$PW3_LC:$PW3_HEX" >/dev/null 2>&1 || true
 
 # --- 13. VERIFY PW1 default still works after counter recovery ---
 echo ""
 echo "13/16  VERIFY PW1 default (post-recovery sanity)..."
 V1_OUT=$(timeout 5 opensc-tool --reader 0 --card-driver default \
   --send-apdu "$SELECT_APDU" \
-  --send-apdu "00:20:00:81:06:$DEFAULT_PW1_HEX" 2>&1 | tail -3 || true)
+  --send-apdu "00:20:00:81:$PW1_LC:$PW1_HEX" 2>&1 | tail -3 || true)
 if echo "$V1_OUT" | grep -E "^[[:space:]]*Received \(SW1=" | tail -1 | grep -qiE "SW1=0x90.{0,20}SW2=0x00"; then
   echo "  ✓ VERIFY PW1 → SW=9000"
 else
   echo "  ✗ VERIFY PW1 failed:"
   echo "$V1_OUT" | sed 's/^/      /'
-  overall_rc=16
+  exit 16
 fi
 
 # --- 14. TERMINATE erases chip ECC slots ---
@@ -281,14 +292,14 @@ echo ""
 echo "14/16  TERMINATE wipes chip ECC slots 29 + 31..."
 TERM_OUT=$(timeout 10 opensc-tool --reader 0 --card-driver default \
   --send-apdu "$SELECT_APDU" \
-  --send-apdu "00:20:00:83:08:$DEFAULT_PW3_HEX" \
+  --send-apdu "00:20:00:83:$PW3_LC:$PW3_HEX" \
   --send-apdu "00:E6:00:00:00" 2>&1 | tail -3 || true)
 if echo "$TERM_OUT" | grep -E "^[[:space:]]*Received \(SW1=" | tail -1 | grep -qiE "SW1=0x90.{0,20}SW2=0x00"; then
   echo "  ✓ TERMINATE → SW=9000"
 else
   echo "  ✗ TERMINATE failed:"
   echo "$TERM_OUT" | sed 's/^/      /'
-  overall_rc=17
+  exit 17
 fi
 
 # --- 15. ACTIVATE FILE → re-init ---
@@ -302,7 +313,7 @@ if echo "$ACT_OUT" | grep -E "^[[:space:]]*Received \(SW1=" | tail -1 | grep -qi
 else
   echo "  ✗ ACTIVATE failed:"
   echo "$ACT_OUT" | sed 's/^/      /'
-  overall_rc=18
+  exit 18
 fi
 
 # --- 16. Confirmation — READ sig pubkey after TERMINATE+ACTIVATE
@@ -317,11 +328,11 @@ if echo "$READ_AFTER_TERM" | grep -E "^[[:space:]]*Received \(SW1=" | tail -1 | 
 elif echo "$READ_AFTER_TERM" | grep -qiE "7f.{0,4}49.{0,4}22.{0,4}86.{0,4}20"; then
   echo "  ✗ READ sig pubkey STILL returns a key — TERMINATE didn't erase chip slot 29:"
   echo "$READ_AFTER_TERM" | sed 's/^/      /'
-  overall_rc=19
+  exit 19
 else
   echo "  ✗ READ sig pubkey returned unexpected SW:"
   echo "$READ_AFTER_TERM" | sed 's/^/      /'
-  overall_rc=19
+  exit 19
 fi
 
 echo ""
@@ -335,6 +346,9 @@ if [ $overall_rc -eq 0 ]; then
   echo "  - VERIFY PW1/PW3 + CHANGE REFERENCE DATA (single-attempt boundary)"
   echo "  - GENERATE sig/dec/aut + PSO:CDS + INTERNAL AUTHENTICATE"
   echo "  - TERMINATE DF erases chip ECC slots; ACTIVATE FILE re-inits"
+  echo ""
+  echo "The card is now TERMINATEd + ACTIVATEd: no keys, factory PINs"
+  echo "(123456 / 12345678).  Set tools/fixture.env back to those if it differed."
   echo ""
   echo "For gpg-side end-to-end (post-flash):"
   echo "  See README §5 — gpgconf --kill scdaemon + gpg --card-status"

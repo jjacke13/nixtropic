@@ -3,7 +3,7 @@
 # actually consumes chip slots and locks the dongle after the
 # configured number of wrong attempts (default 3).
 #
-# Phase 8 M4.F.
+# Phase 8 M4.F; Phase 9 M0: fixture PINs + establish the M&D binding first.
 #
 # WHY THIS LIVES OUTSIDE validate-openpgp.sh
 # ===========================================
@@ -13,10 +13,17 @@
 # `gpg --card-edit > admin > generate` to bind keys before any
 # real cryptographic operations work again.
 #
-# Required env (override per run as needed):
+# MUTATES the card: PW1 changed to NIXTROPIC_PW1_MD_TEST (this sets up its
+# M&D binding: M&D slots re-initialised, R-mem state rewritten), one correct
+# VERIFY, three wrong VERIFYs (three M&D slots destroyed, PW1 locked), then
+# PW3 VERIFY + TERMINATE + ACTIVATE (all OpenPGP keys erased, factory PINs).
 #
-#   PW3_GOOD   default 12345678  — admin PIN, must be correct
-#   PW1_WRONG  default wrongPin99 — what we feed as wrong attempts
+# PINs come from tools/fixture.env (see tools/fixture.env.example); the
+# script never guesses one.  Why the PIN change first: on a fresh card PW1
+# has no M&D binding yet and the software counter answers instead, so the
+# lockout below would prove nothing about the chip.  The firmware does not
+# report which path answered (until Phase 9 M4 removes the software path),
+# so binding first is the only way to know the chip counter is the one tested.
 #
 # Run with:
 #
@@ -36,15 +43,21 @@ MAC-and-Destroy hardware retry counter.  After running, you must
 re-init with `gpg --card-edit > admin > passwd > generate`.
 
 If you accept that and want to proceed, re-run with:
-
     bash tools/validate-pin-md.sh --destroy-my-pin
-
 EOF
   exit 2
 fi
 
-PW3_GOOD="${PW3_GOOD:-12345678}"
-PW1_WRONG="${PW1_WRONG:-wrongPin99}"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=lib-fixture.sh
+. "$SCRIPT_DIR/lib-fixture.sh"
+fixture_load
+if [ -z "${NIXTROPIC_PW1_MD_TEST:-}" ]; then
+  echo "✗ fixture: NIXTROPIC_PW1_MD_TEST is required by this script" >&2
+  exit 2
+fi
+# A wrong PIN that cannot collide with any fixture PIN.
+PW1_WRONG="wrong-${NIXTROPIC_PW1_MD_TEST}-x"
 
 red()   { printf '\033[31m%s\033[0m\n' "$*"; }
 green() { printf '\033[32m%s\033[0m\n' "$*"; }
@@ -59,37 +72,61 @@ if ! lsusb | grep -q "cafe:4001"; then
   red "✗ cafe:4001 not on USB.  Plug the open firmware dongle first."
   exit 1
 fi
-
 gpgconf --kill scdaemon >/dev/null 2>&1 || true
 sleep 1
-
 if ! gpg --card-status >/dev/null 2>&1; then
   red "✗ gpg --card-status failed.  Check README §5 bring-up sequence."
   exit 1
 fi
 green "✓ Dongle visible to gpg-agent"
 
-# Helper: send a VERIFY-PW1 APDU directly and capture SW.
-# We hand-craft so we don't depend on gpg's PIN cache / pinentry.
-verify_pw1() {
-  local pin="$1"
-  local hex="$(printf '%s' "$pin" | od -An -tx1 | tr -d ' \n')"
-  local len="$(printf '%02x' $((${#hex} / 2)))"
-  gpg-connect-agent --hex \
-    "SCD APDU 00 20 00 81 ${len} ${hex}" /bye 2>&1 \
+# Send one APDU through scdaemon (no gpg PIN cache / pinentry involved)
+# and print its status word.
+apdu_sw() {
+  gpg-connect-agent --hex "SCD APDU $*" /bye 2>&1 \
     | grep -oE '[0-9A-F]{4}' | tail -1
 }
+verify_pw1() { apdu_sw "00 20 00 81 $(pin_lc "$1") $(pin_hex "$1" '')"; }
+verify_pw3() { apdu_sw "00 20 00 83 $(pin_lc "$1") $(pin_hex "$1" '')"; }
 
-# Pre-fly: confirm PW1 retry counter is 3 (fresh state).
-PRE_RETRY="$(gpg --card-status 2>&1 | sed -nE 's/^PIN retry counter +\.+: +([0-9]).*$/\1/p' | head -1)"
-echo "  PW1 retry counter before test: ${PRE_RETRY}"
-if [ "${PRE_RETRY}" != "3" ]; then
-  red "✗ PW1 counter not at 3.  Run gpg --card-edit > admin > verify"
-  red "  to recover before running this destructive test."
+# "PIN retry counter : 3 0 3" → PW1 and PW3 counters.  Read-only.
+retries() {
+  gpg --card-status 2>&1 | sed -nE 's/^PIN retry counter +\.*: +([0-9]+) +([0-9]+) +([0-9]+).*$/\1 \3/p' | head -1
+}
+
+# Preflight: both counters full before ANY PIN use.
+read -r PRE_PW1 PRE_PW3 <<<"$(retries)"
+echo "  retry counters before test: PW1=${PRE_PW1:-?} PW3=${PRE_PW3:-?}"
+if [ "${PRE_PW1:-}" != "3" ] || [ "${PRE_PW3:-}" != "3" ]; then
+  red "✗ Counters not at 3.  Recover with gpg --card-edit first; this"
+  red "  script will not spend attempts on a card in an unknown state."
   exit 1
 fi
 
-# Feed 3 wrong PINs.
+# Step 1: bind PW1 to M&D by changing it (fixture PW1 → MD test PIN).
+blue "── bind PW1 to M&D: CHANGE REFERENCE DATA PW1 ──"
+OLD_HEX="$(pin_hex "$NIXTROPIC_PW1" '')"
+NEW_HEX="$(pin_hex "$NIXTROPIC_PW1_MD_TEST" '')"
+LC="$(printf '%02X' $(( (${#OLD_HEX} + ${#NEW_HEX}) / 2 )))"
+SW="$(apdu_sw "00 24 00 81 ${LC} ${OLD_HEX}${NEW_HEX}")"
+echo "  SW = ${SW}"
+if [ "${SW}" != "9000" ]; then
+  red "  ✗ PIN change failed — is NIXTROPIC_PW1 in tools/fixture.env right?"
+  red "    Stopped after one attempt."
+  exit 1
+fi
+green "  ✓ PW1 changed; M&D binding set up"
+
+# Step 2: the bound PIN verifies (spends one M&D slot, then re-inits all).
+blue "── correct VERIFY on the bound PIN ──"
+SW="$(verify_pw1 "${NIXTROPIC_PW1_MD_TEST}")"
+echo "  SW = ${SW}"
+if [ "${SW}" != "9000" ]; then
+  red "  ✗ correct PIN refused after binding — bug"; exit 1
+fi
+green "  ✓ bound PIN verifies"
+
+# Step 3: three wrong PINs.
 for i in 1 2 3; do
   blue "── wrong attempt ${i}/3 ──"
   SW="$(verify_pw1 "${PW1_WRONG}")"
@@ -127,22 +164,13 @@ esac
 
 blue "── recover via TERMINATE+ACTIVATE ──"
 # Verify PW3 first (TERMINATE requires PW3 verified).
-HEX_PW3="$(printf '%s' "${PW3_GOOD}" | od -An -tx1 | tr -d ' \n')"
-LEN_PW3="$(printf '%02x' $((${#HEX_PW3} / 2)))"
-SW_PW3="$(gpg-connect-agent --hex \
-  "SCD APDU 00 20 00 83 ${LEN_PW3} ${HEX_PW3}" /bye 2>&1 \
-  | grep -oE '[0-9A-F]{4}' | tail -1)"
-
+SW_PW3="$(verify_pw3 "${NIXTROPIC_PW3}")"
 if [ "${SW_PW3}" != "9000" ]; then
-  red "  ✗ PW3 verify failed (SW=${SW_PW3}).  Set PW3_GOOD env."
+  red "  ✗ PW3 verify failed (SW=${SW_PW3}).  Is NIXTROPIC_PW3 in the fixture right?"
   exit 1
 fi
-
-SW_TERM="$(gpg-connect-agent --hex "SCD APDU 00 E6 00 00" /bye 2>&1 \
-  | grep -oE '[0-9A-F]{4}' | tail -1)"
-SW_ACT="$(gpg-connect-agent --hex "SCD APDU 00 44 00 00" /bye 2>&1 \
-  | grep -oE '[0-9A-F]{4}' | tail -1)"
-
+SW_TERM="$(apdu_sw "00 E6 00 00")"
+SW_ACT="$(apdu_sw "00 44 00 00")"
 if [ "${SW_TERM}" = "9000" ] && [ "${SW_ACT}" = "9000" ]; then
   green "  ✓ TERMINATE + ACTIVATE round-trip cleared the lockout"
 else
@@ -154,7 +182,8 @@ blue "════════════════════════�
 green "  ✓ M&D PIN retry counter validates: 3-wrong locks, T+A recovers"
 blue "═══════════════════════════════════════════════════════════════"
 echo
-echo "Now run to restore keys:"
+echo "The card is at factory defaults now (PINs 123456 / 12345678, no keys)."
+echo "Set tools/fixture.env back to those if it differed.  To use the card:"
 echo "    gpg --card-edit"
 echo "    > admin"
 echo "    > passwd"
