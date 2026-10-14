@@ -34,6 +34,7 @@ stdenv.mkDerivation {
     done
 
     $CC $STRICT $SAN $INC tests/host/test_cbor.c firmware/src/fido_hid/cbor.c -o test_cbor
+    $CC $STRICT $SAN $INC tests/host/test_l3_result.c -o test_l3_result
     $CC $STRICT $SAN $INC tests/host/test_pin_md_kernel.c tests/host/mock_tropic.c \
       firmware/src/tropic/pin_md_kernel.c hmac.o sha2.o memzero.o -o test_pin_md_kernel
     runHook postBuild
@@ -43,6 +44,7 @@ stdenv.mkDerivation {
   checkPhase = ''
     runHook preCheck
     ./test_cbor
+    ./test_l3_result
     ./test_pin_md_kernel
     bash tests/host/test-dfu-flash.sh
     bash tests/host/test-lib-fixture.sh

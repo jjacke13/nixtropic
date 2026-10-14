@@ -141,7 +141,10 @@ static int oppgp_state_set(void *ctx,
     if (tag) memcpy(&buf[OFF_TAG], tag, PIN_MD_KERNEL_TAG_LEN);
     if (ci)  memcpy(&buf[OFF_CI],  ci,  OPENPGP_PIN_MD_CI_LEN);
 
-    (void) tropic_rmem_erase(slot);
+    if (tropic_rmem_erase(slot) != 0) {
+        memzero(buf, sizeof buf);
+        return -1;
+    }
     int rc = tropic_rmem_write(slot, buf, RMEM_PRIMARY_SIZE);
     memzero(buf, sizeof buf);
     return (rc == 0) ? 0 : -1;

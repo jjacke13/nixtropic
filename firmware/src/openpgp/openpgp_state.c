@@ -160,7 +160,9 @@ static int read_payload(uint8_t out[OPENPGP_RMEM_PRIMARY_SIZE])
  * buffer; we erase + write. */
 static int write_payload(const uint8_t buf[OPENPGP_RMEM_PRIMARY_SIZE])
 {
-    (void) tropic_rmem_erase(OPENPGP_RMEM_PRIMARY_SLOT);
+    if (tropic_rmem_erase(OPENPGP_RMEM_PRIMARY_SLOT) != 0) {
+        return -1;
+    }
     return tropic_rmem_write(OPENPGP_RMEM_PRIMARY_SLOT, buf,
                              OPENPGP_RMEM_PRIMARY_SIZE);
 }

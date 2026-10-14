@@ -155,8 +155,13 @@ int credstore_erase_slot(int slot_idx)
     }
     s_credstore_mutating = 1;
     /* ECC slot first (destroys the chip-side private key), then R-mem
-     * metadata + bitmap clear (via slots_erase). */
-    (void) tropic_ecc_erase((uint8_t) slot_idx);
+     * metadata + bitmap clear (via slots_erase).  If the key erase fails
+     * the credential stays registered and usable, and the caller sees the
+     * error (Phase 9 M2). */
+    if (tropic_ecc_erase((uint8_t) slot_idx) != 0) {
+        s_credstore_mutating = 0;
+        return -2;
+    }
     int rc = slots_erase(slot_idx);
     s_credstore_mutating = 0;
     return (rc == 0) ? 0 : -2;
@@ -229,10 +234,12 @@ int credstore_factory_reset(void)
     /* Erase FIDO-owned ECC slots only (0..FIDO_SLOTS_MAX-1).
      * Slots FIDO_SLOTS_MAX..SLOTS_MAX-1 (29..31) belong to the OpenPGP
      * applet (sig/dec/aut) — wiping them here would brick gpg --card-status
-     * after CTAP2 authenticatorReset.  Empty slots return error but
-     * caller intent is "ensure this slot is empty". */
+     * after CTAP2 authenticatorReset.  The chip answers OK for an empty
+     * slot; keep going past a real failure, report it at the end
+     * (Phase 9 M2). */
+    int erase_failed = 0;
     for (uint8_t i = 0; i < FIDO_SLOTS_MAX; ++i) {
-        (void) tropic_ecc_erase(i);
+        if (tropic_ecc_erase(i) != 0) erase_failed = 1;
     }
     /* Reset signCount source to MAX. cpp-reviewer audit 2026-05-11 M2:
      * without this, a post-reset credential registers with a non-zero
@@ -245,5 +252,5 @@ int credstore_factory_reset(void)
     int rc = slots_factory_reset();
     /* Force re-init on next credstore use so we re-detect mcounter etc. */
     s_initted = 0;
-    return rc;
+    return (rc == 0 && !erase_failed) ? 0 : -1;
 }

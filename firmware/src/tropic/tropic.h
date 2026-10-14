@@ -72,8 +72,11 @@ int tropic_chip_id_read(uint8_t *out, size_t out_size);
 /**
  * @brief Lazily open the L3 secure session (idempotent).
  *
- * First call: reads cert store, extracts STPUB, calls lt_session_start
- * with default sh0_prod0 pairing keys. Subsequent calls: no-op.
+ * If libtropic reports no open session: reads cert store, extracts
+ * STPUB, calls lt_session_start with default sh0_prod0 pairing keys.
+ * Otherwise a no-op.  Every L3 wrapper ends the session on an error
+ * that does not prove the chip answered (l3_result.h), so the next
+ * call lands here and re-handshakes (Phase 9 M2).
  *
  * @return 0 on success; negative libtropic error on failure.
  */
@@ -88,19 +91,21 @@ int tropic_ecc_generate(uint8_t slot, uint8_t curve);
 
 /**
  * @brief Read the ECC public key from a slot.
- * @return number of pubkey bytes (32 for Ed25519, 64 for P-256), or negative.
+ * @return number of pubkey bytes (32 for Ed25519, 64 for P-256), or negative
+ *         (also when the key does not fit in out_size: never truncated).
  */
 int tropic_ecc_pubkey_read(uint8_t slot, uint8_t *out, size_t out_size);
 
 /**
  * @brief Sign a message with the Ed25519 key in `slot`. Always returns 64 B sig.
+ *        msg_len above the chip maximum (4096 B) is refused, never truncated.
  */
 int tropic_ecc_eddsa_sign(uint8_t slot, const uint8_t *msg, size_t msg_len,
                           uint8_t *sig, size_t sig_size);
 
 /**
- * @brief Erase the key in the given ECC slot (returns OK whether or not the
- *        slot was occupied).
+ * @brief Erase the key in the given ECC slot.  The chip answers OK for an
+ *        empty slot too, so a non-zero return is a real failure.
  */
 int tropic_ecc_erase(uint8_t slot);
 
@@ -167,8 +172,8 @@ int tropic_rmem_write(uint16_t slot, const uint8_t *data, size_t len);
 int tropic_rmem_read(uint16_t slot, uint8_t *out, size_t max, size_t *actual);
 
 /**
- * @brief Erase a single R-mem slot. Returns OK whether or not the slot
- *        was previously populated.
+ * @brief Erase a single R-mem slot.  The chip answers OK for an empty
+ *        slot too, so a non-zero return is a real failure.
  */
 int tropic_rmem_erase(uint16_t slot);
 

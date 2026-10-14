@@ -22,12 +22,14 @@
 #include <string.h>
 
 #include "tropic.h"
+#include "l3_result.h"
 #include "platform/board.h"
 
 #include "stm32u5xx_hal.h"
 
 #include "libtropic.h"
 #include "libtropic_common.h"   /* enum CONFIGURATION_OBJECTS_REGS for R-config */
+#include "lt_l3_api_structs.h"  /* TR01_L3_EDDSA_SIGN_CMD_MSG_LEN_MAX */
 #include "libtropic_port_stm32u5xx.h"
 
 /* M4: trezor_crypto CAL provides AES-GCM/SHA256/HMAC/X25519 for L3. */
@@ -42,7 +44,28 @@ static lt_dev_stm32u5xx_t      s_device;
 static lt_handle_t             s_handle;
 /* M4: crypto context (~1.4 KB) wired into the handle BEFORE lt_init. */
 static lt_ctx_trezor_crypto_t  s_crypto_ctx;
-static bool                    s_session_open = false;
+/* lt_init succeeded.  The session state itself is libtropic's own
+ * s_handle.l3.session_status (Phase 9 M2), not a copy kept here. */
+static bool                    s_lt_ready = false;
+
+/* Every L3 wrapper returns through here (Phase 9 M2, plan guard rails 4
+ * and 5).  A result that does not prove the chip answered inside the
+ * session ends the session on the host side, so the next call
+ * re-handshakes instead of failing until a replug (see l3_result.h).
+ * lt_session_abort clears the host state before it sends the wire abort,
+ * so the session is off even if that send fails.  The caller always gets
+ * the ORIGINAL error, and nothing is retried: after an ambiguous failure
+ * the command may or may not have run on the chip. */
+static void drop_session(lt_ret_t r)
+{
+    printf("[tropic] L3 error %d: session dropped, next call re-handshakes\n", (int) r);
+    (void) lt_session_abort(&s_handle);
+}
+
+static int l3_done(lt_ret_t r)
+{
+    return l3_result_finish(r, drop_session);
+}
 
 /* ----- Helpers ----- */
 
@@ -129,6 +152,7 @@ int tropic_init(void)
         return 2;
     }
 
+    s_lt_ready = true;
     printf("[tropic] lt_init OK (TROPIC01 powered + L1 link up)\n");
     return 0;
 }
@@ -142,7 +166,10 @@ static uint8_t s_stpub[TR01_STPUB_LEN];
 
 int tropic_l3_session_ensure(void)
 {
-    if (s_session_open) {
+    if (!s_lt_ready) {
+        return -1;   /* lt_init failed at boot: no usable handle */
+    }
+    if (s_handle.l3.session_status == LT_SECURE_SESSION_ON) {
         return 0;
     }
 
@@ -178,7 +205,6 @@ int tropic_l3_session_ensure(void)
         printf("[tropic] lt_session_start failed: %d\n", (int) r);
         return -(int) r;
     }
-    s_session_open = true;
     printf("[tropic] L3 session OPEN\n");
     return 0;
 }
@@ -189,7 +215,7 @@ int tropic_ecc_generate(uint8_t slot, uint8_t curve)
     lt_ecc_curve_type_t c = (curve == 0) ? TR01_CURVE_ED25519 : TR01_CURVE_P256;
     lt_ret_t r = lt_ecc_key_generate(&s_handle, (lt_ecc_slot_t)(TR01_ECC_SLOT_0 + slot), c);
     if (r != LT_OK) {
-        return -(int) r;
+        return l3_done(r);
     }
     return 0;
 }
@@ -207,12 +233,12 @@ int tropic_ecc_pubkey_read(uint8_t slot, uint8_t *out, size_t out_size)
                                  pubkey, (uint8_t) sizeof pubkey,
                                  &curve, &origin);
     if (r != LT_OK) {
-        return -(int) r;
+        return l3_done(r);
     }
-    /* Ed25519 pubkey = 32 bytes; P-256 = 64 bytes uncompressed. M4 only
-     * exercises Ed25519, so cap at 32 bytes for now. */
+    /* Ed25519 pubkey = 32 bytes; P-256 = 64 bytes uncompressed.  A key
+     * that does not fit is an error, never a silent truncation. */
     size_t n = (curve == TR01_CURVE_ED25519) ? 32u : 64u;
-    if (n > out_size) n = out_size;
+    if (n > out_size) return -1;
     memcpy(out, pubkey, n);
     return (int) n;
 }
@@ -264,23 +290,25 @@ int tropic_ecc_store(uint8_t slot, uint8_t curve, const uint8_t key[32])
     lt_ret_t r = lt_ecc_key_store(&s_handle,
                                    (lt_ecc_slot_t)(TR01_ECC_SLOT_0 + slot),
                                    c, key);
-    return (r == LT_OK) ? 0 : -(int) r;
+    return l3_done(r);
 }
 
 int tropic_ecc_erase(uint8_t slot)
 {
     if (tropic_l3_session_ensure() != 0) return -1;
     lt_ret_t r = lt_ecc_key_erase(&s_handle, (lt_ecc_slot_t)(TR01_ECC_SLOT_0 + slot));
-    /* Empty slot returns an error too; treat both as success because the
-     * caller's intent is "make sure this slot is empty". */
-    (void) r;
-    return 0;
+    /* The chip answers OK for an empty slot too (app v2.0.0
+     * main/ts_l3.c:387-402), so any error is a real failure. */
+    return l3_done(r);
 }
 
 int tropic_ecc_eddsa_sign(uint8_t slot, const uint8_t *msg, size_t msg_len,
                           uint8_t *sig, size_t sig_size)
 {
     if (sig == NULL || sig_size < 64u) return -1;
+    /* Check the full size_t length before the uint16_t narrowing below:
+     * 65536 + n would otherwise sign only the first n bytes. */
+    if (msg == NULL || msg_len > TR01_L3_EDDSA_SIGN_CMD_MSG_LEN_MAX) return -1;
     if (tropic_l3_session_ensure() != 0) return -1;
 
     uint8_t sig_buf[64];
@@ -289,7 +317,7 @@ int tropic_ecc_eddsa_sign(uint8_t slot, const uint8_t *msg, size_t msg_len,
                                    msg, (uint16_t) msg_len,
                                    sig_buf);
     if (r != LT_OK) {
-        return -(int) r;
+        return l3_done(r);
     }
     memcpy(sig, sig_buf, 64);
     return 64;
@@ -305,7 +333,7 @@ int tropic_rmem_write(uint16_t slot, const uint8_t *data, size_t len)
     if (data == NULL || len == 0u || len > UINT16_MAX) return -1;
     if (tropic_l3_session_ensure() != 0) return -1;
     lt_ret_t r = lt_r_mem_data_write(&s_handle, slot, data, (uint16_t) len);
-    return (r == LT_OK) ? 0 : -(int) r;
+    return l3_done(r);
 }
 
 int tropic_rmem_read(uint16_t slot, uint8_t *out, size_t max, size_t *actual)
@@ -314,7 +342,7 @@ int tropic_rmem_read(uint16_t slot, uint8_t *out, size_t max, size_t *actual)
     if (tropic_l3_session_ensure() != 0) return -1;
     uint16_t got = 0;
     lt_ret_t r = lt_r_mem_data_read(&s_handle, slot, out, (uint16_t) max, &got);
-    if (r != LT_OK) return -(int) r;
+    if (r != LT_OK) return l3_done(r);
     if (actual) *actual = (size_t) got;
     return 0;
 }
@@ -323,10 +351,9 @@ int tropic_rmem_erase(uint16_t slot)
 {
     if (tropic_l3_session_ensure() != 0) return -1;
     lt_ret_t r = lt_r_mem_data_erase(&s_handle, slot);
-    /* Already-empty slot returns an error per libtropic; caller's intent
-     * is "make this slot empty", so coerce both outcomes to success. */
-    (void) r;
-    return 0;
+    /* The chip answers OK for an empty slot too (app v2.0.0
+     * main/ts_l3.c:274-287), so any error is a real failure. */
+    return l3_done(r);
 }
 
 int tropic_random(uint8_t *out, size_t len)
@@ -334,7 +361,7 @@ int tropic_random(uint8_t *out, size_t len)
     if (out == NULL || len == 0u || len > 255u) return -1;
     if (tropic_l3_session_ensure() != 0) return -1;
     lt_ret_t r = lt_random_value_get(&s_handle, out, (uint16_t) len);
-    return (r == LT_OK) ? 0 : -(int) r;
+    return l3_done(r);
 }
 
 /* ----- Monotonic counter wrappers (Phase 5 M2) ----- */
@@ -345,7 +372,7 @@ int tropic_mcounter_init(uint8_t idx, uint32_t value)
     if (tropic_l3_session_ensure() != 0) return -1;
     lt_ret_t r = lt_mcounter_init(&s_handle,
                                   (enum lt_mcounter_index_t) idx, value);
-    return (r == LT_OK) ? 0 : -(int) r;
+    return l3_done(r);
 }
 
 int tropic_mcounter_update(uint8_t idx)
@@ -354,7 +381,7 @@ int tropic_mcounter_update(uint8_t idx)
     if (tropic_l3_session_ensure() != 0) return -1;
     lt_ret_t r = lt_mcounter_update(&s_handle,
                                     (enum lt_mcounter_index_t) idx);
-    return (r == LT_OK) ? 0 : -(int) r;
+    return l3_done(r);
 }
 
 int tropic_mcounter_get(uint8_t idx, uint32_t *out_value)
@@ -363,7 +390,7 @@ int tropic_mcounter_get(uint8_t idx, uint32_t *out_value)
     if (tropic_l3_session_ensure() != 0) return -1;
     lt_ret_t r = lt_mcounter_get(&s_handle,
                                  (enum lt_mcounter_index_t) idx, out_value);
-    return (r == LT_OK) ? 0 : -(int) r;
+    return l3_done(r);
 }
 
 int tropic_mac_and_destroy(uint8_t idx, const uint8_t *data_out, uint8_t *data_in)
@@ -373,7 +400,7 @@ int tropic_mac_and_destroy(uint8_t idx, const uint8_t *data_out, uint8_t *data_i
     lt_ret_t r = lt_mac_and_destroy(&s_handle,
                                     (lt_mac_and_destroy_slot_t) idx,
                                     data_out, data_in);
-    return (r == LT_OK) ? 0 : -(int) r;
+    return l3_done(r);
 }
 
 /* ----- L2 sweep ----- */

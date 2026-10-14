@@ -176,7 +176,9 @@ static int write_global(uint32_t bitmap)
     buf[GLOBAL_FORCE_UV_OFF] = (s_force_uv != 0u) ? 1u : 0u;
 
     /* Erase before write — R-mem slots are write-once until erased. */
-    (void) tropic_rmem_erase(SLOTS_RMEM_GLOBAL_SLOT);
+    if (tropic_rmem_erase(SLOTS_RMEM_GLOBAL_SLOT) != 0) {
+        return -1;
+    }
     return tropic_rmem_write(SLOTS_RMEM_GLOBAL_SLOT, buf, sizeof buf);
 }
 
@@ -298,7 +300,9 @@ static int write_cred(int slot_idx,
     }
 
     uint16_t rs = SLOTS_RMEM_SLOT_FOR(slot_idx);
-    (void) tropic_rmem_erase(rs);
+    if (tropic_rmem_erase(rs) != 0) {
+        return -1;
+    }
     return tropic_rmem_write(rs, buf, sizeof buf);
 }
 
@@ -547,9 +551,13 @@ int slots_erase(int slot_idx)
         }
         s_bitmap = new_bitmap;
     }
-    /* Best-effort R-mem erase. Already-empty returns an error per
-     * libtropic; tolerate. */
-    (void) tropic_rmem_erase(SLOTS_RMEM_SLOT_FOR(slot_idx));
+    /* The bitmap commit above already deleted the credential.  An erase
+     * failure here leaves its metadata in R-mem until the slot is reused
+     * (write_cred erases first): report it (Phase 9 M2).  The chip
+     * answers OK for an already-empty slot. */
+    if (tropic_rmem_erase(SLOTS_RMEM_SLOT_FOR(slot_idx)) != 0) {
+        return -2;
+    }
     return 0;
 }
 
@@ -591,9 +599,11 @@ int slots_factory_reset(void)
     if (tropic_l3_session_ensure() != 0) {
         return -1;
     }
-    /* Erase all per-credential R-mem (1..32). */
+    /* Erase all per-credential R-mem (1..32).  Keep going past a failure
+     * so as much as possible is wiped, then report it (Phase 9 M2). */
+    int erase_failed = 0;
     for (uint16_t i = 1u; i <= SLOTS_MAX; ++i) {
-        (void) tropic_rmem_erase(i);
+        if (tropic_rmem_erase(i) != 0) erase_failed = 1;
     }
     /* Reset cached PIN + M&D + Force-UV state to defaults BEFORE
      * write_global so the persisted layout reflects "no PIN, no M&D,
@@ -616,7 +626,7 @@ int slots_factory_reset(void)
     }
     s_bitmap = 0;
     s_initted = 1;
-    return 0;
+    return erase_failed ? -1 : 0;
 }
 
 /* ===== M&D accessors (Phase 5 M4) ===== */

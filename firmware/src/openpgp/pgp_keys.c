@@ -22,7 +22,7 @@
  * this via SW so we can see what libtropic actually complains about.
  * Will get tidied to a proper return-channel after we know the bug. */
 int pgp_keys_last_chip_rc = 0;
-int pgp_keys_last_chip_stage = 0;  /* 1=generate, 2=pubkey_read */
+int pgp_keys_last_chip_stage = 0;  /* 1=generate, 2=pubkey_read, 3=erase, 6=dec_priv store */
 
 int pgp_keys_generate_sig(uint8_t pubkey_out[PGP_KEYS_PUBKEY_LEN])
 {
@@ -38,11 +38,16 @@ int pgp_keys_generate_sig(uint8_t pubkey_out[PGP_KEYS_PUBKEY_LEN])
      * secure element — same model Phase 5 FIDO uses. */
 
     /* Erase any existing key first.  lt_ecc_key_generate doesn't auto-
-     * overwrite; libtropic wrapper coerces "already empty" to success
-     * so calling unconditionally is safe. */
-    (void) tropic_ecc_erase(PGP_KEYS_SIG_SLOT);
+     * overwrite; the chip answers OK for an already-empty slot, so an
+     * erase error is a real failure (Phase 9 M2). */
+    int rc = tropic_ecc_erase(PGP_KEYS_SIG_SLOT);
+    if (rc != 0) {
+        pgp_keys_last_chip_rc = rc;
+        pgp_keys_last_chip_stage = 3;  /* erase */
+        return PGP_KEYS_CHIP_ERR;
+    }
 
-    int rc = tropic_ecc_generate(PGP_KEYS_SIG_SLOT, CURVE_ED25519);
+    rc = tropic_ecc_generate(PGP_KEYS_SIG_SLOT, CURVE_ED25519);
     if (rc != 0) {
         pgp_keys_last_chip_rc = rc;
         pgp_keys_last_chip_stage = 1;  /* generate */
@@ -195,8 +200,13 @@ int pgp_keys_erase_dec(void)
 int pgp_keys_generate_aut(uint8_t pubkey_out[PGP_KEYS_PUBKEY_LEN])
 {
     if (pubkey_out == NULL) return PGP_KEYS_BAD_PARAM;
-    (void) tropic_ecc_erase(PGP_KEYS_AUT_SLOT);
-    int rc = tropic_ecc_generate(PGP_KEYS_AUT_SLOT, CURVE_ED25519);
+    int rc = tropic_ecc_erase(PGP_KEYS_AUT_SLOT);
+    if (rc != 0) {
+        pgp_keys_last_chip_rc = rc;
+        pgp_keys_last_chip_stage = 3;  /* erase */
+        return PGP_KEYS_CHIP_ERR;
+    }
+    rc = tropic_ecc_generate(PGP_KEYS_AUT_SLOT, CURVE_ED25519);
     if (rc != 0) {
         pgp_keys_last_chip_rc = rc;
         pgp_keys_last_chip_stage = 1;
