@@ -177,12 +177,25 @@ foreach(src ${LT_CAL_SOURCES} ${TREZOR_CRYPTO_SOURCES})
   endif()
 endforeach()
 
-# ----- TinyUSB sources (CDC subset) -----
+# ----- Release / debug build (Phase 9 M1) -----
+# Release (default): the USB device exposes only HID-FIDO2 and CCID-OpenPGP.
+# Debug: adds the CDC console + SPI passthrough and the lt-rpc vendor HID
+# interface.  Their code is not compiled into a release build at all.
+option(NIXTROPIC_DEBUG "Debug build: CDC console + lt-rpc HID interface" OFF)
+if(NIXTROPIC_DEBUG)
+  set(NIXTROPIC_DEBUG_VALUE 1)
+else()
+  set(NIXTROPIC_DEBUG_VALUE 0)
+endif()
+message(STATUS "nixtropic: NIXTROPIC_DEBUG=${NIXTROPIC_DEBUG_VALUE}")
+
+# ----- TinyUSB sources -----
 # Only the files we actually use:
 #   tusb.c            — top-level dispatcher
 #   tusb_fifo.c       — common FIFO util (used by CDC class for tx/rx buffers)
 #   usbd.c, usbd_control.c — TinyUSB device stack
-#   cdc_device.c      — CDC class driver
+#   hid_device.c      — HID class driver (FIDO2; + lt-rpc in debug)
+#   cdc_device.c      — CDC class driver (debug only)
 #   dcd_stm32_fsdev.c — STM32 PMA-based FS device controller (U535's USB DRD)
 # We deliberately do NOT include dcd_dwc2.c — U535 has no OTG controller.
 set(TINYUSB_SOURCES
@@ -190,10 +203,12 @@ set(TINYUSB_SOURCES
     ${TINYUSB_SRC}/src/common/tusb_fifo.c
     ${TINYUSB_SRC}/src/device/usbd.c
     ${TINYUSB_SRC}/src/device/usbd_control.c
-    ${TINYUSB_SRC}/src/class/cdc/cdc_device.c
     ${TINYUSB_SRC}/src/class/hid/hid_device.c
     ${TINYUSB_SRC}/src/portable/st/stm32_fsdev/dcd_stm32_fsdev.c
 )
+if(NIXTROPIC_DEBUG)
+  list(APPEND TINYUSB_SOURCES ${TINYUSB_SRC}/src/class/cdc/cdc_device.c)
+endif()
 
 foreach(src ${TINYUSB_SOURCES})
   if(NOT EXISTS "${src}")
@@ -220,12 +235,6 @@ set(APP_SOURCES
     src/openpgp/pgp_pin.c
     src/openpgp/pgp_keys.c
     src/openpgp/openpgp_pin_md.c
-    src/cdc_protocol/protocol.c
-    src/cdc_protocol/parser.c
-    src/cdc_protocol/hex.c
-    src/cdc_protocol/cmd.c
-    src/hid_rpc/rpc.c
-    src/hid_rpc/rpc_cmds.c
     src/fido_hid/ctaphid.c
     src/fido_hid/cbor.c
     src/fido_hid/ctap2.c
@@ -248,10 +257,23 @@ set(APP_SOURCES
     ${TREZOR_CRYPTO_SOURCES}
 )
 
+# Debug-only interfaces: CDC console + SPI passthrough, lt-rpc vendor HID.
+if(NIXTROPIC_DEBUG)
+  list(APPEND APP_SOURCES
+      src/cdc_protocol/protocol.c
+      src/cdc_protocol/parser.c
+      src/cdc_protocol/hex.c
+      src/cdc_protocol/cmd.c
+      src/hid_rpc/rpc.c
+      src/hid_rpc/rpc_cmds.c
+  )
+endif()
+
 add_executable(${FIRMWARE_ELF} ${APP_SOURCES})
 
 target_compile_definitions(${FIRMWARE_ELF} PRIVATE
     USE_HAL_DRIVER
+    NIXTROPIC_DEBUG=${NIXTROPIC_DEBUG_VALUE}  # always 0 or 1; code uses #if
     CFG_TUSB_MCU=OPT_MCU_STM32U5
     ACAB                        # libtropic: TROPIC01 silicon revision (user's chip)
     LT_LOG_ENABLE_ERROR=1

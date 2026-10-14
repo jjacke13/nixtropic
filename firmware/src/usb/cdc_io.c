@@ -12,12 +12,26 @@
  * FIFO fills, excess bytes are silently dropped. For console use
  * during bring-up that's fine; we'd revisit if we ever need lossless
  * logging.
+ *
+ * Release build (no CDC interface): _write accepts and discards every
+ * byte, so printf is a no-op and never blocks.
  */
 
 #include <unistd.h>
 #include <sys/types.h>
 
 #include "tusb.h"
+
+#if !NIXTROPIC_DEBUG
+
+ssize_t _write(int fd, const void *buf, size_t count)
+{
+    (void) fd;
+    (void) buf;
+    return (ssize_t) count;
+}
+
+#else
 
 ssize_t _write(int fd, const void *buf, size_t count)
 {
@@ -76,3 +90,5 @@ ssize_t _write(int fd, const void *buf, size_t count)
 
     return (ssize_t) consumed;
 }
+
+#endif /* NIXTROPIC_DEBUG */

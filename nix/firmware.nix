@@ -8,6 +8,9 @@
 , cmsisDeviceU5Src
 , stm32u5xxHalDriverSrc
 , tinyusbSrc
+  # Phase 9 M1: false = release (HID-FIDO2 + CCID only), true = debug
+  # (adds the CDC console + SPI passthrough and the lt-rpc vendor HID).
+, debugInterfaces ? false
 }:
 
 # nixtropic open firmware build — STM32U535 bare-metal.
@@ -22,7 +25,7 @@
 # "I forgot to wire one up" failure mode.
 
 stdenvNoCC.mkDerivation {
-  pname = "nixtropic-firmware";
+  pname = "nixtropic-firmware" + lib.optionalString debugInterfaces "-debug";
   version = "0.3.0";
 
   src = ../firmware;
@@ -45,6 +48,7 @@ stdenvNoCC.mkDerivation {
     "-DCMSIS_DEVICE_U5_SRC=${cmsisDeviceU5Src}"
     "-DSTM32U5XX_HAL_DRIVER_SRC=${stm32u5xxHalDriverSrc}"
     "-DTINYUSB_SRC=${tinyusbSrc}"
+    "-DNIXTROPIC_DEBUG=${if debugInterfaces then "ON" else "OFF"}"
     "-GNinja"
   ];
 
@@ -63,11 +67,11 @@ stdenvNoCC.mkDerivation {
   meta = with lib; {
     description = "Custom STM32U535 firmware exposing TS1302 as a FIDO2 + OpenPGP USB security key";
     longDescription = ''
-      Composite USB device (CDC + HID×2 + CCID) on the Tropic Square
-      TS1302 dongle.  FIDO2 / WebAuthn over CTAPHID + OpenPGP card over
-      USB CCID + lt-rpc vendor HID + CDC console.  All cryptographic
-      operations route through the TROPIC01 secure element via libtropic
-      L3 sessions.
+      Composite USB device on the Tropic Square TS1302 dongle: FIDO2 /
+      WebAuthn over CTAPHID + OpenPGP card over USB CCID.  The debug
+      build (debugInterfaces = true) adds the lt-rpc vendor HID and the
+      CDC console + SPI passthrough.  All cryptographic operations route
+      through the TROPIC01 secure element via libtropic L3 sessions.
     '';
     platforms = platforms.linux;
     license = licenses.mit;

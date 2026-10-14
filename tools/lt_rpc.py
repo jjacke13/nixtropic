@@ -83,7 +83,9 @@ def find_path() -> bytes:
     for d in hid.enumerate(VID, PID):
         if d.get("interface_number", -1) == 2:
             return d["path"]
-    raise LtRpcError(f"no HID device {VID:04x}:{PID:04x} interface 2 found — is firmware flashed?")
+    raise LtRpcError(
+        f"no lt-rpc HID interface ({VID:04x}:{PID:04x} interface 2).  lt-rpc "
+        f"exists only in the debug firmware: nix run .#flash-open-debug")
 
 
 class LtRpc:

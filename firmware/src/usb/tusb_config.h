@@ -1,6 +1,7 @@
 /*
  * TinyUSB user configuration for nixtropic — composite device:
- * CDC-ACM + HID×2 (lt-rpc + FIDO) + CCID smart card.
+ *   release: HID (FIDO) + CCID smart card
+ *   debug (NIXTROPIC_DEBUG=1): CDC-ACM + HID×2 (lt-rpc + FIDO) + CCID
  *
  * CFG_TUSB_MCU = OPT_MCU_STM32U5 is set in the CMake toolchain (drives
  * fsdev_stm32.h's U5 register-name remapping).  We use the **fsdev**
@@ -14,6 +15,12 @@
 
 #ifndef NIXTROPIC_TUSB_CONFIG_H
 #define NIXTROPIC_TUSB_CONFIG_H
+
+/* Set by CMake to 0 or 1 (option NIXTROPIC_DEBUG).  Every file that talks
+ * to TinyUSB includes this header, so a build that forgot it stops here. */
+#ifndef NIXTROPIC_DEBUG
+#error "NIXTROPIC_DEBUG must be defined to 0 (release) or 1 (debug)"
+#endif
 
 #ifdef __cplusplus
 extern "C" {
@@ -40,9 +47,14 @@ extern "C" {
 #define CFG_TUD_ENDPOINT0_SIZE      64
 
 /* Class enable flags */
+#if NIXTROPIC_DEBUG
 #define CFG_TUD_CDC                 1
+#define CFG_TUD_HID                 2   /* instance 0 = lt-rpc, instance 1 = FIDO2 */
+#else
+#define CFG_TUD_CDC                 0
+#define CFG_TUD_HID                 1   /* instance 0 = FIDO2 */
+#endif
 #define CFG_TUD_MSC                 0
-#define CFG_TUD_HID                 2   /* Phase 4: instance 0 = lt-rpc, instance 1 = FIDO2 */
 #define CFG_TUD_MIDI                0
 #define CFG_TUD_VENDOR              0
 #define CFG_TUD_VIDEO               0

@@ -1,4 +1,4 @@
-{ pkgs, stockFirmware, openFirmware ? null, libtropicUtil ? null, fwUpdateChip ? null }:
+{ pkgs, stockFirmware, openFirmware ? null, openFirmwareDebug ? null, libtropicUtil ? null, fwUpdateChip ? null }:
 
 # Backwards-compat alias used by internal references.
 let firmware = openFirmware; in
@@ -7,10 +7,12 @@ let firmware = openFirmware; in
 #
 # All apps in this file are thin wrappers around `dfu-util`, `lt-util`,
 # `opensc-tool`, `fido2-token`, and the validate scripts under tools/.
-# Apps that flash the dongle (flash-stock, flash-open, flash-and-validate,
-# fw-update-chip) only write to the STM32U535 (firmware app slot
-# 0x08000000) — never directly to the TROPIC01 chip's R-config or other
-# brick-vulnerable surfaces.
+# Apps that flash the dongle (flash-stock, flash-open[-debug],
+# flash-and-validate) only write to the STM32U535 (firmware app slot
+# 0x08000000) — never to the TROPIC01 chip.  The exception is
+# fw-update-chip: it rewrites the TROPIC01's own firmware (one-way —
+# anti-downgrade), so Phase 9 does not run it (PHASE-9-PLAN.md §0
+# rule 1).
 
 let
   inherit (pkgs) writeShellApplication dfu-util usbutils coreutils gnugrep;
@@ -66,23 +68,24 @@ let
     '';
   };
 
-  flash-open =
-    if firmware == null then
+  # flash-open (release) and flash-open-debug: same steps, different image.
+  mkFlashOpen = fw: name: label:
+    if fw == null then
       writeShellApplication {
-        name = "nixtropic-flash-open-placeholder";
+        inherit name;
         text = ''echo "Custom firmware not built in this flake."; exit 1'';
       }
     else
       writeShellApplication {
-        name = "nixtropic-flash-open";
+        inherit name;
         runtimeInputs = [ dfu-util usbutils ];
         text = ''
           set -euo pipefail
 
-          FW_BIN="${firmware}/firmware.bin"
+          FW_BIN="${fw}/firmware.bin"
 
           echo "═══════════════════════════════════════════════════════════════"
-          echo "  Flashing nixtropic open firmware"
+          echo "  Flashing nixtropic open firmware (${label})"
           echo "═══════════════════════════════════════════════════════════════"
           echo ""
           echo "Firmware: $FW_BIN"
@@ -102,6 +105,11 @@ let
           echo "  Run \`nix run .#validate\` to confirm both surfaces work."
         '';
       };
+
+  flash-open = mkFlashOpen firmware "nixtropic-flash-open"
+    "release: HID-FIDO2 + CCID";
+  flash-open-debug = mkFlashOpen openFirmwareDebug "nixtropic-flash-open-debug"
+    "debug: + CDC console + lt-rpc HID";
 
   # ===== Diagnostic + identity =====
 
@@ -175,7 +183,11 @@ let
 
       if lsusb | grep -q "cafe:4001"; then
         echo "✓ Dongle in APP MODE — nixtropic open firmware (cafe:4001)"
-        echo "  Composite device: CDC + HID×2 (lt-rpc + FIDO) + CCID"
+        if lsusb -d cafe:4001 -v 2>/dev/null | grep -q "nixtropic debug"; then
+          echo "  DEBUG build: CDC + HID×2 (lt-rpc + FIDO) + CCID"
+        else
+          echo "  Release build: HID (FIDO) + CCID"
+        fi
         echo "  Run: nix run .#validate    # full FIDO + OpenPGP sanity"
       elif lsusb | grep -q "0483:5740"; then
         echo "✓ Dongle in APP MODE — stock firmware (0483:5740)"
@@ -357,12 +369,14 @@ in
 
   flash-open = {
     type = "app";
-    program =
-      if firmware == null then
-        "${flash-open}/bin/nixtropic-flash-open-placeholder"
-      else
-        "${flash-open}/bin/nixtropic-flash-open";
-    meta.description = "DFU-flash the nixtropic open firmware";
+    program = pkgs.lib.getExe flash-open;
+    meta.description = "DFU-flash the nixtropic open firmware (release: HID-FIDO2 + CCID)";
+  };
+
+  flash-open-debug = {
+    type = "app";
+    program = pkgs.lib.getExe flash-open-debug;
+    meta.description = "DFU-flash the debug firmware (adds CDC console + lt-rpc HID)";
   };
 
   flash-and-validate = {

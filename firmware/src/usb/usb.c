@@ -22,8 +22,10 @@
 #include "usb_ccid.h"
 #include "platform/board.h"
 #include "fido_hid/ctaphid.h"
-#include "hid_rpc/rpc.h"
 #include "platform/led.h"
+#if NIXTROPIC_DEBUG
+#include "hid_rpc/rpc.h"
+#endif
 
 #include "stm32u5xx_hal.h"
 #include "tusb.h"
@@ -168,9 +170,12 @@ void tud_hid_set_report_cb(uint8_t instance,
     (void) report_type;
     if (instance == USB_HID_INSTANCE_FIDO) {
         fido_hid_handle_packet(buffer, bufsize);
-    } else if (instance == USB_HID_INSTANCE_LTRPC) {
+    }
+#if NIXTROPIC_DEBUG
+    else if (instance == USB_HID_INSTANCE_LTRPC) {
         hid_rpc_handle_packet(buffer, bufsize);
     }
+#endif
 }
 
 /* GET_REPORT over the control pipe: unused by CTAPHID and lt-rpc. */

@@ -4,13 +4,16 @@
     USB devkit into a FIDO2 + OpenPGP USB security key.
 
     Outputs:
-      packages.open-firmware      The custom security-key firmware
+      packages.open-firmware      The custom security-key firmware (release:
+                                  HID-FIDO2 + CCID only)
+      packages.open-firmware-debug  Same + CDC console/passthrough + lt-rpc HID
       packages.stock-firmware     Reproducibly-built unmodified TS1302 firmware
                                   (recovery / factory-reset image)
       packages.lt-util            Official TROPIC01 CLI for chip access
       packages.fw-update-chip     Host tool for updating TROPIC01 chip firmware
       devShells.default           ARM toolchain + flashing/debug utilities
       apps.flash-stock            DFU-flash the stock firmware
+      apps.flash-open[-debug]     DFU-flash the open firmware (release / debug)
       apps.flash-and-validate-*   DFU-flash open firmware + run validation suite
       apps.validate-*             Run a validation suite against a flashed dongle
       apps.identify               Read TROPIC01 chip info via lt-util
@@ -163,10 +166,11 @@
         };
 
         # Open firmware — custom STM32U535 firmware exposing the dongle as
-        # a composite USB device (CDC + HID×2 + CCID): FIDO2 / WebAuthn
-        # over CTAPHID + OpenPGP card over CCID + lt-rpc vendor HID.  100%
-        # Nix-built, MIT-licensed USB stack (TinyUSB), arm-none-eabi cross
-        # toolchain via gcc-arm-embedded.
+        # a composite USB device: FIDO2 / WebAuthn over CTAPHID + OpenPGP
+        # card over CCID.  100% Nix-built, MIT-licensed USB stack
+        # (TinyUSB), arm-none-eabi cross toolchain via gcc-arm-embedded.
+        # open-firmware-debug adds the lt-rpc vendor HID and the CDC
+        # console + SPI passthrough (Phase 9 M1: never in a release).
         open-firmware = pkgs.callPackage ./nix/firmware.nix {
           libtropicSrc = libtropic;
           cmsisCoreSrc = cmsis-core;
@@ -174,6 +178,7 @@
           stm32u5xxHalDriverSrc = stm32u5xx-hal-driver;
           tinyusbSrc = tinyusb;
         };
+        open-firmware-debug = open-firmware.override { debugInterfaces = true; };
 
         # TROPIC01 chip-firmware updater (host tool, Linux x86_64/aarch64).
         # Builds against pinned libtropic + OpenSSL CAL.  See nix/fw-update-chip.nix
@@ -186,6 +191,7 @@
           inherit pkgs;
           inherit stockFirmware;
           openFirmware = open-firmware;
+          openFirmwareDebug = open-firmware-debug;
           libtropicUtil = lt-util;
           fwUpdateChip = fw-update-chip;
         };
@@ -202,7 +208,7 @@
         packages = {
           inherit stockFirmware lt-util;
           stock-firmware = stockFirmware;  # convenience alias
-          inherit open-firmware;
+          inherit open-firmware open-firmware-debug;
           inherit fw-update-chip;
           inherit host-tests;
           default = stockFirmware;

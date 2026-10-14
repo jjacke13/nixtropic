@@ -1,9 +1,9 @@
 /*
  * nixtropic firmware main — boot sequence + idle loop.
  *
- * Brings up the STM32U5 platform, USB composite device (CDC + HID×2
- * + CCID), and TROPIC01 chip session in stages; the LED reports
- * any boot-stage failure via a numeric blink pattern so a bricked
+ * Brings up the STM32U5 platform, USB composite device (HID-FIDO2 +
+ * CCID; the debug build adds CDC + lt-rpc HID), and TROPIC01 chip
+ * session in stages; the LED reports any boot-stage failure via a numeric blink pattern so a bricked
  * dongle still reports cause without USB.
  *
  * Boot sequence:
@@ -40,8 +40,10 @@
 #include "platform/rng.h"
 #include "platform/spi.h"
 #include "usb/usb.h"
+#if NIXTROPIC_DEBUG
 #include "cdc_protocol/protocol.h"
 #include "hid_rpc/rpc.h"
+#endif
 #include "fido_hid/ctaphid.h"
 #include "fido_hid/credstore.h"
 #include "fido_hid/slots.h"
@@ -138,7 +140,11 @@ static void boot_banner(void)
     printf("# build: %s\r\n", NIXTROPIC_BUILD_TAG);
     printf("# git: %s\r\n",   NIXTROPIC_GIT_REV);
 
-    /* Now pump tud_task so the banner has time to drain through USB. */
+    /* Now pump tud_task so the banner has time to drain through USB.
+     * The pump runs in the release build too (where printf goes nowhere,
+     * see usb/cdc_io.c): USB enumeration is serviced here, before the
+     * chip-init stages below, which do not call tud_task.  Same boot
+     * timing as the builds validated in Phases 4–8. */
     uint32_t deadline = HAL_GetTick() + 1500u;
     while ((int32_t)(HAL_GetTick() - deadline) < 0) {
         tud_task();
@@ -200,16 +206,18 @@ int main(void)
 
     /* Stage 8 — boot banner + protocol init */
     boot_banner();
+#if NIXTROPIC_DEBUG
     cdc_protocol_init();
     hid_rpc_init();
+#endif
     fido_hid_init();
 
     /* Stage 8.5 — libtropic on chip.  Runs a second power-cycle then
      * lt_init.  If lt_init fails the chip is still powered (the first
-     * power-cycle ran in Stage 4.5), so the CDC ASCII passthrough mode
-     * still works for lt-util.  We log but don't halt — HID CHIP_ID
-     * command will return an error to the host if lt_init didn't
-     * succeed. */
+     * power-cycle ran in Stage 4.5), so in a debug build the CDC ASCII
+     * passthrough still works for lt-util.  We log but don't halt —
+     * FIDO2 / OpenPGP (and the debug HID CHIP_ID command) return an
+     * error to the host if lt_init didn't succeed. */
     tropic_init();
 
     /* Stage 8.6 — Credential store + slot manager.
@@ -219,7 +227,8 @@ int main(void)
      * (used as the shared monotonic signCount).
      *
      * We log on failure but don't halt — FIDO2 paths will simply return
-     * CTAP errors to the host. CDC + lt-rpc HID paths remain operational. */
+     * CTAP errors to the host.  (Debug build: CDC + lt-rpc HID paths
+     * remain operational.) */
     {
         int rc = credstore_init();
         if (rc != 0) {
@@ -253,8 +262,10 @@ int main(void)
     /* Stage 9 — main loop */
     for (;;) {
         tud_task();
+#if NIXTROPIC_DEBUG
         cdc_protocol_task();
         hid_rpc_task();
+#endif
         fido_hid_task();
         /* LED + SW1 debouncer now driven by SysTick — no main-loop poll. */
     }

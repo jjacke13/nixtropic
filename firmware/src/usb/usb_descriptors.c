@@ -1,12 +1,20 @@
 /*
- * USB descriptors for nixtropic — composite device exposing four
- * functions to the host on a single USB connection:
+ * USB descriptors for nixtropic — composite device.
+ *
+ * Release build (default) — two functions:
+ *
+ *   IF 0  HID         FIDO2 usage page 0xF1D0          — CTAP2 transport
+ *   IF 1  CCID        class 0x0B, bulk IN/OUT          — OpenPGP card
+ *
+ * Debug build (NIXTROPIC_DEBUG=1) — four functions, the Phase 4–8 layout:
  *
  *   IF 0  CDC control (notification EP IN)             — console / log
- *   IF 1  CDC data    (bulk EP OUT/IN)                 — printf retarget
+ *   IF 1  CDC data    (bulk EP OUT/IN)                 — printf + SPI passthrough
  *   IF 2  HID #0      vendor usage page 0xFF00         — lt-rpc framing
  *   IF 3  HID #1      FIDO2 usage page 0xF1D0          — CTAP2 transport
  *   IF 4  CCID        class 0x0B, bulk IN/OUT          — OpenPGP card
+ *
+ * Endpoint addresses are the same in both builds (FIDO EP4, CCID EP5).
  *
  * VID/PID = 0xCAFE:0x4001 (TinyUSB demo range).  A pid.codes
  * allocation is a Phase 8 publishing task — see
@@ -42,11 +50,20 @@ tusb_desc_device_t const desc_device = {
     .bDescriptorType    = TUSB_DESC_DEVICE,
     .bcdUSB             = USB_BCD,
 
-    /* IAD-friendly miscellaneous class so composite descriptor works on
-     * Windows without extra .inf. Linux is permissive either way. */
+#if NIXTROPIC_DEBUG
+    /* IAD-friendly miscellaneous class: the CDC function is two
+     * interfaces tied together by an IAD.  Windows needs this class code
+     * for that without an extra .inf; Linux is permissive either way. */
     .bDeviceClass       = TUSB_CLASS_MISC,
     .bDeviceSubClass    = MISC_SUBCLASS_COMMON,
     .bDeviceProtocol    = MISC_PROTOCOL_IAD,
+#else
+    /* No IAD in release: class defined per interface, like other
+     * HID + CCID security keys. */
+    .bDeviceClass       = TUSB_CLASS_UNSPECIFIED,
+    .bDeviceSubClass    = 0x00,
+    .bDeviceProtocol    = 0x00,
+#endif
 
     .bMaxPacketSize0    = CFG_TUD_ENDPOINT0_SIZE,
 
@@ -68,15 +85,16 @@ uint8_t const *tud_descriptor_device_cb(void)
 
 /* ===== HID Report Descriptors =====
  *
- * Two instances:
- *   #0  lt-rpc       usage page 0xFF00 (vendor), 64 B IN/OUT
- *   #1  FIDO2 (CTAP) usage page 0xF1D0 (FIDO Alliance), 64 B IN/OUT
+ * Instances (numbers in usb.h):
+ *   lt-rpc       usage page 0xFF00 (vendor), 64 B IN/OUT   — debug only
+ *   FIDO2 (CTAP) usage page 0xF1D0 (FIDO Alliance), 64 B IN/OUT
  *
  * Both are vendor-style raw report descriptors — host treats payloads as
  * opaque byte arrays. The FIDO usage page is what libfido2 / browsers /
  * fido2-token grep for during enumeration.
  */
 
+#if NIXTROPIC_DEBUG
 uint8_t const desc_hid_report_ltrpc[] = {
     0x06, 0x00, 0xFF,        /* Usage Page (Vendor Defined 0xFF00) */
     0x09, 0x01,              /* Usage (Vendor Usage 1) */
@@ -98,6 +116,7 @@ uint8_t const desc_hid_report_ltrpc[] = {
 
     0xC0                     /* End Collection */
 };
+#endif /* NIXTROPIC_DEBUG */
 
 /* FIDO Alliance — U2F HID Protocol Specification, §3.3 ("HID Report
  * Descriptor"). The exact descriptor every YubiKey / SoloKey / Nitrokey
@@ -127,16 +146,21 @@ uint8_t const desc_hid_report_fido[] = {
 
 uint8_t const *tud_hid_descriptor_report_cb(uint8_t instance)
 {
+#if NIXTROPIC_DEBUG
     if (instance == USB_HID_INSTANCE_LTRPC) return desc_hid_report_ltrpc;
+#endif
+    (void) instance;
     return desc_hid_report_fido;
 }
 
 /* ===== Configuration Descriptor ===== */
 
 enum {
-    ITF_NUM_CDC_NOTIF = 0,
+#if NIXTROPIC_DEBUG
+    ITF_NUM_CDC_NOTIF,
     ITF_NUM_CDC_DATA,
     ITF_NUM_HID_LTRPC,
+#endif
     ITF_NUM_HID_FIDO,
     ITF_NUM_CCID,
     ITF_NUM_TOTAL
@@ -163,25 +187,49 @@ const uint8_t USB_CCID_EP_IN  = EPNUM_CCID_IN;
  * 7 B bulk IN EP desc = 77 B total. */
 #define TUD_CCID_DESC_LEN    (9u + 54u + 7u + 7u)
 
-#define CONFIG_TOTAL_LEN  (TUD_CONFIG_DESC_LEN + TUD_CDC_DESC_LEN \
-                           + 2 * TUD_HID_INOUT_DESC_LEN + TUD_CCID_DESC_LEN)
+#if NIXTROPIC_DEBUG
+#define DEBUG_ITF_DESC_LEN  (TUD_CDC_DESC_LEN + TUD_HID_INOUT_DESC_LEN)
+#else
+#define DEBUG_ITF_DESC_LEN  0
+#endif
+
+#define CONFIG_TOTAL_LEN  (TUD_CONFIG_DESC_LEN + DEBUG_ITF_DESC_LEN \
+                           + TUD_HID_INOUT_DESC_LEN + TUD_CCID_DESC_LEN)
+
+/* String indices, referenced by the interface descriptors below. */
+enum {
+    STR_LANGID = 0,
+    STR_MANUFACTURER,
+    STR_PRODUCT,
+    STR_SERIAL,
+#if NIXTROPIC_DEBUG
+    STR_CDC_INTERFACE,
+    STR_HID_LTRPC_INTERFACE,
+#endif
+    STR_HID_FIDO_INTERFACE,
+    STR_CCID_INTERFACE,
+};
 
 uint8_t const desc_fs_configuration[] = {
     /* Config descriptor: 1 config, ITF_NUM_TOTAL interfaces, 100 mA bus-powered */
     TUD_CONFIG_DESCRIPTOR(1, ITF_NUM_TOTAL, 0, CONFIG_TOTAL_LEN, 0x00, 100),
 
+#if NIXTROPIC_DEBUG
     /* CDC: notif + data interfaces (IAD prefixed by macro) */
-    TUD_CDC_DESCRIPTOR(ITF_NUM_CDC_NOTIF, 4, EPNUM_CDC_NOTIF, 8,
+    TUD_CDC_DESCRIPTOR(ITF_NUM_CDC_NOTIF, STR_CDC_INTERFACE, EPNUM_CDC_NOTIF, 8,
                        EPNUM_CDC_OUT, EPNUM_CDC_IN, 64),
 
-    /* HID #0 lt-rpc: raw 64-byte IN + OUT, 1 ms polling */
-    TUD_HID_INOUT_DESCRIPTOR(ITF_NUM_HID_LTRPC, 5, HID_ITF_PROTOCOL_NONE,
+    /* HID lt-rpc: raw 64-byte IN + OUT, 1 ms polling */
+    TUD_HID_INOUT_DESCRIPTOR(ITF_NUM_HID_LTRPC, STR_HID_LTRPC_INTERFACE,
+                             HID_ITF_PROTOCOL_NONE,
                              sizeof(desc_hid_report_ltrpc),
                              EPNUM_HID_LTRPC_OUT, EPNUM_HID_LTRPC_IN, 64, 1),
+#endif
 
-    /* HID #1 FIDO2: raw 64-byte IN + OUT, 5 ms polling
+    /* HID FIDO2: raw 64-byte IN + OUT, 5 ms polling
      * (5 ms matches FIDO U2F spec recommended bInterval; 1 ms also legal) */
-    TUD_HID_INOUT_DESCRIPTOR(ITF_NUM_HID_FIDO, 6, HID_ITF_PROTOCOL_NONE,
+    TUD_HID_INOUT_DESCRIPTOR(ITF_NUM_HID_FIDO, STR_HID_FIDO_INTERFACE,
+                             HID_ITF_PROTOCOL_NONE,
                              sizeof(desc_hid_report_fido),
                              EPNUM_HID_FIDO_OUT, EPNUM_HID_FIDO_IN, 64, 5),
 
@@ -198,7 +246,7 @@ uint8_t const desc_fs_configuration[] = {
     TUSB_CLASS_SMART_CARD,          /* bInterfaceClass = 0x0B */
     0,                              /* bInterfaceSubClass */
     0,                              /* bInterfaceProtocol (0=CCID-no-ICC, OK for ICCD) */
-    7,                              /* iInterface — STR_CCID_INTERFACE */
+    STR_CCID_INTERFACE,             /* iInterface */
 
     /* CCID class-specific functional descriptor (54 bytes, type 0x21) */
     54,                             /* bLength */
@@ -244,32 +292,32 @@ uint8_t const desc_fs_configuration[] = {
     0,                              /* bInterval */
 };
 
+/* wTotalLength must match the bytes actually emitted; a mismatch
+ * enumerates badly or not at all.  Checked here for both builds. */
+_Static_assert(sizeof(desc_fs_configuration) == CONFIG_TOTAL_LEN,
+               "CONFIG_TOTAL_LEN does not match desc_fs_configuration");
+
 uint8_t const *tud_descriptor_configuration_cb(uint8_t index)
 {
     (void) index;
     return desc_fs_configuration;
 }
 
-/* ===== String Descriptors ===== */
-
-enum {
-    STR_LANGID = 0,
-    STR_MANUFACTURER,
-    STR_PRODUCT,
-    STR_SERIAL,
-    STR_CDC_INTERFACE,
-    STR_HID_LTRPC_INTERFACE,
-    STR_HID_FIDO_INTERFACE,
-    STR_CCID_INTERFACE,
-};
+/* ===== String Descriptors ===== (indices: enum above) */
 
 static char const *string_desc_arr[] = {
     [STR_LANGID]              = (const char[]){0x09, 0x04},  /* en-US: 0x0409 LE */
     [STR_MANUFACTURER]        = "nixtropic",
-    [STR_PRODUCT]             = "nixtropic Phase 7",
+#if NIXTROPIC_DEBUG
+    [STR_PRODUCT]             = "nixtropic debug",
+#else
+    [STR_PRODUCT]             = "nixtropic",
+#endif
     [STR_SERIAL]              = "0001",
+#if NIXTROPIC_DEBUG
     [STR_CDC_INTERFACE]       = "nixtropic CDC console",
     [STR_HID_LTRPC_INTERFACE] = "nixtropic HID lt-rpc",
+#endif
     [STR_HID_FIDO_INTERFACE]  = "nixtropic FIDO2",
     [STR_CCID_INTERFACE]      = "nixtropic CCID Reader",
 };

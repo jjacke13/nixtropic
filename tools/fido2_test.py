@@ -64,18 +64,15 @@ def find_fido_path() -> str:
         if d.get("usage_page") == FIDO_USAGE_PAGE:
             matches.append(d["path"])
     if not matches:
-        # Some hidapi backends don't report usage_page; fall back to picking
-        # the highest-numbered hidraw path of our VID:PID (the FIDO one is
-        # added second, so it usually has the larger index).
-        all_paths = sorted({d["path"] for d in hid.enumerate(VID, PID)})
-        if not all_paths:
+        # Some hidapi backends don't report usage_page; fall back to the
+        # USB interface number.  Release build: FIDO is the only HID
+        # interface.  Debug build: lt-rpc is interface 2, FIDO interface 3.
+        # Either way FIDO has the highest number.
+        devs = list(hid.enumerate(VID, PID))
+        if not devs:
             raise RuntimeError(f"No HID device with VID:PID {VID:04x}:{PID:04x}")
-        if len(all_paths) < 2:
-            raise RuntimeError(
-                f"Only one HID interface found ({all_paths[0]!r}); "
-                f"expected two (lt-rpc + FIDO). Phase 4 M1 not flashed?")
-        # FIDO interface is the higher hidrawN since it was added later.
-        return all_paths[-1].decode() if isinstance(all_paths[-1], bytes) else all_paths[-1]
+        p = max(devs, key=lambda d: d.get("interface_number", -1))["path"]
+        return p.decode() if isinstance(p, bytes) else p
     p = matches[0]
     return p.decode() if isinstance(p, bytes) else p
 
