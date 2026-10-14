@@ -715,7 +715,11 @@ def sub_validate_m5(args) -> int:
         new_cid, _ = cmd_init(dev)
 
         # 1) Reset
-        status, body = cmd_cbor(dev, new_cid, 0x07)  # CTAP2_CMD_RESET
+        # Reset waits up to 10 s for SW1 when a PIN or credentials exist
+        # (ctap2.c), then erases every FIDO slot: the old 5 s default gave
+        # up while the reset was still running (Phase 9 M2).
+        status, body = cmd_cbor(dev, new_cid, 0x07,  # CTAP2_CMD_RESET
+                                timeout_ms=35000)
         ok_reset = (status == CTAP2_OK)
         ok_timeout = (status == 0x30)  # NOT_ALLOWED (post-10s window)
         if ok_timeout:
