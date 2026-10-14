@@ -81,10 +81,18 @@ fi
 green "✓ Dongle visible to gpg-agent"
 
 # Send one APDU through scdaemon (no gpg PIN cache / pinentry involved)
-# and print its status word.
+# and print its status word = the last two response bytes.  The reply is a
+# hexdump: "D[0000]  00 40 40 40 03 00 03 90  00   .@@@....."; only the
+# byte columns are read (the offset and the ASCII column can look like hex).
+# The old `grep -oE '[0-9A-F]{4}' | tail -1` picked the offset "0000".
+# No D line (scdaemon error) → empty status → the caller fails.
 apdu_sw() {
-  gpg-connect-agent --hex "SCD APDU $*" /bye 2>&1 \
-    | grep -oE '[0-9A-F]{4}' | tail -1
+  gpg-connect-agent --hex "SCD APDU $*" /bye 2>&1 | awk '
+    /^D\[[0-9A-Fa-f]+\]/ {
+      n = split(substr($0, 10, 49), f, " ")
+      for (i = 1; i <= n; i++) if (f[i] ~ /^[0-9A-Fa-f][0-9A-Fa-f]$/) b[c++] = toupper(f[i])
+    }
+    END { if (c >= 2) print b[c-2] b[c-1] }'
 }
 verify_pw1() { apdu_sw "00 20 00 81 $(pin_lc "$1") $(pin_hex "$1" '')"; }
 verify_pw3() { apdu_sw "00 20 00 83 $(pin_lc "$1") $(pin_hex "$1" '')"; }
@@ -107,7 +115,7 @@ fi
 blue "── bind PW1 to M&D: CHANGE REFERENCE DATA PW1 ──"
 OLD_HEX="$(pin_hex "$NIXTROPIC_PW1" '')"
 NEW_HEX="$(pin_hex "$NIXTROPIC_PW1_MD_TEST" '')"
-LC="$(printf '%02X' $(( (${#OLD_HEX} + ${#NEW_HEX}) / 2 )))"
+LC="$(printf '%02X' $(( 0x$(pin_lc "$NIXTROPIC_PW1") + 0x$(pin_lc "$NIXTROPIC_PW1_MD_TEST") )))"
 SW="$(apdu_sw "00 24 00 81 ${LC} ${OLD_HEX}${NEW_HEX}")"
 echo "  SW = ${SW}"
 if [ "${SW}" != "9000" ]; then

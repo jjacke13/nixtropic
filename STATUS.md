@@ -91,3 +91,39 @@ proven on Brave / Firefox / Proton Account 2FA.
 `firmware.elf` text = 218 856 B / 256 KB (83.5 %).  ~37 KB headroom.
 
 The development history of Phase 8 lives in `docs/PHASE-8-PLAN.md`.
+
+---
+
+## 2026-10-14 — Phase 9 M0 baseline ✅
+
+Test harness made trustworthy before the Phase 9 hardening
+(`docs/PHASE-9-PLAN.md`), then a baseline on the one dongle.
+
+**Harness:**
+
+- Flash apps report failed flashes (`tools/dfu-flash.sh`).  The old check
+  turned every dfu-util failure into success.  On hardware the flash ended
+  with exactly the one accepted benign error (`:leave` get_status, exit 74).
+- PIN fixture (`tools/fixture.env`, from `fixture.env.example`): the
+  validate scripts never guess a PIN and stop at the first failure.
+- `validate-pin-md.sh` binds PW1 to MAC-and-Destroy before its wrong-PIN
+  attempts.  Its status-word parser read the hexdump offset instead of the
+  status bytes, so the script could not pass; fixed.
+- `nix build .#host-tests` (also `nix flake check`): CBOR and the M&D
+  kernel against a mock TROPIC01 with fault injection, plus the script
+  tests, under ASan/UBSan.
+
+**Baseline, firmware at `e5d72da` (= `firmware/` unchanged since `36f972b`):**
+
+| Check | Result |
+|---|---|
+| `nix run .#flash-open` (DFU) | ✓ flashed, benign leave error recognised |
+| `nix run .#validate` | ✓ FIDO2 5/5, OpenPGP 16/16 |
+| `validate-pin-md.sh --destroy-my-pin` | ✓ bound PW1: 63C2, 63C1, 6983, locked; T+A recovers |
+| `nix build .#host-tests` | ✓ |
+
+Host: GnuPG 2.4.9, OpenSC 0.27.1, nixpkgs nixos-25.11 (pinned).
+No SW1 touch was requested during the suites (touch policy off).
+
+`firmware.elf` text = 218 760 B, data = 140 B (`firmware.bin` 218 904 B /
+256 KB, 83.5 %); bss = 37 912 B.

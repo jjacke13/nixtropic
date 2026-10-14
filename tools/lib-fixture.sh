@@ -38,10 +38,11 @@ fixture_check_pin() {
   fi
 }
 
-# pin_hex <pin> [sep]: "123" → "31:32:33" (sep defaults to ':').
+# pin_hex <pin> [sep]: "123" → "31:32:33".  sep defaults to ':'; an empty
+# sep joins the bytes with nothing ("313233").
 pin_hex() {
   printf '%s' "$1" | od -An -v -tx1 | tr -s ' \n' ' ' \
-    | sed -e 's/^ //' -e 's/ $//' -e "s/ /${2:-:}/g"
+    | sed -e 's/^ //' -e 's/ $//' -e "s/ /${2-:}/g"
 }
 
 # pin_lc <pin>: APDU Lc byte for the PIN, two hex digits.

@@ -45,6 +45,7 @@ stdenv.mkDerivation {
     ./test_cbor
     ./test_pin_md_kernel
     bash tests/host/test-dfu-flash.sh
+    bash tests/host/test-lib-fixture.sh
     runHook postCheck
   '';
 
