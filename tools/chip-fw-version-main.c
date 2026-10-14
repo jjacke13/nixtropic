@@ -1,13 +1,18 @@
 /*
  * tools/chip-fw-version-main.c
  *
- * Read-only TROPIC01 chip-firmware version reporter.
+ * TROPIC01 chip-firmware version reporter.
  *
  * Reports the currently-running App FW + SPECT FW versions on the
  * TROPIC01 chip.  Companion to `fw-update-chip` which can UPDATE these
- * (one-way: chip rejects downgrade after success).  Use this when you
- * just want to know "what version is the chip running?" without poking
- * the update path.
+ * (one-way: chip rejects downgrade after success).
+ *
+ * Not a pure read: it runs lt_init, then a regular chip reboot into
+ * Application mode (lt_reboot TR01_REBOOT, needed because the version
+ * queries are Application-mode requests), then the two version
+ * queries.  The reboot writes nothing persistent, but it ends any open
+ * secure session and resets the chip's volatile state.  Nothing else on
+ * the chip is changed.
  *
  * Requires the dongle to be running the stock TS1302 firmware (the one
  * with the CDC USB↔SPI passthrough that libtropic's

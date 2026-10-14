@@ -55,7 +55,7 @@ This sets up udev rules for both **app mode** (`cafe:4001`) and **DFU mode** (`0
 
 ### 2. Update the TROPIC01 chip firmware (one-time, if needed)
 
-The dongle may ship with chip firmware 0.3.1 (Deprecated).  nixtropic needs chip firmware ≥ 2.0.0.  Check what's running first:
+The dongle may ship with chip firmware 0.3.1 (Deprecated).  nixtropic needs chip firmware ≥ 2.0.0.  Check what's running first (needs the stock firmware on the dongle; the check reboots the chip but writes nothing):
 
 ```bash
 sudo nix run github:jjacke13/nixtropic#chip-fw-version

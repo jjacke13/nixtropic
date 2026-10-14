@@ -18,7 +18,7 @@ Three host-side binaries and one firmware image:
 | **open firmware** (`firmware.bin`) | `firmware/` | Flashes onto the STM32U535 via DFU |
 | **lt-util** | `tropicsquare/libtropic-util` | Talks to TROPIC01 over the stock CDC firmware |
 | **fw-update-chip** | `tools/fw-update-chip-main.c` | One-shot updater for the TROPIC01's *own* firmware (App + SPECT) |
-| **chip-fw-version** | `tools/chip-fw-version-main.c` | Read-only reporter for chip App / SPECT FW versions |
+| **chip-fw-version** | `tools/chip-fw-version-main.c` | Reports chip App / SPECT FW versions (reboots the chip first; writes nothing) |
 
 Plus stock OS packages: `dfu-util`, `pcscd`, a patched `libccid`,
 `libfido2-1`, `opensc`, `gnupg`.
