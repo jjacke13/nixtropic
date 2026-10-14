@@ -206,7 +206,6 @@ set(APP_SOURCES
     src/main.c
     src/platform/clock.c
     src/platform/gpio.c
-    src/platform/blink.c
     src/platform/led.c
     src/platform/rng.c
     src/platform/spi.c

@@ -330,7 +330,6 @@ let
         "$FIRMWARE_SRC/platform/spi.c" \
         "$FIRMWARE_SRC/platform/clock.c" \
         "$FIRMWARE_SRC/platform/gpio.c" \
-        "$FIRMWARE_SRC/platform/blink.c" \
         "$FIRMWARE_SRC/platform/led.c" \
         "$FIRMWARE_SRC/platform/rng.c" \
         "$FIRMWARE_SRC/main.c" \

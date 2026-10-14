@@ -23,6 +23,7 @@
 #include "platform/board.h"
 #include "fido_hid/ctaphid.h"
 #include "hid_rpc/rpc.h"
+#include "platform/led.h"
 
 #include "stm32u5xx_hal.h"
 #include "tusb.h"
@@ -134,6 +135,21 @@ int usb_init(void)
 void USB_IRQHandler(void)
 {
     tud_int_handler(0);
+}
+
+/* ----- LED follows the USB configured state -----
+ *
+ * Heartbeat until the host has configured the device, idle (off) once it
+ * has.  A dongle that keeps blinking slowly is powered but not enumerated
+ * (charge-only cable, bad port).  Both callbacks run from tud_task(). */
+void tud_mount_cb(void)
+{
+    led_set_state(LED_IDLE);
+}
+
+void tud_umount_cb(void)
+{
+    led_set_state(LED_HEARTBEAT);
 }
 
 /* ----- HID report routing -----

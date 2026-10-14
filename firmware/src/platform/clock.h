@@ -22,7 +22,7 @@
  * Sets voltage scale Range 3, flash latency 1 wait state, AHB/APB div 1.
  * Calls HAL_RCC_OscConfig and HAL_RCC_ClockConfig.
  *
- * Aborts via blink_set_pattern(1) on failure.
+ * On failure the caller (main.c) shows boot-failure code 1 on the LED.
  *
  * @return 0 on success, non-zero on failure.
  */

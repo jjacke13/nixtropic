@@ -16,8 +16,9 @@
  *   - "ERROR: unknown command\r\n"
  *   - "ERROR: USB RX overflow !\r\n" (emitted from parser.c)
  *
- * LED state (P2.20): solid ON when CDC host connected, heartbeat otherwise.
- * Tracked via tud_cdc_connected(); transitions applied via blink_set_*.
+ * The LED is not driven from here: platform/led.c owns it (the Phase 2
+ * "solid while CDC connected" cue was overwritten by led.c's 1 ms tick
+ * since Phase 6 and was removed in Phase 9 M1).
  *
  * AUTO mode: 100 ms tick driver in cmd_auto_tick. Inhibited while CS is
  * asserted (matches stock app/main.c:264).
@@ -36,15 +37,13 @@
 #include "cmd.h"
 #include "hex.h"
 #include "parser.h"
-#include "platform/blink.h"
 #include "platform/spi.h"
 
 #define SPI_BUF_SIZE 512  /* matches stock fw _SPI_BUF_SIZE */
 
 static const char ERR_SPI_FAIL[] = "ERROR: SPI transfer failed\r\n";
 
-static uint32_t s_next_tick_ms  = 0u;
-static bool     s_was_connected = false;
+static uint32_t s_next_tick_ms = 0u;
 
 static void cdc_write_str(const char *s)
 {
@@ -180,24 +179,10 @@ static void handle_line(const char *line)
     (void) cmd_dispatch(line);
 }
 
-static void apply_led_state(void)
-{
-    bool connected = tud_cdc_connected();
-    if (connected != s_was_connected) {
-        if (connected) {
-            blink_set_solid();
-        } else {
-            blink_set_heartbeat();
-        }
-        s_was_connected = connected;
-    }
-}
-
 void cdc_protocol_init(void)
 {
     parser_init(handle_line);
-    s_next_tick_ms  = HAL_GetTick();
-    s_was_connected = false;
+    s_next_tick_ms = HAL_GetTick();
 }
 
 void cdc_protocol_task(void)
@@ -212,11 +197,10 @@ void cdc_protocol_task(void)
         parser_feed(b);
     }
 
-    /* 100 ms tick: AUTO mode + LED state. */
+    /* 100 ms tick: AUTO mode. */
     uint32_t now = HAL_GetTick();
     if ((int32_t)(now - s_next_tick_ms) >= 0) {
         cmd_auto_tick();
-        apply_led_state();
         s_next_tick_ms = now + 100u;
     }
 }

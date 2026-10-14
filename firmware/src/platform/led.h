@@ -1,7 +1,7 @@
 /*
  * LED state machine on PA9 — Phase 6 M1.
  *
- * Replaces blink.{h,c} for runtime use after USB enumeration.  Pre-HAL
+ * The only runtime LED driver (blink.{h,c} removed in Phase 9 M1).  Pre-HAL
  * boot-failure codes (`raw_blink_code` in main.c) are independent and
  * remain — they don't go through this module.
  *

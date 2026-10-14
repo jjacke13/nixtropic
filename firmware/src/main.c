@@ -34,7 +34,6 @@
 
 #include "stm32u5xx.h"
 
-#include "platform/blink.h"
 #include "platform/clock.h"
 #include "platform/gpio.h"
 #include "platform/led.h"
@@ -245,10 +244,11 @@ int main(void)
     }
 
     /* LED state machine takes over.  Boot phase used
-     * LED_HEARTBEAT (default initial state); switch to LED_IDLE once
-     * everything is up so the off-state advertises "ready, awaiting
-     * host request" — same UX cue Yubikey gives. */
-    led_set_state(LED_IDLE);
+     * LED_HEARTBEAT (default initial state).  Off (LED_IDLE) means
+     * "ready, USB configured" — same UX cue Yubikey gives; until the
+     * host configures us it stays on heartbeat.  tud_mount_cb /
+     * tud_umount_cb in usb.c keep it in step from here on. */
+    led_set_state(tud_mounted() ? LED_IDLE : LED_HEARTBEAT);
 
     /* Stage 9 — main loop */
     for (;;) {
