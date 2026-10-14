@@ -37,6 +37,12 @@ void hid_rpc_init(void);
  */
 void hid_rpc_task(void);
 
+/**
+ * @brief Feed one 64-byte HID OUT report into the framing state machine.
+ *        Called by the USB layer (usb.c) for the lt-rpc HID instance.
+ */
+void hid_rpc_handle_packet(const uint8_t *pkt, size_t len);
+
 /* ===== Command-handler API (called by rpc.c into rpc_cmds.c) =====
  *
  * The framing layer passes the dispatched command id, the assembled

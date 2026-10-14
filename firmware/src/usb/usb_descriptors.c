@@ -29,6 +29,7 @@
  */
 
 #include "tusb.h"
+#include "usb.h"
 
 /* ===== Device Descriptor ===== */
 
@@ -126,7 +127,7 @@ uint8_t const desc_hid_report_fido[] = {
 
 uint8_t const *tud_hid_descriptor_report_cb(uint8_t instance)
 {
-    if (instance == 0) return desc_hid_report_ltrpc;
+    if (instance == USB_HID_INSTANCE_LTRPC) return desc_hid_report_ltrpc;
     return desc_hid_report_fido;
 }
 

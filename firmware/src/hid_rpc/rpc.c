@@ -13,7 +13,7 @@
 
 #include "rpc.h"
 #include "lt_rpc_proto.h"
-#include "fido_hid/ctaphid.h"
+#include "usb/usb.h"
 
 #include <stdint.h>
 #include <stdbool.h>
@@ -112,7 +112,7 @@ static void queue_error(uint8_t err_code)
 static bool emit_response_packet(void)
 {
     if (!s_resp_pending) return false;
-    if (!tud_hid_n_ready(0)) return false;
+    if (!tud_hid_n_ready(USB_HID_INSTANCE_LTRPC)) return false;
 
     uint8_t pkt[LT_RPC_HID_REPORT_LEN];
     memset(pkt, 0, sizeof pkt);
@@ -140,7 +140,7 @@ static bool emit_response_packet(void)
     }
     s_resp_sent = (uint16_t)(s_resp_sent + chunk);
 
-    if (!tud_hid_n_report(0, 0, pkt, LT_RPC_HID_REPORT_LEN)) {
+    if (!tud_hid_n_report(USB_HID_INSTANCE_LTRPC, 0, pkt, LT_RPC_HID_REPORT_LEN)) {
         /* Push failed; will retry next task tick. Roll back send pointer. */
         s_resp_sent = (uint16_t)(s_resp_sent - chunk);
         if (!is_first) s_resp_seq--;
@@ -257,7 +257,7 @@ static void handle_cont_packet(const uint8_t *pkt)
     }
 }
 
-static void handle_packet(const uint8_t *pkt, size_t len)
+void hid_rpc_handle_packet(const uint8_t *pkt, size_t len)
 {
     if (len < LT_RPC_HID_REPORT_LEN) {
         /* Short report — shouldn't happen with 64-byte HID, ignore. */
@@ -298,43 +298,4 @@ void hid_rpc_task(void)
     while (emit_response_packet()) {
         /* loop until we can't push another, or done */
     }
-}
-
-/* ===== TinyUSB HID class callbacks =====
- *
- * Phase 4 added a second HID interface (instance 1) for FIDO2. lt-rpc
- * stays on instance 0 — packets arriving on instance 1 are forwarded to
- * fido_hid/ctaphid.c via fido_hid_handle_packet(). The TinyUSB HID
- * callbacks dispatch by instance here to keep the two protocols cleanly
- * separated.
- */
-
-void tud_hid_set_report_cb(uint8_t instance,
-                           uint8_t report_id,
-                           hid_report_type_t report_type,
-                           uint8_t const *buffer,
-                           uint16_t bufsize)
-{
-    (void) report_id;
-    (void) report_type;
-    if (instance == 0u) {
-        handle_packet(buffer, bufsize);
-    } else {
-        /* Instance 1 = FIDO HID. Hand off to the CTAPHID framing layer. */
-        fido_hid_handle_packet(buffer, bufsize);
-    }
-}
-
-uint16_t tud_hid_get_report_cb(uint8_t instance,
-                               uint8_t report_id,
-                               hid_report_type_t report_type,
-                               uint8_t *buffer,
-                               uint16_t reqlen)
-{
-    (void) instance;
-    (void) report_id;
-    (void) report_type;
-    (void) buffer;
-    (void) reqlen;
-    return 0;
 }

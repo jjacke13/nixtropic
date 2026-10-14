@@ -1,5 +1,5 @@
 /*
- * CTAPHID wire-format constants for the FIDO HID interface (instance 1).
+ * CTAPHID wire-format constants for the FIDO HID interface (USB_HID_INSTANCE_FIDO).
  *
  * Reference: FIDO Alliance CTAP 2.x, §11.2 "USB HID" (formerly "CTAPHID").
  *

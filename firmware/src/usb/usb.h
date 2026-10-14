@@ -16,6 +16,13 @@
 #ifndef NIXTROPIC_USB_H
 #define NIXTROPIC_USB_H
 
+/* TinyUSB HID instance numbers.  TinyUSB numbers the HID interfaces in
+ * the order they appear in the configuration descriptor
+ * (usb_descriptors.c); these names are the one place that order is
+ * written down for the code that sends and routes reports. */
+#define USB_HID_INSTANCE_LTRPC  0u
+#define USB_HID_INSTANCE_FIDO   1u
+
 /**
  * @brief Configure HSI48 + CRS for USB FS kernel clock.
  *

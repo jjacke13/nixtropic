@@ -21,6 +21,8 @@
 #include "usb.h"
 #include "usb_ccid.h"
 #include "platform/board.h"
+#include "fido_hid/ctaphid.h"
+#include "hid_rpc/rpc.h"
 
 #include "stm32u5xx_hal.h"
 #include "tusb.h"
@@ -132,6 +134,42 @@ int usb_init(void)
 void USB_IRQHandler(void)
 {
     tud_int_handler(0);
+}
+
+/* ----- HID report routing -----
+ *
+ * TinyUSB has one set_report callback for all HID interfaces; the
+ * instance number says which one the report came in on.  Routing lives
+ * here in the USB layer so the FIDO path does not depend on the lt-rpc
+ * module.  Called from tud_task() (main loop), never from the IRQ. */
+void tud_hid_set_report_cb(uint8_t instance,
+                           uint8_t report_id,
+                           hid_report_type_t report_type,
+                           uint8_t const *buffer,
+                           uint16_t bufsize)
+{
+    (void) report_id;
+    (void) report_type;
+    if (instance == USB_HID_INSTANCE_FIDO) {
+        fido_hid_handle_packet(buffer, bufsize);
+    } else if (instance == USB_HID_INSTANCE_LTRPC) {
+        hid_rpc_handle_packet(buffer, bufsize);
+    }
+}
+
+/* GET_REPORT over the control pipe: unused by CTAPHID and lt-rpc. */
+uint16_t tud_hid_get_report_cb(uint8_t instance,
+                               uint8_t report_id,
+                               hid_report_type_t report_type,
+                               uint8_t *buffer,
+                               uint16_t reqlen)
+{
+    (void) instance;
+    (void) report_id;
+    (void) report_type;
+    (void) buffer;
+    (void) reqlen;
+    return 0;
 }
 
 /* ----- Application class driver registration -----

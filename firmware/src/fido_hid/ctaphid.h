@@ -1,6 +1,6 @@
 /*
  * CTAPHID framing layer for the FIDO HID interface (TinyUSB HID
- * instance 1, USB usage page 0xF1D0).
+ * instance USB_HID_INSTANCE_FIDO, USB usage page 0xF1D0).
  *
  * Implements the FIDO Alliance U2F HID 1.0 transport spec (FIDO U2F
  * HID Protocol Specification, 2017-05-11):
@@ -43,13 +43,13 @@ void fido_hid_init(void);
 
 /**
  * @brief Pump pending HID work. Drains any queued response packets to
- *        the host as TinyUSB readies the instance-1 IN endpoint.
+ *        the host as TinyUSB readies the FIDO IN endpoint.
  */
 void fido_hid_task(void);
 
 /**
  * @brief Feed one 64-byte HID OUT report into the framing state machine.
- *        Called from tud_hid_set_report_cb when instance == 1.
+ *        Called by the USB layer (usb.c) for the FIDO HID instance.
  */
 void fido_hid_handle_packet(const uint8_t *pkt, size_t len);
 

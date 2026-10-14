@@ -25,6 +25,7 @@
 #include "ctaphid.h"
 #include "proto.h"
 #include "user_presence.h"
+#include "usb/usb.h"
 
 #include <stdint.h>
 #include <stdbool.h>
@@ -125,8 +126,7 @@ static void queue_error(uint32_t cid, uint8_t err)
 static bool emit_response_packet(void)
 {
     if (!s_resp_pending) return false;
-    /* TinyUSB instance 1 = FIDO HID. */
-    if (!tud_hid_n_ready(1)) return false;
+    if (!tud_hid_n_ready(USB_HID_INSTANCE_FIDO)) return false;
 
     uint8_t pkt[FIDO_HID_REPORT_LEN];
     memset(pkt, 0, sizeof pkt);
@@ -154,7 +154,7 @@ static bool emit_response_packet(void)
     }
     s_resp_sent = (uint16_t)(s_resp_sent + chunk);
 
-    if (!tud_hid_n_report(1, 0, pkt, FIDO_HID_REPORT_LEN)) {
+    if (!tud_hid_n_report(USB_HID_INSTANCE_FIDO, 0, pkt, FIDO_HID_REPORT_LEN)) {
         /* Push failed; roll back, retry next tick. */
         s_resp_sent = (uint16_t)(s_resp_sent - chunk);
         if (!is_first) s_resp_seq--;
