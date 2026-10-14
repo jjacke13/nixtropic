@@ -3,8 +3,8 @@
 # Development shell for nixtropic firmware work.
 #
 # Provides:
-#   - ARM bare-metal toolchain (gcc-arm-embedded-13) — pinned to LTS for
-#     reproducibility with the stock firmware build
+#   - ARM bare-metal toolchain (gcc-arm-embedded): the SAME package the
+#     firmware derivation (nix/firmware.nix) builds with
 #   - dfu-util for flashing the dongle via STM32 factory bootloader
 #   - openocd + stlink for SWD-level debugging
 #   - picocom + minicom for serial console / debug
@@ -17,7 +17,7 @@ pkgs.mkShell {
 
   packages = with pkgs; [
     # Embedded toolchain
-    gcc-arm-embedded-13   # arm-none-eabi-{gcc,as,ld,objcopy,size,gdb}
+    gcc-arm-embedded      # = nix/firmware.nix toolchain; arm-none-eabi-{gcc,as,ld,objcopy,size,gdb}
     dfu-util              # USB DFU class flasher
     openocd               # On-chip debugger / SWD bridge
     stlink                # ST-Link CLI tools
