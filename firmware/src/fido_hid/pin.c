@@ -39,7 +39,6 @@
 #include "slots.h"
 
 #include "tropic/tropic.h"
-#include "platform/rng.h"
 
 #include <stdint.h>
 #include <stddef.h>
@@ -120,11 +119,6 @@ static int regen_eph(void)
             if (ecdsa_get_public_key65(&nist256p1, s_eph_priv, s_eph_pub65) != 0) {
                 continue;
             }
-            /* Blinding needs the TRNG; no keypair from a failed one. */
-            if (rng_failed()) {
-                memzero(s_eph_priv, sizeof s_eph_priv);
-                return -1;
-            }
             return 0;
         }
     }
@@ -141,9 +135,7 @@ static int compute_shared_key(const uint8_t platform_pub_xy[64],
     memcpy(&peer65[1], platform_pub_xy, 64);
 
     uint8_t shared65[65];
-    if (ecdh_multiply(&nist256p1, s_eph_priv, peer65, shared65) != 0 ||
-        rng_failed()) {
-        memzero(shared65, sizeof shared65);
+    if (ecdh_multiply(&nist256p1, s_eph_priv, peer65, shared65) != 0) {
         return -1;
     }
 

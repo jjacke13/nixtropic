@@ -4,7 +4,7 @@
  * Singleton handle (`rng_handle()`) shared by:
  *   - libtropic's `lt_port_random_bytes` (TROPIC01 host-side entropy
  *     before the L3 secure session is up)
- *   - trezor-crypto's random32() hook (P-256 blinding; see rng.c)
+ *   - trezor-crypto's random32() hook (P-256 blinding; trezor_rng.c)
  *   - the cold-boot HAL_RNG self-test dump over USB CDC (proves the
  *     STM32 TRNG is alive independently of the secure element)
  *
@@ -19,7 +19,6 @@
 #ifndef NIXTROPIC_RNG_H
 #define NIXTROPIC_RNG_H
 
-#include <stdbool.h>
 #include <stdint.h>
 #include <stddef.h>
 #include "stm32u5xx_hal.h"
@@ -41,12 +40,5 @@ RNG_HandleTypeDef *rng_handle(void);
  * @return 0 on success, non-zero if HAL_RNG_GenerateRandomNumber failed.
  */
 int rng_read(uint8_t *buf, size_t n);
-
-/**
- * @brief True once random32() (the trezor-crypto hook, see rng.c) has hit a
- *        TRNG failure.  Sticky until reboot.  P-256 callers check it after
- *        each operation and discard the result when set.
- */
-bool rng_failed(void);
 
 #endif /* NIXTROPIC_RNG_H */

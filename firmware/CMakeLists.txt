@@ -155,7 +155,7 @@ set(TREZOR_CRYPTO_SOURCES
     ${TREZOR_VENDOR}/ed25519-donna/ed25519-donna-32bit-tables.c
     ${TREZOR_VENDOR}/ed25519-donna/modm-donna-32bit.c
     # rand.c — random_buffer/random_uniform on top of random32(), which
-    # src/platform/rng.c supplies from the STM32 TRNG (Phase 9 M2).  ecdsa.c
+    # src/platform/trezor_rng.c supplies from the STM32 TRNG (Phase 9 M2).  ecdsa.c
     # uses it to blind every P-256 point multiplication.
     ${TREZOR_VENDOR}/rand.c
     # Phase 5 M3: P-256 ECDH for CTAP2 ClientPIN keyAgreement (ecdh_multiply
@@ -222,6 +222,7 @@ set(APP_SOURCES
     src/platform/gpio.c
     src/platform/led.c
     src/platform/rng.c
+    src/platform/trezor_rng.c   # random32() for trezor-crypto (Phase 9 M2)
     src/platform/spi.c
     src/usb/usb.c
     src/usb/usb_descriptors.c
@@ -319,7 +320,7 @@ endforeach()
 #   (no USE_INSECURE_PRNG)       — Phase 9 M2: upstream's test recipe sets it,
 #                                  which compiles a fixed-seed LCG as
 #                                  random32().  We build rand.c without it;
-#                                  src/platform/rng.c supplies random32()
+#                                  src/platform/trezor_rng.c supplies random32()
 #                                  from the STM32 TRNG.
 #   ed25519_verify=...           — collision-avoidance no-op for us
 #   USE_PRECOMPUTED_CP=0         — Phase 5 M3: disable the 127 KB
