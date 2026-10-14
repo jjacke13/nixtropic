@@ -41,22 +41,6 @@
 int tropic_init(void);
 
 /**
- * @brief Run the Phase 1 L2 sweep and emit results to printf.
- *
- * Calls in order:
- *   - lt_get_info_chip_id
- *   - lt_get_info_riscv_fw_ver
- *   - lt_get_info_spect_fw_ver
- *   - lt_get_info_fw_bank for FW1, FW2, SPECT1, SPECT2
- *
- * Prints `[chip_id]`, `[riscv_fw]`, `[spect_fw]`, `[fw_bank ...]` lines
- * over USB CDC for host-side validate-phase1.sh.
- *
- * @return 0 on success; non-zero if any L2 call failed.
- */
-int tropic_l2_sweep(void);
-
-/**
  * @brief Read TROPIC01 chip ID into the caller's buffer (no printf).
  *
  * Calls lt_get_info_chip_id. Output is 128 bytes — the same layout the
