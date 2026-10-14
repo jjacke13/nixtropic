@@ -295,6 +295,21 @@ def cmd_chip_id(args: argparse.Namespace) -> int:
     return 0
 
 
+# ECC slots 0..28 hold FIDO credentials (bitmap via SLOTS_BITMAP), 29..31 the
+# OpenPGP keys.  Key tests must never overwrite either (Phase 9 M2: an
+# unconditional slot-0 test replaced a live webauthn.io credential's key).
+FIDO_ECC_SLOTS = 29
+
+
+def free_fido_slot(rpc: LtRpc) -> int:
+    """Highest ECC slot the FIDO bitmap marks free."""
+    bitmap, _ = rpc.slots_bitmap()
+    for slot in range(FIDO_ECC_SLOTS - 1, -1, -1):
+        if not bitmap & (1 << slot):
+            return slot
+    raise LtRpcError("no free FIDO slot for a key test")
+
+
 def cmd_sign_test(args: argparse.Namespace) -> int:
     try:
         from cryptography.hazmat.primitives.asymmetric.ed25519 import (
@@ -309,6 +324,11 @@ def cmd_sign_test(args: argparse.Namespace) -> int:
     slot = args.slot
     rpc = LtRpc()
     try:
+        bitmap, _ = rpc.slots_bitmap()
+        if slot >= FIDO_ECC_SLOTS or bitmap & (1 << slot):
+            print(f"REFUSED: slot {slot} holds a FIDO credential or an OpenPGP key "
+                  f"(free FIDO slot: {free_fido_slot(rpc)})")
+            return 2
         print(f"Erasing slot {slot} (idempotent)...")
         rpc.ecc_erase(slot)
 
@@ -361,22 +381,25 @@ def cmd_validate(args: argparse.Namespace) -> int:
         has_crypto = False
 
     def _sign_test(r: LtRpc) -> bool:
-        # Erase first so the test is idempotent regardless of slot state
-        # left over from a previous run.
-        r.ecc_erase(0)
-        r.ecc_generate(0, 0)
-        pubkey = r.ecc_pubkey(0)
-        if len(pubkey) != 32:
-            return False
-        msg = os.urandom(32)
-        sig = r.ecc_sign(0, msg)
-        if len(sig) != 64:
-            return False
+        # A slot no credential uses; erased again afterwards.
+        slot = free_fido_slot(r)
+        r.ecc_erase(slot)
         try:
-            Ed25519PublicKey.from_public_bytes(pubkey).verify(sig, msg)
-        except InvalidSignature:
-            return False
-        return True
+            r.ecc_generate(slot, 0)
+            pubkey = r.ecc_pubkey(slot)
+            if len(pubkey) != 32:
+                return False
+            msg = os.urandom(32)
+            sig = r.ecc_sign(slot, msg)
+            if len(sig) != 64:
+                return False
+            try:
+                Ed25519PublicKey.from_public_bytes(pubkey).verify(sig, msg)
+            except InvalidSignature:
+                return False
+            return True
+        finally:
+            r.ecc_erase(slot)
 
     tests = [
         ("PING (32 B echo)",
@@ -390,7 +413,7 @@ def cmd_validate(args: argparse.Namespace) -> int:
     ]
     if has_crypto:
         tests.append(
-            ("ECC generate + sign + Ed25519 verify (slot 0)", _sign_test)
+            ("ECC generate + sign + Ed25519 verify (free slot)", _sign_test)
         )
     else:
         print("(skipping sign-test: cryptography module not available)")
