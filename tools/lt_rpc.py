@@ -64,6 +64,9 @@ CMD_SLOTS_RESET   = 0x14
 # Phase 6 M2 — Force-UV flag accessors
 CMD_FORCE_UV_GET  = 0x15
 CMD_FORCE_UV_SET  = 0x16
+# Phase 9 M2 — session-recovery check
+CMD_CHIP_RANDOM   = 0x1B
+CMD_L3_DESYNC     = 0x1C
 CMD_ERROR         = 0x3F
 
 ERR_NAMES = {
@@ -184,6 +187,12 @@ class LtRpc:
 
     def ecc_erase(self, slot: int) -> bytes:
         return self.transact(CMD_ECC_ERASE, bytes([slot & 0xFF]))
+
+    def chip_random(self, n: int) -> bytes:
+        return self.transact(CMD_CHIP_RANDOM, bytes([n & 0xFF]))
+
+    def l3_desync(self) -> bytes:
+        return self.transact(CMD_L3_DESYNC, b"")
 
     # ----- Phase 5 M1 slot manager -----
 
@@ -457,6 +466,39 @@ def cmd_force_uv_set(args: argparse.Namespace) -> int:
     return 0 if v == (1 if args.value else 0) else 1
 
 
+def cmd_session_recovery(args: argparse.Namespace) -> int:
+    """Phase 9 M2 — a broken L3 session recovers without a replug.
+
+    1. chip TRNG read works (session open);
+    2. desync the host send nonce (as if a request was lost on the wire);
+    3. the next chip read MUST fail (proves the fault is real);
+    4. the read after it MUST succeed (session re-handshaked), and so must
+       a second one.  Mutates nothing on the chip."""
+    rpc = LtRpc()
+    try:
+        rpc.chip_random(16)
+        print("1. chip_random before fault: OK")
+        rpc.l3_desync()
+        print("2. host send nonce desynchronised")
+        try:
+            rpc.chip_random(16)
+            print("3. FAIL: chip read succeeded after desync — fault not injected")
+            return 1
+        except LtRpcError as e:
+            print(f"3. chip_random after fault fails as expected: {e}")
+        for step in (4, 5):
+            try:
+                rpc.chip_random(16)
+            except LtRpcError as e:
+                print(f"{step}. FAIL: no recovery without replug: {e}")
+                return 1
+            print(f"{step}. chip_random: OK (session re-established)")
+    finally:
+        rpc.close()
+    print("PASS: session recovered without a replug")
+    return 0
+
+
 def cmd_slots_reset(args: argparse.Namespace) -> int:
     rpc = LtRpc()
     try:
@@ -625,6 +667,10 @@ def main() -> int:
     p_fus.add_argument("value", type=int, choices=[0, 1],
                        help="0 = disable Force-UV, 1 = enable")
     p_fus.set_defaults(fn=cmd_force_uv_set)
+
+    p_sr2 = sub.add_parser("session-recovery",
+                           help="(Phase 9 M2) force an L3 session error, check recovery without replug")
+    p_sr2.set_defaults(fn=cmd_session_recovery)
 
     args = p.parse_args()
     try:

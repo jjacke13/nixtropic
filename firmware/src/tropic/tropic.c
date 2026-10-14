@@ -539,3 +539,17 @@ int tropic_l2_sweep(void)
 
     return critical_errors;
 }
+
+#if NIXTROPIC_DEBUG
+/* ----- Debug-only fault injection (Phase 9 M2 validation) ----- */
+
+void tropic_debug_desync_session(void)
+{
+    /* The low byte of the encryption IV is the low byte of the L3 send
+     * nonce.  Bumping it without sending anything is what a request lost
+     * on the wire looks like to the chip: the next command fails its
+     * tag check (TAG_ERR) and the chip closes its session. */
+    s_handle.l3.encryption_IV[0]++;
+    printf("[tropic] debug: L3 send nonce advanced (session desync)\n");
+}
+#endif

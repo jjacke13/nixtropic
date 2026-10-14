@@ -77,6 +77,16 @@
 #define LT_RPC_CMD_PGP_TOUCH_GET        0x19u  /* req: empty; resp: 1 B (0|1). */
 #define LT_RPC_CMD_PGP_TOUCH_SET        0x1Au  /* req: 1 B; resp: empty. */
 
+/* Phase 9 M2 session-recovery check (`lt_rpc.py session-recovery`).
+ *   CHIP_RANDOM  — N bytes from the TROPIC01 TRNG: an L3 call that always
+ *                  succeeds on a healthy session (GET_RANDOM above is the
+ *                  STM32 TRNG and never touches the chip).
+ *   L3_DESYNC    — advance the host L3 send nonce without sending (fault
+ *                  injection: the next L3 call fails, the one after it
+ *                  must re-handshake). */
+#define LT_RPC_CMD_CHIP_RANDOM          0x1Bu  /* req: 1 B n (1..255); resp: n B. */
+#define LT_RPC_CMD_L3_DESYNC            0x1Cu  /* req: empty; resp: empty. */
+
 /* Reserved: device-emitted error response */
 #define LT_RPC_CMD_ERROR        0x3Fu
 

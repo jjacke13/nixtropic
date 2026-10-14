@@ -301,6 +301,23 @@ static int handle_pgp_touch_set(const uint8_t *req, size_t req_len,
     return 0;
 }
 
+/* ===== Phase 9 M2 session-recovery check ===== */
+
+static int handle_chip_random(const uint8_t *req, size_t req_len,
+                              uint8_t *resp, size_t resp_max)
+{
+    if (req_len < 1u || req[0] == 0u || req[0] > resp_max) return -1;
+    return (tropic_random(resp, req[0]) == 0) ? (int) req[0] : -1;
+}
+
+static int handle_l3_desync(const uint8_t *req, size_t req_len,
+                            uint8_t *resp, size_t resp_max)
+{
+    (void) req; (void) req_len; (void) resp; (void) resp_max;
+    tropic_debug_desync_session();
+    return 0;
+}
+
 /* ===== Table + lookup ===== */
 
 typedef struct {
@@ -327,6 +344,8 @@ static const rpc_entry_t HANDLERS[] = {
     { LT_RPC_CMD_PGP_FORCE_VERIFY_SET, handle_pgp_force_verify_set },
     { LT_RPC_CMD_PGP_TOUCH_GET,        handle_pgp_touch_get },
     { LT_RPC_CMD_PGP_TOUCH_SET,        handle_pgp_touch_set },
+    { LT_RPC_CMD_CHIP_RANDOM,          handle_chip_random },
+    { LT_RPC_CMD_L3_DESYNC,            handle_l3_desync },
     { 0, NULL },  /* sentinel */
 };
 

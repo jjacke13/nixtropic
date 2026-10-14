@@ -224,4 +224,14 @@ int tropic_mcounter_get(uint8_t idx, uint32_t *out_value);
  */
 int tropic_mac_and_destroy(uint8_t idx, const uint8_t *data_out, uint8_t *data_in);
 
+#if NIXTROPIC_DEBUG
+/**
+ * @brief Debug build only: desynchronise the host L3 send nonce, as if a
+ *        request had been lost on the wire.  The next L3 call fails
+ *        (chip TAG_ERR) and drops the session; the call after it must
+ *        re-handshake and succeed.  Used by `lt_rpc.py session-recovery`.
+ */
+void tropic_debug_desync_session(void);
+#endif
+
 #endif /* NIXTROPIC_TROPIC_H */
