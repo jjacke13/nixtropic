@@ -32,6 +32,7 @@ pkgs.mkShell {
     picocom               # Serial console for UART debug from STM32
     minicom               # Backup serial console
     usbutils              # lsusb to verify dongle enumeration
+    libfido2              # fido2-token for tools/validate-fido.sh
     gdb                   # Host gdb (use arm-none-eabi-gdb for the dongle)
 
     # Scripting / automation
