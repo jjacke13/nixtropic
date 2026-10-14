@@ -150,8 +150,11 @@ in
           SYMLINK+="tropic01-open", \
           ENV{ID_MM_DEVICE_IGNORE}="1", \
           TAG+="uaccess"
+        # No GROUP here: ccid's 92_pcscd_ccid.rules gives the CCID device GROUP="pcscd",
+        # and since NixOS 26.05 pcscd runs as user `pcscd`, not root, so GROUP=tropic
+        # locked it out (LIBUSB_ERROR_ACCESS -> gpg "No such device"). uaccess covers the user.
         SUBSYSTEM=="usb", ATTRS{idVendor}=="cafe", ATTRS{idProduct}=="4001", \
-          GROUP="${cfg.groupName}", MODE="0660", \
+          MODE="0660", \
           ENV{ID_MM_DEVICE_IGNORE}="1", \
           TAG+="uaccess"
 
