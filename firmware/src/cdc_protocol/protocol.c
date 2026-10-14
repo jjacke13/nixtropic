@@ -35,6 +35,7 @@
 #include "tusb.h"
 
 #include "cmd.h"
+#include "guard.h"
 #include "hex.h"
 #include "parser.h"
 #include "platform/spi.h"
@@ -42,6 +43,8 @@
 #define SPI_BUF_SIZE 512  /* matches stock fw _SPI_BUF_SIZE */
 
 static const char ERR_SPI_FAIL[] = "ERROR: SPI transfer failed\r\n";
+/* Not a stock-firmware message: nixtropic-only, Phase 9 M1 (guard.h). */
+static const char ERR_BLOCKED[]  = "ERROR: request blocked by passthrough guard\r\n";
 
 static uint32_t s_next_tick_ms = 0u;
 
@@ -125,6 +128,15 @@ static bool try_hex_passthrough(const char *line)
 
     bool skip_cs_release = is_skip_cs_char(*p);
 
+    /* Phase 9 M1: a host line that may start a chip request must start
+     * with an allowed request ID (guard.h).  Refused lines touch neither
+     * CS nor the bus. */
+    if (!guard_check_transfer(!skip_cs_assert, spi_cs_is_asserted(), tx[0])) {
+        cdc_write_str(ERR_BLOCKED);
+        cdc_flush();
+        return true;
+    }
+
     if (!skip_cs_assert) {
         spi_cs_assert();
     }
@@ -134,6 +146,7 @@ static bool try_hex_passthrough(const char *line)
     if (!skip_cs_release) {
         spi_cs_release();
     }
+    guard_transfer_done(spi_cs_is_asserted());
 
     if (xfer_rc != 0) {
         cdc_write_str(ERR_SPI_FAIL);

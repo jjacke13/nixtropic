@@ -264,6 +264,7 @@ if(NIXTROPIC_DEBUG)
       src/cdc_protocol/parser.c
       src/cdc_protocol/hex.c
       src/cdc_protocol/cmd.c
+      src/cdc_protocol/guard.c
       src/hid_rpc/rpc.c
       src/hid_rpc/rpc_cmds.c
   )

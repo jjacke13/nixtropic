@@ -19,6 +19,7 @@
 #include "stm32u5xx_hal.h"
 #include "tusb.h"
 
+#include "guard.h"
 #include "hex.h"
 #include "platform/gpio.h"
 #include "platform/spi.h"
@@ -214,6 +215,7 @@ static bool cmd_cs_set(const char *args)
     } else {
         spi_cs_release();
     }
+    guard_cs_changed();  /* the next host byte may start a frame */
     return true;
 }
 
@@ -306,6 +308,12 @@ static bool cmd_auto_set(const char *args)
         }
     }
 
+    /* AUTO clocks get_resp as the first byte of its own transaction:
+     * same allowlist as a host line (guard.h).  Default 0xAA passes. */
+    if (!guard_req_allowed(get_resp)) {
+        out_str(ERR_INVALID);
+        return false;
+    }
     s_auto_enabled = en;
     s_auto_get     = get_resp;
     s_auto_no_resp = no_resp;
