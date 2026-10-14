@@ -33,9 +33,6 @@
 void gpio_init(void);
 
 /* Platform-pin helpers */
-void board_led_on(void);
-void board_led_off(void);
-void board_led_toggle(void);
 
 void board_tropic_power_on(void);
 void board_tropic_power_off(void);

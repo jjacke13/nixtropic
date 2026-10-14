@@ -128,6 +128,18 @@ static void test_cs_left_low_elsewhere(void)
     CHECK(!line(true, 0xB3, false));
 }
 
+static void test_power_cycle(void)
+{
+    /* "01 .. x", "PWR=0", "PWR=1", "x 02": a chip that boots with CSN low
+     * may read 02 as a request ID, so it is checked.  cmd.c calls
+     * guard_cs_changed() for PWR as for CS. */
+    reset();
+    CHECK(line(false, 0x01, true));
+    guard_cs_changed();               /* PWR=0 */
+    guard_cs_changed();               /* PWR=1 */
+    CHECK(!line(true, 0x02, false));
+}
+
 static void test_trailing_x_with_cs_high(void)
 {
     /* "x 01 x" with CS high clocks nothing the chip reads and leaves CS
@@ -148,6 +160,7 @@ int main(void)
     test_cs_command();
     test_cs_dropped_elsewhere();
     test_cs_left_low_elsewhere();
+    test_power_cycle();
     test_trailing_x_with_cs_high();
     return check_done("passthrough_guard");
 }

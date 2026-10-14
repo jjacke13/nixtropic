@@ -143,8 +143,9 @@ static void boot_banner(void)
     /* Now pump tud_task so the banner has time to drain through USB.
      * The pump runs in the release build too (where printf goes nowhere,
      * see usb/cdc_io.c): USB enumeration is serviced here, before the
-     * chip-init stages below, which do not call tud_task.  Same boot
-     * timing as the builds validated in Phases 4–8. */
+     * chip-init stages below, which pump tud_task only briefly
+     * (tropic_init's settle loop).  Same boot timing as the builds
+     * validated in Phases 4–8. */
     uint32_t deadline = HAL_GetTick() + 1500u;
     while ((int32_t)(HAL_GetTick() - deadline) < 0) {
         tud_task();
@@ -255,9 +256,8 @@ int main(void)
     /* LED state machine takes over.  Boot phase used
      * LED_HEARTBEAT (default initial state).  Off (LED_IDLE) means
      * "ready, USB configured" — same UX cue Yubikey gives; until the
-     * host configures us it stays on heartbeat.  tud_mount_cb /
-     * tud_umount_cb in usb.c keep it in step from here on. */
-    led_set_state(tud_mounted() ? LED_IDLE : LED_HEARTBEAT);
+     * host configures us it stays on heartbeat (usb.c). */
+    usb_boot_done();
 
     /* Stage 9 — main loop */
     for (;;) {

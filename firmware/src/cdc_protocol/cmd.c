@@ -240,6 +240,9 @@ static bool cmd_pwr_set(const char *args)
         board_tropic_power_off();
     }
     s_pwr_state = b;
+    /* A chip that powers up with CSN already low may take the next byte
+     * as a request ID: no frame survives a power change (M1 review). */
+    guard_cs_changed();
     return true;
 }
 

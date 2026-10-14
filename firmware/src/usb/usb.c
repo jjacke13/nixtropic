@@ -139,19 +139,30 @@ void USB_IRQHandler(void)
     tud_int_handler(0);
 }
 
-/* ----- LED follows the USB configured state -----
+/* ----- LED: ready = boot finished AND USB configured -----
  *
- * Heartbeat until the host has configured the device, idle (off) once it
- * has.  A dongle that keeps blinking slowly is powered but not enumerated
- * (charge-only cable, bad port).  Both callbacks run from tud_task(). */
-void tud_mount_cb(void)
+ * Heartbeat until both hold, then idle (off).  A dongle that keeps
+ * blinking slowly is either still booting or powered but not enumerated
+ * (charge-only cable, bad port).
+ *
+ * The host can configure us during boot (main.c pumps tud_task while the
+ * chip comes up), so tud_mount_cb only acts once usb_boot_done() ran, and
+ * only from LED_HEARTBEAT: a re-enumeration during a touch wait must not
+ * hide LED_AWAITING_TOUCH.  No tud_umount_cb: the STM32 fsdev port never
+ * reports a disconnect (bus-powered — unplugged = off anyway). */
+static bool s_boot_done = false;
+
+void usb_boot_done(void)
 {
-    led_set_state(LED_IDLE);
+    s_boot_done = true;
+    led_set_state(tud_mounted() ? LED_IDLE : LED_HEARTBEAT);
 }
 
-void tud_umount_cb(void)
+void tud_mount_cb(void)
 {
-    led_set_state(LED_HEARTBEAT);
+    if (s_boot_done && led_get_state() == LED_HEARTBEAT) {
+        led_set_state(LED_IDLE);
+    }
 }
 
 /* ----- HID report routing -----

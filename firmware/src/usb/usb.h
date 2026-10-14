@@ -55,4 +55,10 @@ int usb_clock_init(void);
  */
 int usb_init(void);
 
+/**
+ * @brief Boot finished: from here the LED shows idle once the host has
+ *        configured the device, heartbeat until then (usb.c).
+ */
+void usb_boot_done(void);
+
 #endif /* NIXTROPIC_USB_H */

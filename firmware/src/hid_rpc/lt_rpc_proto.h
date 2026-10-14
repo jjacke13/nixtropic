@@ -45,9 +45,8 @@
 #define LT_RPC_CMD_ECC_ERASE    0x07u
 
 /* Slot-manager visibility debug commands (for host-side
- * validate-phase5-m1.sh). Kept under 0x10..0x1F. Will be gated under
- * NIXTROPIC_DEBUG ifdef post-Phase-8 — for now they always compile in
- * because we're actively developing on this surface. */
+ * validate-phase5-m1.sh). Kept under 0x10..0x1F.  Like all of lt-rpc,
+ * debug build only (NIXTROPIC_DEBUG=1, Phase 9 M1). */
 #define LT_RPC_CMD_SLOTS_BITMAP   0x10u  /* req: empty;  resp: 4 B bitmap BE + 1 B used count */
 #define LT_RPC_CMD_SLOTS_ALLOC    0x11u  /* req: 32 B rpIdHash; resp: 1 B slot_idx + 18 B credId */
 #define LT_RPC_CMD_SLOTS_ERASE    0x12u  /* req: 1 B slot_idx; resp: empty */

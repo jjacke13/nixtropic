@@ -183,7 +183,8 @@ let
 
       if lsusb | grep -q "cafe:4001"; then
         echo "✓ Dongle in APP MODE — nixtropic open firmware (cafe:4001)"
-        if lsusb -d cafe:4001 -v 2>/dev/null | grep -q "nixtropic debug"; then
+        # Non-verbose lsusb names the product from sysfs: no root needed.
+        if lsusb -d cafe:4001 | grep -q "nixtropic debug"; then
           echo "  DEBUG build: CDC + HID×2 (lt-rpc + FIDO) + CCID"
         else
           echo "  Release build: HID (FIDO) + CCID"

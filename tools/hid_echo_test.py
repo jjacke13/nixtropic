@@ -32,12 +32,14 @@ def find_path() -> bytes:
         print(f"ERROR: no HID device with VID:PID {VID:04x}:{PID:04x} found.")
         print("  Is the nixtropic Phase 3 firmware flashed?")
         sys.exit(3)
-    # On Linux a composite device lists CDC and HID separately; HID is
-    # interface 2 on our device.
+    # lt-rpc is HID interface 2, which only the debug firmware has.  No
+    # fallback: on a release build the only HID interface is FIDO.
     for d in devices:
         if d.get("interface_number", -1) == 2:
             return d["path"]
-    return devices[0]["path"]
+    print("ERROR: no lt-rpc HID interface (interface 2).  lt-rpc exists only")
+    print("  in the debug firmware: nix run .#flash-open-debug")
+    sys.exit(3)
 
 
 def main() -> int:

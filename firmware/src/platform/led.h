@@ -30,6 +30,9 @@ typedef enum {
 /* Set new state; resets state-tick and blink-phase counters. */
 void led_set_state(led_state_t s);
 
+/* Current state (may have auto-decayed since it was set). */
+led_state_t led_get_state(void);
+
 /* 1 ms heartbeat from SysTick. */
 void led_systick_tick(void);
 

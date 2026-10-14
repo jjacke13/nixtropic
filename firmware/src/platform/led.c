@@ -25,9 +25,17 @@ static void led_write(int on)
 
 void led_set_state(led_state_t s)
 {
-    s_state       = s;
+    /* Counters first, state last: a SysTick landing in between sees the
+     * old state with fresh counters (harmless), never the new state with
+     * stale ones (which could decay LED_CONFIRMED at once). */
     s_state_ticks = 0u;
     s_blink_phase = 0u;
+    s_state       = s;
+}
+
+led_state_t led_get_state(void)
+{
+    return s_state;
 }
 
 void led_systick_tick(void)

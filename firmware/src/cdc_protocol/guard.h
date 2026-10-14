@@ -20,7 +20,18 @@
  * Bytes the host sends to continue a frame it started itself (CS kept
  * low with the trailing 'x') are not request IDs and pass.  Whenever the
  * guard cannot be sure that is the case, it treats the bytes as a new
- * frame and checks them.
+ * frame and checks them: after any CS or chip-power command, and whenever
+ * the CS pin is high (spi_cs_is_asserted() reads the real pin, which the
+ * firmware's own libtropic traffic also drives).
+ *
+ * Limits, by design (debug build only):
+ *   - The guard covers the CDC passthrough.  The debug lt-rpc HID still
+ *     runs ECC generate / sign / erase and slot commands through the
+ *     firmware's own L3 session — mutable operations, allowed by rule 1.
+ *   - A host that holds CS low across lines can garble the firmware's own
+ *     chip traffic (its bytes join the host's frame).  That breaks a
+ *     transaction (denial of service on a debug dongle), it does not let
+ *     a refused request through.
  *
  * Pure logic, no hardware access: unit-tested on the host
  * (tests/host/test_passthrough_guard.c).

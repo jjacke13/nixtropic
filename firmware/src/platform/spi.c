@@ -14,7 +14,6 @@
 #include "board.h"
 
 static SPI_HandleTypeDef s_spi;
-static volatile bool     s_cs_asserted = false;
 
 static int prescaler_div_to_hal(uint32_t div, uint32_t *out)
 {
@@ -128,18 +127,20 @@ int spi_init(void)
 void spi_cs_assert(void)
 {
     HAL_GPIO_WritePin(BOARD_SPI_CS_PORT, BOARD_SPI_CS_PIN, GPIO_PIN_RESET);
-    s_cs_asserted = true;
 }
 
 void spi_cs_release(void)
 {
     HAL_GPIO_WritePin(BOARD_SPI_CS_PORT, BOARD_SPI_CS_PIN, GPIO_PIN_SET);
-    s_cs_asserted = false;
 }
 
+/* Reads the driven pin level (ODR), not a software copy: libtropic's port
+ * drives the same pin directly (lt_port_spi_csn_low/high), so a shadow
+ * flag kept here went stale whenever the firmware's own chip traffic ran
+ * (Phase 9 M1 review).  The passthrough guard relies on this being true. */
 bool spi_cs_is_asserted(void)
 {
-    return s_cs_asserted;
+    return (BOARD_SPI_CS_PORT->ODR & BOARD_SPI_CS_PIN) == 0u;
 }
 
 int spi_transfer(const uint8_t *tx, uint8_t *rx, size_t n)
@@ -165,7 +166,7 @@ uint32_t spi_get_prescaler_div(void)
 
 int spi_set_prescaler_div(uint32_t div)
 {
-    if (s_cs_asserted) {
+    if (spi_cs_is_asserted()) {
         return -1;
     }
     uint32_t hal_val;
