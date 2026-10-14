@@ -46,6 +46,10 @@ PW3_HEX="$(pin_hex "$NIXTROPIC_PW3")";  PW3_LC="$(pin_lc "$NIXTROPIC_PW3")"
 
 SELECT_APDU="00:A4:04:00:06:D2:76:00:01:24:01"
 
+# gpg's scdaemon keeps the reader open after any gpg card command; opensc
+# then fails with "Reader in use by another application".
+gpgconf --kill scdaemon >/dev/null 2>&1 || true
+
 # --- 1. CCID + pcsc-lite enum ---
 echo ""
 echo " 1/16  USB + pcsc-lite enumeration..."
