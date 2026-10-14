@@ -16,9 +16,7 @@
  *   Stage 6  — rng_init (HAL_RNG self-test)        on fail: 2-blink
  *   Stage 7  — usb_init (tusb_init, composite)     on fail: 3-blink
  *   Stage 8  — tropic_init (L1+L2+L3 session up)   on fail: 5-blink
- *   Stage 9  — boot banner ('#'-prefixed on CDC; libtropic clients
- *              silently skip — same byte-faithful behaviour as
- *              the stock TS1302 firmware)
+ *   Stage 9  — boot banner (debug build: on the CDC log console)
  *   Stage 10 — main loop: tud_task() + per-module *_task()
  *
  * After enumeration the LED switches from boot heartbeat to the
@@ -41,7 +39,6 @@
 #include "platform/spi.h"
 #include "usb/usb.h"
 #if NIXTROPIC_DEBUG
-#include "cdc_protocol/protocol.h"
 #include "hid_rpc/rpc.h"
 #endif
 #include "fido_hid/ctaphid.h"
@@ -109,10 +106,10 @@ static __attribute__((noreturn)) void raw_blink_code(uint8_t count)
 
 /* ===== Boot banner =====
  *
- * Lines starting with '#' are silently skipped by stock-protocol parsers
- * (verified against stock fw cmd.c:400 and against libtropic's
- * libtropic_port_posix_usb_dongle adapter). Humans connecting via `screen`
- * see the banner; libtropic clients ignore it.
+ * Debug build: the first lines on the CDC log console (`screen
+ * /dev/ttyACM0`).  Release build: printf goes nowhere (usb/cdc_io.c).
+ * The '#' prefix dates from the stock-protocol passthrough (removed in
+ * Phase 9 M1), whose parsers skipped such lines.
  *
  * NIXTROPIC_GIT_REV is injected by Nix at compile time when available;
  * default placeholder when not set so the build still succeeds outside Nix.
@@ -127,15 +124,8 @@ static __attribute__((noreturn)) void raw_blink_code(uint8_t count)
 
 static void boot_banner(void)
 {
-    /* Emit banner FIRST so it sits in TinyUSB's TX FIFO while USB is still
-     * enumerating. Once enumeration completes the banner drains to the host
-     * kernel buffer. lt-util's tcflush(TCIOFLUSH) at open() then wipes the
-     * banner before sending its first L2 command, avoiding response pollution.
-     *
-     * If we pumped tud_task FIRST and emitted the banner second, the banner
-     * could land in the host buffer AFTER lt-util's tcflush — polluting
-     * lt_get_info_chip_id's response stream and yielding LT_L1_SPI_ERROR.
-     * (Verified failure mode 2026-05-10.) */
+    /* Emit the banner first so it sits in TinyUSB's TX FIFO while USB is
+     * still enumerating. */
     printf("# nixtropic phase 4\r\n");
     printf("# build: %s\r\n", NIXTROPIC_BUILD_TAG);
     printf("# git: %s\r\n",   NIXTROPIC_GIT_REV);
@@ -208,17 +198,14 @@ int main(void)
     /* Stage 8 — boot banner + protocol init */
     boot_banner();
 #if NIXTROPIC_DEBUG
-    cdc_protocol_init();
     hid_rpc_init();
 #endif
     fido_hid_init();
 
     /* Stage 8.5 — libtropic on chip.  Runs a second power-cycle then
-     * lt_init.  If lt_init fails the chip is still powered (the first
-     * power-cycle ran in Stage 4.5), so in a debug build the CDC ASCII
-     * passthrough still works for lt-util.  We log but don't halt —
-     * FIDO2 / OpenPGP (and the debug HID CHIP_ID command) return an
-     * error to the host if lt_init didn't succeed. */
+     * lt_init.  We log but don't halt — FIDO2 / OpenPGP (and the debug
+     * HID CHIP_ID command) return an error to the host if lt_init didn't
+     * succeed. */
     tropic_init();
 
     /* Stage 8.6 — Credential store + slot manager.
@@ -263,7 +250,6 @@ int main(void)
     for (;;) {
         tud_task();
 #if NIXTROPIC_DEBUG
-        cdc_protocol_task();
         hid_rpc_task();
 #endif
         fido_hid_task();

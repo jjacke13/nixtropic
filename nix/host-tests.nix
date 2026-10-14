@@ -25,7 +25,7 @@ stdenv.mkDerivation {
   buildPhase = ''
     runHook preBuild
     SAN="-fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer -g -O1"
-    INC="-Ifirmware/src -Itests/host -I${trezor} -I${libtropicSrc}/include -I${libtropicSrc}/src"
+    INC="-Ifirmware/src -Itests/host -I${trezor} -I${libtropicSrc}/include"
     STRICT="-std=c11 -Wall -Wextra -Werror"
 
     # Vendored crypto: built as-is (gnu11 for explicit_bzero, no -Werror).
@@ -36,8 +36,6 @@ stdenv.mkDerivation {
     $CC $STRICT $SAN $INC tests/host/test_cbor.c firmware/src/fido_hid/cbor.c -o test_cbor
     $CC $STRICT $SAN $INC tests/host/test_pin_md_kernel.c tests/host/mock_tropic.c \
       firmware/src/tropic/pin_md_kernel.c hmac.o sha2.o memzero.o -o test_pin_md_kernel
-    $CC $STRICT $SAN $INC tests/host/test_passthrough_guard.c \
-      firmware/src/cdc_protocol/guard.c -o test_passthrough_guard
     runHook postBuild
   '';
 
@@ -46,7 +44,6 @@ stdenv.mkDerivation {
     runHook preCheck
     ./test_cbor
     ./test_pin_md_kernel
-    ./test_passthrough_guard
     bash tests/host/test-dfu-flash.sh
     bash tests/host/test-lib-fixture.sh
     runHook postCheck

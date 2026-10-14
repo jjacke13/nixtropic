@@ -6,7 +6,7 @@
     Outputs:
       packages.open-firmware      The custom security-key firmware (release:
                                   HID-FIDO2 + CCID only)
-      packages.open-firmware-debug  Same + CDC console/passthrough + lt-rpc HID
+      packages.open-firmware-debug  Same + CDC log console + lt-rpc HID
       packages.stock-firmware     Reproducibly-built unmodified TS1302 firmware
                                   (recovery / factory-reset image)
       packages.lt-util            Official TROPIC01 CLI for chip access
@@ -170,7 +170,7 @@
         # card over CCID.  100% Nix-built, MIT-licensed USB stack
         # (TinyUSB), arm-none-eabi cross toolchain via gcc-arm-embedded.
         # open-firmware-debug adds the lt-rpc vendor HID and the CDC
-        # console + SPI passthrough (Phase 9 M1: never in a release).
+        # log console (Phase 9 M1: never in a release).
         open-firmware = pkgs.callPackage ./nix/firmware.nix {
           libtropicSrc = libtropic;
           cmsisCoreSrc = cmsis-core;

@@ -9,7 +9,7 @@
  * Debug build (NIXTROPIC_DEBUG=1) — four functions, the Phase 4–8 layout:
  *
  *   IF 0  CDC control (notification EP IN)             — console / log
- *   IF 1  CDC data    (bulk EP OUT/IN)                 — printf + SPI passthrough
+ *   IF 1  CDC data    (bulk EP OUT/IN)                 — printf log output
  *   IF 2  HID #0      vendor usage page 0xFF00         — lt-rpc framing
  *   IF 3  HID #1      FIDO2 usage page 0xF1D0          — CTAP2 transport
  *   IF 4  CCID        class 0x0B, bulk IN/OUT          — OpenPGP card

@@ -15,36 +15,6 @@
 
 static SPI_HandleTypeDef s_spi;
 
-static int prescaler_div_to_hal(uint32_t div, uint32_t *out)
-{
-    switch (div) {
-    case 2:   *out = SPI_BAUDRATEPRESCALER_2;   return 0;
-    case 4:   *out = SPI_BAUDRATEPRESCALER_4;   return 0;
-    case 8:   *out = SPI_BAUDRATEPRESCALER_8;   return 0;
-    case 16:  *out = SPI_BAUDRATEPRESCALER_16;  return 0;
-    case 32:  *out = SPI_BAUDRATEPRESCALER_32;  return 0;
-    case 64:  *out = SPI_BAUDRATEPRESCALER_64;  return 0;
-    case 128: *out = SPI_BAUDRATEPRESCALER_128; return 0;
-    case 256: *out = SPI_BAUDRATEPRESCALER_256; return 0;
-    default:  return -1;
-    }
-}
-
-static uint32_t prescaler_hal_to_div(uint32_t hal)
-{
-    switch (hal) {
-    case SPI_BAUDRATEPRESCALER_2:   return 2;
-    case SPI_BAUDRATEPRESCALER_4:   return 4;
-    case SPI_BAUDRATEPRESCALER_8:   return 8;
-    case SPI_BAUDRATEPRESCALER_16:  return 16;
-    case SPI_BAUDRATEPRESCALER_32:  return 32;
-    case SPI_BAUDRATEPRESCALER_64:  return 64;
-    case SPI_BAUDRATEPRESCALER_128: return 128;
-    case SPI_BAUDRATEPRESCALER_256: return 256;
-    default: return 0;
-    }
-}
-
 static void spi_pins_init(void)
 {
     GPIO_InitTypeDef cfg = {0};
@@ -120,63 +90,6 @@ int spi_init(void)
         return 2;
     }
 
-    spi_cs_release();
-    return 0;
-}
-
-void spi_cs_assert(void)
-{
-    HAL_GPIO_WritePin(BOARD_SPI_CS_PORT, BOARD_SPI_CS_PIN, GPIO_PIN_RESET);
-}
-
-void spi_cs_release(void)
-{
-    HAL_GPIO_WritePin(BOARD_SPI_CS_PORT, BOARD_SPI_CS_PIN, GPIO_PIN_SET);
-}
-
-/* Reads the driven pin level (ODR), not a software copy: libtropic's port
- * drives the same pin directly (lt_port_spi_csn_low/high), so a shadow
- * flag kept here went stale whenever the firmware's own chip traffic ran
- * (Phase 9 M1 review).  The passthrough guard relies on this being true. */
-bool spi_cs_is_asserted(void)
-{
-    return (BOARD_SPI_CS_PORT->ODR & BOARD_SPI_CS_PIN) == 0u;
-}
-
-int spi_transfer(const uint8_t *tx, uint8_t *rx, size_t n)
-{
-    if (n == 0) {
-        return 0;
-    }
-    /* HAL_SPI_TransmitReceive's tx parameter is non-const but the peripheral
-     * does not modify the buffer. Cast away const safely. */
-    HAL_StatusTypeDef r = HAL_SPI_TransmitReceive(
-        &s_spi,
-        (uint8_t *)(uintptr_t) tx,
-        rx,
-        (uint16_t) n,
-        HAL_MAX_DELAY);
-    return (r == HAL_OK) ? 0 : 1;
-}
-
-uint32_t spi_get_prescaler_div(void)
-{
-    return prescaler_hal_to_div(s_spi.Init.BaudRatePrescaler);
-}
-
-int spi_set_prescaler_div(uint32_t div)
-{
-    if (spi_cs_is_asserted()) {
-        return -1;
-    }
-    uint32_t hal_val;
-    if (prescaler_div_to_hal(div, &hal_val) != 0) {
-        return -2;
-    }
-    HAL_SPI_DeInit(&s_spi);
-    s_spi.Init.BaudRatePrescaler = hal_val;
-    if (HAL_SPI_Init(&s_spi) != HAL_OK) {
-        return -3;
-    }
+    HAL_GPIO_WritePin(BOARD_SPI_CS_PORT, BOARD_SPI_CS_PIN, GPIO_PIN_SET);  /* CS idle */
     return 0;
 }

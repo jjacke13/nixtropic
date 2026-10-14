@@ -179,9 +179,9 @@ endforeach()
 
 # ----- Release / debug build (Phase 9 M1) -----
 # Release (default): the USB device exposes only HID-FIDO2 and CCID-OpenPGP.
-# Debug: adds the CDC console + SPI passthrough and the lt-rpc vendor HID
+# Debug: adds the CDC log console (printf) and the lt-rpc vendor HID
 # interface.  Their code is not compiled into a release build at all.
-option(NIXTROPIC_DEBUG "Debug build: CDC console + lt-rpc HID interface" OFF)
+option(NIXTROPIC_DEBUG "Debug build: CDC log console + lt-rpc HID interface" OFF)
 if(NIXTROPIC_DEBUG)
   set(NIXTROPIC_DEBUG_VALUE 1)
 else()
@@ -257,14 +257,9 @@ set(APP_SOURCES
     ${TREZOR_CRYPTO_SOURCES}
 )
 
-# Debug-only interfaces: CDC console + SPI passthrough, lt-rpc vendor HID.
+# Debug-only: lt-rpc vendor HID (the CDC log console needs no extra sources).
 if(NIXTROPIC_DEBUG)
   list(APPEND APP_SOURCES
-      src/cdc_protocol/protocol.c
-      src/cdc_protocol/parser.c
-      src/cdc_protocol/hex.c
-      src/cdc_protocol/cmd.c
-      src/cdc_protocol/guard.c
       src/hid_rpc/rpc.c
       src/hid_rpc/rpc_cmds.c
   )

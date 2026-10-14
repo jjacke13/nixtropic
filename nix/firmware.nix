@@ -9,7 +9,7 @@
 , stm32u5xxHalDriverSrc
 , tinyusbSrc
   # Phase 9 M1: false = release (HID-FIDO2 + CCID only), true = debug
-  # (adds the CDC console + SPI passthrough and the lt-rpc vendor HID).
+  # (adds the CDC log console and the lt-rpc vendor HID).
 , debugInterfaces ? false
 }:
 
@@ -70,7 +70,7 @@ stdenvNoCC.mkDerivation {
       Composite USB device on the Tropic Square TS1302 dongle: FIDO2 /
       WebAuthn over CTAPHID + OpenPGP card over USB CCID.  The debug
       build (debugInterfaces = true) adds the lt-rpc vendor HID and the
-      CDC console + SPI passthrough.  All cryptographic operations route
+      CDC log console.  All cryptographic operations route
       through the TROPIC01 secure element via libtropic L3 sessions.
     '';
     platforms = platforms.linux;

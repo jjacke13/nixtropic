@@ -311,7 +311,7 @@ let
       echo "  cppcheck — static analysis of nixtropic firmware source"
       echo "═══════════════════════════════════════════════════════════════"
       echo ""
-      echo "Scope: hid_rpc/, fido_hid/, ccid/, openpgp/, tropic/, cdc_protocol/,"
+      echo "Scope: hid_rpc/, fido_hid/, ccid/, openpgp/, tropic/,"
       echo "       usb glue, platform/ wrappers, main.c."
       echo "Vendor code (libtropic, trezor_crypto, TinyUSB, HAL, CMSIS) excluded."
       echo ""
@@ -335,7 +335,6 @@ let
         "$FIRMWARE_SRC/ccid/" \
         "$FIRMWARE_SRC/openpgp/" \
         "$FIRMWARE_SRC/tropic/" \
-        "$FIRMWARE_SRC/cdc_protocol/" \
         "$FIRMWARE_SRC/usb/usb_descriptors.c" \
         "$FIRMWARE_SRC/usb/usb.c" \
         "$FIRMWARE_SRC/usb/cdc_io.c" \
