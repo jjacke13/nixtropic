@@ -82,9 +82,10 @@ The validation suite runs immediately after flash and confirms FIDO2 + OpenPGP c
 ### 4. Configure GnuPG for the OpenPGP card
 
 These settings apply to **every Linux distro** (NixOS, Ubuntu, Debian,
-Fedora, Arch, …) — the dongle is a composite USB device (CDC + lt-rpc
-HID + FIDO2 HID + CCID) and `scdaemon` must talk to its CCID interface
-via `pcscd`, never via its own internal CCID driver.
+Fedora, Arch, …) — the dongle is a composite USB device (FIDO2 HID +
+CCID; the debug build also has a CDC log console and the lt-rpc HID) and
+`scdaemon` must talk to its CCID interface via `pcscd`, never via its own
+internal CCID driver.
 
 ```
 # ~/.gnupg/scdaemon.conf  (create or edit)
@@ -271,7 +272,7 @@ Pre-built firmware lands at ~82.8% of the STM32's 256 KB flash budget. Comfortab
 
 ## Windows compatibility
 
-Runtime use verified on Windows 11 (in a VirtualBox VM with USB passthrough). All four interfaces auto-bind to Windows' in-box class drivers — no third-party kernel driver install needed.
+Runtime use verified on Windows 11 (in a VirtualBox VM with USB passthrough) with the v0.2 four-interface layout: all interfaces auto-bound to Windows' in-box class drivers — no third-party kernel driver install needed.  The v0.3 release layout (HID + CCID only, no IAD) is not yet re-verified on Windows.
 
 - **FIDO2 / WebAuthn**: works in Brave (and Edge / Chrome / Firefox).  Tested register + login on `webauthn.io` with PIN prompt and SW1 touch.
 - **OpenPGP card**: works via [Gpg4win](https://gpg4win.org).  Kleopatra → "Manage Smart Cards" shows the dongle and its three slots (sig / dec / aut).

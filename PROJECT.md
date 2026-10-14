@@ -50,10 +50,11 @@ for the full search trail.
 | 9 | **Pairing keys at build: PRODUCTION (`*_prod0`)** | The validated TS1302 dongle ships **production** silicon `TR01-C2P-T101`, rev ACAB — not engineering samples.  Build flag `NIXTROPIC_ENG_KEYS=1` switches to `*_eng_sample` for development against older / engineering-sample chips. |
 | 10 | **Document audience: AI agents primary** | This file is structured for AI agents working on the project.  Users read conversationally and reference this file as needed. |
 | 11 | **ECC-only (no RSA)** | Ed25519 (sig/aut) + Cv25519 / X25519 (dec).  TROPIC01 has zero RSA hardware.  Flash budget would not fit RSA on STM32U535's 256 KB ceiling.  GnuPG ECC smartcard is fully covered. |
-| 12 | **Single firmware build** with both FIDO and OpenPGP card present | One firmware ships with both surfaces; the CCID interface is always present.  Users who only want FIDO can ignore the CCID interface (it enumerates but only responds to the OpenPGP AID SELECT). |
+| 12 | **Single release firmware** with both FIDO and OpenPGP card present | One release firmware ships with both surfaces; the CCID interface is always present.  Users who only want FIDO can ignore the CCID interface (it enumerates but only responds to the OpenPGP AID SELECT).  The separate debug build is for development only (decision 16). |
 | 13 | **TROPIC01 ECC slot allocation** | Slots 0..28 for FIDO credentials (`FIDO_SLOTS_MAX=29`).  Slots 29 / 30 / 31 reserved for OpenPGP sig / dec / aut.  Slot 30 is currently unused since the OpenPGP dec key is X25519 host-side compute (Trezor Safe 7 pattern); kept reserved for future hardening (`docs/BACKLOG.md §1.2`).  M&D slots 0..7 for FIDO PIN.  M&D slots 8..16 USED by OpenPGP PIN counters (PW1/PW3/RC, three slots × three PINs) — landed Phase 8 M4.  Amended 2026-05-21. |
 | 14 | **WebAuthn attestation `fmt: "none"`** | We emit `{fmt: "none", attStmt: {}}` instead of `"packed"` self-attestation.  Reason: our AAGUID is self-allocated (not in FIDO MDS), so the self-attestation signature was unverifiable by RPs regardless; meanwhile some server libraries (e.g. Proton Account) cannot verify Ed25519 packed attestation signatures (their per-algorithm verifier only covers ES256 / RS256), causing HTTP 400 register failures.  Per WebAuthn L2 §8.7, `"none"` is universally accepted when RP requests `attestation: "indirect"` or `"none"`.  Assertion-time signing (login) is unchanged — still Ed25519-on-chip via `lt_ecc_eddsa_sign`.  Swap back to `"packed" + x5c` if/when we pursue FIDO certification with a registered attestation CA.  Locked 2026-05-21. |
 | 15 | **TROPIC01 LFI advisory acknowledged; no firmware-side mitigation shipped** | Advisory `ODR_TR01_SA_2026012900` (disclosed 2026-06-03, CVSS 5.7 MEDIUM, Ledger Donjon): laser fault injection skips the SPECT EdDSA firmware-signature check → boots arbitrary App FW; on success compromises ECC keys, NVM, and **M&D keys/slots** (M&D vector embargoed to 2027-Q2).  Attack needs decap + >€30k laser lab + weeks of expert work + the physical chip in the rig at every boot (non-persistent, no remote vector) → **above our personal-USB-key threat model**.  Our part `TR01-C2P-T101` (bootloader 2.0.1, sensors enabled) is the hardest variant.  **No firmware cure exists** (root cause is ROM bootloader silicon; real fix = hardened silicon 2026-Q4).  Optional mitigation = disable maintenance mode via **R-config** (`MAINTENANCE_ENA=0`, reversible via `lt_r_config_erase`) + adopt libtropic-v4.0.0 FW-update procedure (we pin v3.2.1).  **Decision: do not ship a mitigation now**; document, don't drift the no-config-write invariant (§5).  HARD DON'TS: never `lt_r_config_write` without `lt_r_config_erase` (erratum `OI_TR01_ERR_2026010800` bricks chip); never `lt_i_config_write` for this (irreversible OTP, kills FW updates forever).  Locked 2026-06-03. |
+| 16 | **Release / debug build split** (Phase 9 M1) | Release (`.#open-firmware`, default): only HID-FIDO2 + CCID-OpenPGP — no vendor interface that reaches the chip outside the FIDO / OpenPGP logic.  Debug (`.#open-firmware-debug`, `-DNIXTROPIC_DEBUG=ON`): adds the CDC printf log console and the lt-rpc vendor HID (ECC / slot / policy debug commands through the firmware's own L3 session).  Debug code is compiled out of release, not just hidden.  The stock-compatible CDC SPI passthrough was **removed** (2026-10-14): the chip accepts a new request header while CSN stays low, so no first-byte filter can keep lifecycle requests out.  Chip FW updates use the stock firmware (`flash-stock` → `fw-update-chip`).  Locked 2026-10-14. |
 
 ---
 
@@ -63,7 +64,7 @@ for the full search trail.
    ┌───────────────────────────────────────────────────────────┐
    │ Host stack — browser, gpg, ssh, pcsc-lite, libfido2       │
    ├───────────────────────────────────────────────────────────┤
-   │ USB wire (CDC + HID×2 + CCID composite device)            │
+   │ USB wire (HID + CCID composite device; debug: +CDC +HID)  │
    └───────────────────────────────────────────────────────────┘
                            │ USB FS (12 Mbps)
                            ▼
@@ -71,7 +72,11 @@ for the full search trail.
    │ STM32U535 — nixtropic open firmware                       │
    │  ┌─────────────────────────────────────────────────────┐  │
    │  │ TinyUSB device stack — composite device             │  │
-   │  │  - IF 0/1  CDC-ACM (debug / printf console)         │  │
+   │  │  release:                                           │  │
+   │  │  - IF 0    HID      FIDO 0xF1D0  (CTAPHID)          │  │
+   │  │  - IF 1    CCID 0x0B (OpenPGP card)                 │  │
+   │  │  debug build (decision 16):                         │  │
+   │  │  - IF 0/1  CDC-ACM (printf log console)             │  │
    │  │  - IF 2    HID #0   vendor 0xFF00 (lt-rpc)          │  │
    │  │  - IF 3    HID #1   FIDO 0xF1D0  (CTAPHID)          │  │
    │  │  - IF 4    CCID 0x0B (OpenPGP card)                 │  │
@@ -270,8 +275,7 @@ nixtropic/
 │   │   ├── fido_hid/         # CTAPHID + CTAP2 + ClientPIN + credstore
 │   │   ├── openpgp/          # OpenPGP card applet + PIN handling + key ops
 │   │   ├── ccid/             # ISO 7816 APDU dispatcher + CCID protocol
-│   │   ├── hid_rpc/          # vendor lt-rpc framing
-│   │   ├── cdc_protocol/     # transparent SPI bridge mode (stock-compatible)
+│   │   ├── hid_rpc/          # vendor lt-rpc framing (debug build only)
 │   │   ├── tropic/           # libtropic glue
 │   │   └── platform/         # STM32U5 HAL wrappers, board pinout, clock, GPIO, LED
 │   └── third_party_overlay/  # U545→U535 BSP adaptation for TinyUSB

@@ -133,3 +133,49 @@ Arm GNU 14.3.Rel1 → 15.2.Rel1.  Same 25 build warnings.  `firmware.elf`
 text 218 760 → 219 980 B (`firmware.bin` 220 120 B, 84.0 %).  Reflashed;
 `validate` FIDO2 5/5 + OpenPGP 16/16 and `validate-pin-md` pass again;
 host tests pass.
+
+---
+## 2026-10-14 — Phase 9 M1 release / debug split ✅
+
+`docs/PHASE-9-PLAN.md §3`.  Commits `bf085cc`..`15f8f6b`.
+
+**Release build (`.#open-firmware`, default):** the dongle exposes only
+HID-FIDO2 (IF 0) and CCID-OpenPGP (IF 1); device class 0, product
+"nixtropic", no `/dev/ttyACM*`.  **Debug build (`.#open-firmware-debug`,
+`-DNIXTROPIC_DEBUG=ON`):** adds the CDC log console (printf only) and the
+lt-rpc vendor HID, in the Phase 4–8 layout; product "nixtropic debug".
+The debug code is compiled out of release (no cdc/rpc symbols in the ELF).
+
+- HID report routing moved to `usb/usb.c`; HID instances named.
+- LED: heartbeat until boot is done and USB is configured, then off; the
+  dead CDC-keyed cue and `platform/blink.c` removed.
+- **CDC SPI passthrough removed** (also from debug).  A request-ID
+  allowlist was built first; Jan (TROPIC01 docs reviewer) showed from the
+  chip's app-2.0.0 source that the chip accepts a new request header while
+  CSN is still low, so a first-byte filter cannot hold.  Owner decision:
+  remove the passthrough.  Nothing in our tooling used it on the open
+  firmware; chip FW update still goes through the stock firmware.
+- Review: cpp-reviewer (no blocker; LED/CS findings fixed in `f63ff0a`),
+  Jan (passthrough blocker → removal; M1 approved on source review).
+- Force-UV can no longer be toggled on a release build (it was lt-rpc
+  only); M3 adds `authenticatorConfig`.
+
+**Hardware (one dongle):**
+
+| Build | Check | Result |
+|---|---|---|
+| release | `lsusb -v` | ✓ class 0, 2 interfaces, wTotalLength 118 |
+| release | `validate` | ✓ FIDO2 5/5, OpenPGP 16/16 |
+| release | webauthn.io register + login (SW1) | ✓ |
+| release | new card key + `git commit -S` + `verify-commit` | ✓ Good signature |
+| release | LED: boot heartbeat → off; fast blink on touch wait | ✓ (owner) |
+| debug | `lsusb -v`, check-dongle | ✓ 5 interfaces, "DEBUG build" |
+| debug | `validate` / `lt_rpc.py validate` / `validate-pin-md` | ✓ 5/5 + 16/16 / 5/5 / 63C2, 63C1, 6983, T+A recovers |
+| debug | CDC console on replug | ✓ init log (the `#` banner is lost: written before SET_CONFIGURATION) |
+
+The final release binary (`firmware.bin` sha256 `2dd98d5e…`) is the one
+validated above and left on the dongle.
+
+Sizes (Arm GNU 15.2): release text 209 380 B (`firmware.bin` 209 524 B,
+79.9 %), RAM 30 KB; debug `firmware.bin` 215 232 B, RAM 35 KB.  Same
+compiler warnings as before the split.

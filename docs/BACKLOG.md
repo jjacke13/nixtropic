@@ -205,6 +205,22 @@ class drivers.  Needs: scdaemon.conf docs (same `disable-ccid + pcsc-shared`
 as Linux, via Gpg4win), DFU flashing recipe (Zadig + dfu-util OR
 STM32CubeProgrammer), README "Windows setup" section, HW-in-the-loop
 verification on Win10 22H2 + Win11.  No firmware changes expected.
+Phase 9 M1 changed the release layout (HID + CCID only, device class 0,
+no IAD): re-verify on Windows.
+
+### 6.4 Debug console loses the boot banner (Phase 9 M1)
+
+The three `#` banner lines are printed before the host configures the
+device; TinyUSB clears the CDC TX FIFO when the interface opens, so only
+the later init log reaches `/dev/ttyACM0`.  Debug build only.  Fix if
+ever needed: print the banner from `tud_mount_cb`, or after boot.
+
+### 6.5 README / docs still describe the v0.2 composite layout (M6)
+
+README and docs/UBUNTU mention the CDC + lt-rpc interfaces as if always
+present in places, and Force-UV was toggled with `lt_rpc.py`, which the
+release build no longer has (M3 adds `authenticatorConfig`).  Rewrite in
+Phase 9 M6 with CARD-SETUP.md.
 
 ---
 

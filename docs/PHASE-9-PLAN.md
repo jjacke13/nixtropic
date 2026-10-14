@@ -1,8 +1,9 @@
 # Phase 9 — Plan (v2)
 
-Status: planning. v1 (98cbfde, 2026-10-14) was reviewed against the official TROPIC01
-documentation the same evening; verdict "changes required, direction supported". v2
-folds that review in. No code shipped yet. This document is the contract.
+Status: in progress — M0 and M1 done (2026-10-14, see STATUS.md). v1 (98cbfde,
+2026-10-14) was reviewed against the official TROPIC01 documentation the same evening;
+verdict "changes required, direction supported". v2 folds that review in. This
+document is the contract.
 
 Phase 9 hardens the firmware for a **v0.3.0 release** that ships before FOSSCOMM 2026
 (Athens, 31 Oct – 1 Nov). Like v0.2, v0.3.0 is a development release: it does **not**
@@ -130,8 +131,15 @@ Refactors needed first:
    (`cdc_device.c`, `cdc_protocol/*`, `hid_rpc/*`) follow the flag.
 6. Nix: `.#open-firmware` = release, `.#open-firmware-debug` = debug. Scripts that need
    lt-rpc say so and refuse on a release build.
-7. Even in debug, the raw passthrough gets an allowlist that excludes lifecycle commands
-   (rule 1).
+7. ~~Even in debug, the raw passthrough gets an allowlist that excludes lifecycle commands
+   (rule 1).~~  **Changed 2026-10-14:** the passthrough was **removed** from both builds.
+   An allowlist was built, but the chip accepts a new request header while CSN stays
+   low (TROPIC01 app-2.0.0 source), so a first-byte filter cannot keep lifecycle
+   requests out.  The debug CDC is a printf log console only.  See STATUS.md.
+
+**Done 2026-10-14** (a day early): all validation below passed on hardware for both
+builds; reviews by cpp-reviewer and the TROPIC01 docs reviewer.  STATUS.md has the
+record.
 
 **Validation (Vaios):** release → `lsusb -v` shows only HID + CCID; webauthn.io
 register + login; `gpg --card-status`, signed commit; `validate-fido.sh`. Debug → full

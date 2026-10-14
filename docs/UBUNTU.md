@@ -171,7 +171,7 @@ sudo tee /etc/udev/rules.d/70-nixtropic.rules >/dev/null <<'EOF'
 SUBSYSTEM=="tty", ATTRS{idVendor}=="0483", ATTRS{idProduct}=="5740", GROUP="tropic", MODE="0660", SYMLINK+="tropic01", ENV{ID_MM_DEVICE_IGNORE}="1", TAG+="uaccess"
 SUBSYSTEM=="usb", ATTRS{idVendor}=="0483", ATTRS{idProduct}=="5740", GROUP="tropic", MODE="0660", ENV{ID_MM_DEVICE_IGNORE}="1", TAG+="uaccess"
 
-# nixtropic open firmware (CDC + HID×2 + CCID)
+# nixtropic open firmware (release: HID + CCID; debug build: + CDC + lt-rpc HID)
 SUBSYSTEM=="tty", ATTRS{idVendor}=="cafe", ATTRS{idProduct}=="4001", GROUP="tropic", MODE="0660", SYMLINK+="tropic01-open", ENV{ID_MM_DEVICE_IGNORE}="1", TAG+="uaccess"
 SUBSYSTEM=="usb", ATTRS{idVendor}=="cafe", ATTRS{idProduct}=="4001", GROUP="tropic", MODE="0660", ENV{ID_MM_DEVICE_IGNORE}="1", TAG+="uaccess"
 
