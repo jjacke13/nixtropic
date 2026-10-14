@@ -490,7 +490,7 @@ in
           '';
       };
       in "${wrapper}/bin/nixtropic-chip-fw-version";
-    meta.description = "Report the TROPIC01 App FW + SPECT FW versions (stock firmware; reboots the chip, writes nothing)";
+    meta.description = "Report the TROPIC01 App FW + SPECT FW versions (stock firmware; reboots the chip, sends no write command)";
   };
 
   # ===== Maintenance =====

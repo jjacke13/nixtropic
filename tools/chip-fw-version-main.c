@@ -10,9 +10,10 @@
  * Not a pure read: it runs lt_init, then a regular chip reboot into
  * Application mode (lt_reboot TR01_REBOOT, needed because the version
  * queries are Application-mode requests), then the two version
- * queries.  The reboot writes nothing persistent, but it ends any open
- * secure session and resets the chip's volatile state.  Nothing else on
- * the chip is changed.
+ * queries.  The reboot ends any open secure session.  The tool sends no
+ * persistent-write, update or provisioning command, but the chip's own
+ * boot may repair internal state in its flash (app 2.0.0 restores a
+ * damaged monotonic-counter record from its shadow copy).
  *
  * Requires the dongle to be running the stock TS1302 firmware (the one
  * with the CDC USB↔SPI passthrough that libtropic's
@@ -60,7 +61,8 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    /* Reboot to App Mode (no-op if already there).  Required because
+    /* Regular reboot into Application mode (a real reboot even when the
+     * chip is already there; it ends any open session).  Required because
      * lt_get_info_riscv_fw_ver / lt_get_info_spect_fw_ver are App-Mode
      * queries (Maintenance Mode would refuse them). */
     r = lt_reboot(&handle, TR01_REBOOT);

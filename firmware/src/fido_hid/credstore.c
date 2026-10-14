@@ -156,8 +156,9 @@ int credstore_erase_slot(int slot_idx)
     s_credstore_mutating = 1;
     /* ECC slot first (destroys the chip-side private key), then R-mem
      * metadata + bitmap clear (via slots_erase).  If the key erase fails
-     * the credential stays registered and usable, and the caller sees the
-     * error (Phase 9 M2). */
+     * the credential stays registered and the caller sees the error
+     * (Phase 9 M2); after an ambiguous failure the chip key may or may
+     * not be gone. */
     if (tropic_ecc_erase((uint8_t) slot_idx) != 0) {
         s_credstore_mutating = 0;
         return -2;

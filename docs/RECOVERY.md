@@ -70,7 +70,7 @@ The TROPIC01 has its own internal firmware (App FW running on the
 chip's RISC-V CPU + SPECT FW running on the cryptographic processor).
 Independent of the STM32's firmware.
 
-**Check what's running** (stock firmware on the dongle; reboots the chip, writes nothing):
+**Check what's running** (stock firmware on the dongle; reboots the chip, sends no write command):
 
 ```bash
 sudo nix run .#chip-fw-version
