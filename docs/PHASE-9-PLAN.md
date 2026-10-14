@@ -1,6 +1,6 @@
 # Phase 9 — Plan (v2)
 
-Status: in progress — M0 and M1 done (2026-10-14, see STATUS.md). v1 (98cbfde,
+Status: in progress — M0 and M1 done (2026-10-14), M2 done (2026-10-15); see STATUS.md. v1 (98cbfde,
 2026-10-14) was reviewed against the official TROPIC01 documentation the same evening;
 verdict "changes required, direction supported". v2 folds that review in. This
 document is the contract.
@@ -161,6 +161,12 @@ Shared fixes that M3–M5 rely on, so they come first.
 **Validation:** host mock fault tests; full suite on both builds; a forced session
 error recovers without a replug.
 
+**Done 2026-10-15** (two days early): all of the above on hardware, plus a
+throw-away image without the fix that stayed stuck (the check goes red).  Item 1:
+the chip answers OK for an empty slot, so every erase error is real.  Item 2: no
+retry anywhere, not even on `NO_SESSION` (SDK3 does not CRC-check error statuses).
+Reviews: cpp-reviewer, Jan.  STATUS.md has the record.
+
 ## 5. M3 — FIDO2 fixes + `authenticatorConfig` (Sat 17 – Sun 18 Oct)
 
 1. GetAssertion uses a credential only for the RP it was created for (stored RP hash,
@@ -181,6 +187,8 @@ error recovers without a replug.
    (CTAP §6.11). GetInfo advertises `authnrCfg` and only the versions/options really
    implemented.
 8. lt-rpc policy setters remain debug-only.
+9. Dispatch policy while a request waits for touch (FIDO and OpenPGP both ways,
+   nested waits, shared consent state, debug lt-rpc): BACKLOG 6.6, from the M2 review.
 
 **Validation:** unit + mock tests; `fido2_test.py validate`; webauthn.io; credential of
 site A refused for site B; alwaysUv matrix: PIN configured (toggle needs a

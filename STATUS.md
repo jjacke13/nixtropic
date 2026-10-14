@@ -179,3 +179,79 @@ validated above and left on the dongle.
 Sizes (Arm GNU 15.2): release text 209 380 B (`firmware.bin` 209 524 B,
 79.9 %), RAM 30 KB; debug `firmware.bin` 215 232 B, RAM 35 KB.  Same
 compiler warnings as before the split.
+
+## 2026-10-15 — Phase 9 M2 chip-wrapper foundation ✅
+
+`docs/PHASE-9-PLAN.md §4`.  Commits `5af902f`..`d084f31` (the last three are
+the fixes from Jan's review), plus a test-tool fix found on hardware.
+
+- **Erase results (M2.1).**  `tropic_ecc_erase` / `tropic_rmem_erase`
+  return the chip's result.  The old "an empty slot returns an error"
+  claim was wrong: the chip answers OK for an empty slot (TROPIC01 app
+  v2.0.0 source, checked by Jan).  Every non-rollback caller propagates
+  it; both factory resets keep erasing past a failure and report it.
+- **L3 session (M2.2).**  libtropic's own `session_status` is the only
+  session state.  Every L3 wrapper returns through `l3_done()`: a result
+  the chip returned inside the session keeps it (explicit list,
+  `tropic/l3_result.h`); anything else aborts it on the host side and the
+  next call re-handshakes.  The original error is returned and nothing is
+  retried (guard rail 5; PROJECT.md decision 17).  Before: one transport
+  error broke every chip call until a replug.  The debug `printf` no
+  longer pumps `tud_task()` (it could dispatch a nested FIDO/CCID request
+  in the middle of a chip operation); the unused Phase 1 L2 sweep is gone.
+- **Entropy (M2.3).**  trezor-crypto's `random32()` (P-256 blinding in
+  ClientPIN ECDH) was a fixed-seed LCG (`USE_INSECURE_PRNG`).  Now the
+  STM32 TRNG (`platform/trezor_rng.c`); a TRNG failure stops the device
+  at that call (system reset), never a substitute value.
+- **Bounds (M2.4).**  EdDSA messages over 4096 B are refused before the
+  `uint16_t` narrowing; a public key that does not fit is an error, not a
+  truncation.
+- **`chip-fw-version` (M2.5)** documented as rebooting the chip (it sends
+  no write command; the chip's own boot may repair internal flash state).
+- Host tests: `test_l3_result` (keep/drop list + `l3_result_finish`) and
+  `test_trezor_rng` (stop on failure, no value returned), each red with a
+  mutant.  Debug-only check: `lt_rpc.py session-recovery`.
+- Review: cpp-reviewer approved (the `l3_done` host seam came from it).
+  Jan: changes required (printf re-entry, RNG substitute, reboot wording)
+  → fixed → approved.  Still open, by plan: signCount/reset counter errors
+  (M3 item 5), FIDO/CCID interleaving during a touch wait (BACKLOG 6.6,
+  M3), guard rails 7/8 (M4).
+
+**Hardware (one dongle).**  Round 1 = first implementation, round 2 =
+final code after Jan's fixes.
+
+| Build | Check | Result |
+|---|---|---|
+| debug, **without** the abort (throw-away) | `lt_rpc.py session-recovery` | ✗ as intended: stuck after the fault, even step 1 fails on a rerun |
+| debug (1, 2) | `lt_rpc.py session-recovery` | ✓ fault → `LT_L2_TAG_ERR` (35), session re-established, no replug |
+| debug (1, 2) | CDC console on replug | ✓ no L3 error at boot; P-256 key ready |
+| debug (1, 2) | `validate` / `lt_rpc.py validate` | ✓ 5/5 + 16/16 / 5/5 |
+| debug (1) | `validate-pin-md` | ✓ 3 wrong lock, T+A recovers |
+| debug (1) | `fido2_test.py validate-m5` (authenticatorReset + setPin) | ✓ 5/5 |
+| release (1, 2) | `lsusb -v` | ✓ class 0, HID + CCID, wTotalLength 118 |
+| release (1, 2) | `validate` | ✓ FIDO2 5/5, OpenPGP 16/16 |
+| release (1) | `fido2-token -C` (changePIN over ECDH) | ✓ |
+| release (1, 2) | webauthn.io (PIN + SW1) | ✓ register + login (1); (2) the round-1 credential fails (see notes), a new one registers + logs in ✓ (owner) |
+
+Final binaries: release `firmware.bin` sha256 `c64e99b5…` (on the
+dongle), debug `ed463efa…`.
+
+Sizes (Arm GNU 15.2): release `firmware.bin` 209 396 B (79.9 %, −128 B vs
+M1), RAM 30 KB; debug 215 136 B, RAM 35 KB.  Same compiler warnings as M1;
+trezor's "NOT SUITABLE FOR PRODUCTION USE" pragma is gone.
+
+Notes:
+- An lt-rpc request sent within ~0.3 s of enumeration times out (2 s):
+  boot init (chip power-up, session, credential store, P-256 key) runs
+  before the main loop.  The boot sequence is the same as M1, so most
+  likely not new (not re-checked on an M1 image).
+- After a FIDO reset, the first setPIN auto-enables Force-UV (Phase 6
+  design).  On a release build it can only be turned off again with M3's
+  `authenticatorConfig`.
+- `lt_rpc.py validate` used ECC slot 0 unconditionally (erase + generate),
+  which replaced the key of the round-1 webauthn.io credential (slot 0 after
+  the reset): login with it fails "could not verify signature", a fresh
+  credential works.  Test-harness bug, not firmware: the key tests now use a
+  free FIDO slot from the bitmap and erase it afterwards; `sign-test`
+  refuses an occupied or OpenPGP slot.  First hardware run of the fixed tool:
+  M3.

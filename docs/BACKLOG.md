@@ -222,6 +222,17 @@ present in places, and Force-UV was toggled with `lt_rpc.py`, which the
 release build no longer has (M3 adds `authenticatorConfig`).  Rewrite in
 Phase 9 M6 with CARD-SETUP.md.
 
+### 6.6 Requests interleave during a touch wait (Phase 9 M2 review → M3)
+
+`user_presence_check()` pumps `tud_task()` while it waits for SW1.  CTAPHID
+refuses other FIDO requests then, but a CCID APDU is processed right away,
+so OpenPGP chip operations can run between the chip calls of a waiting FIDO
+request, and FIDO between OpenPGP's (`openpgp_applet.c` also waits for
+touch).  Not inside a libtropic call, so the L3 session logic (M2) is not
+affected.  Define a dispatch policy covering both directions, nested touch
+waits, the shared consent state, and the debug lt-rpc.  Found by Jan in the
+M2 review; plan it with the M3 FIDO work.
+
 ---
 
 ## 7. Performance / flash budget
