@@ -190,6 +190,11 @@
           fwUpdateChip = fw-update-chip;
         };
 
+        # Host-side unit tests against a mock chip (Phase 9 M0).
+        host-tests = pkgs.callPackage ./nix/host-tests.nix {
+          libtropicSrc = libtropic;
+        };
+
         devShell = import ./nix/dev-shell.nix { inherit pkgs; };
 
       in
@@ -199,10 +204,13 @@
           stock-firmware = stockFirmware;  # convenience alias
           inherit open-firmware;
           inherit fw-update-chip;
+          inherit host-tests;
           default = stockFirmware;
         };
 
         devShells.default = devShell;
+
+        checks = { inherit host-tests; };
 
         inherit apps;
 

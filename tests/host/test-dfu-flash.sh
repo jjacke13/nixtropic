@@ -11,7 +11,7 @@ fails=0
 # case <name> <expected exit> <fake exit> <fake output lines...>
 case_() {
   local name="$1" want="$2" code="$3"; shift 3
-  { echo '#!/usr/bin/env bash'
+  { echo "#!$(command -v bash)"
     for l in "$@"; do printf 'echo %q\n' "$l"; done
     echo "exit $code"; } > "$TMP/dfu-util"
   chmod +x "$TMP/dfu-util"
