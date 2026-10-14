@@ -33,10 +33,7 @@
 void gpio_init(void);
 
 /* Platform-pin helpers */
-
 void board_tropic_power_on(void);
 void board_tropic_power_off(void);
-
-bool board_tropic_gpo_read(void);
 
 #endif /* NIXTROPIC_GPIO_H */

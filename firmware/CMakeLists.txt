@@ -7,11 +7,9 @@
 #     → ninja builds firmware.elf
 #     → POST_BUILD generates firmware.bin and firmware.hex
 #
-# Phase 1 used libtropic on the MCU for an L1+L2 round-trip with TROPIC01.
-# Phase 2 is byte-passthrough (host runs libtropic over USB CDC), so the
-# libtropic source list + tropic/ application code are excluded from the
-# build via comment markers. They stay on disk — re-enabling for Phase 3+
-# is uncomment-only.
+# The firmware runs libtropic on the MCU (tropic/) and owns the chip
+# session.  -DNIXTROPIC_DEBUG=ON adds the debug-only interfaces (Phase 9
+# M1); the default is the release build.
 
 cmake_minimum_required(VERSION 3.21)
 

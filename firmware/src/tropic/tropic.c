@@ -33,8 +33,8 @@
 /* M4: trezor_crypto CAL provides AES-GCM/SHA256/HMAC/X25519 for L3. */
 #include "libtropic_trezor_crypto.h"
 
-/* Pump USB CDC between blocking SPI ops so the host doesn't lose
- * /dev/ttyACM* during a long L2 sweep. */
+/* Pump USB (tud_task) during the chip's power-up wait so enumeration and
+ * host requests keep being serviced. */
 #include "tusb.h"
 
 /* libtropic device + handle held statically (decision P1.8: no malloc). */

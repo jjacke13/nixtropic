@@ -69,8 +69,3 @@ void board_tropic_power_off(void)
 {
     HAL_GPIO_WritePin(BOARD_TROPIC_PWR_PORT, BOARD_TROPIC_PWR_PIN, GPIO_PIN_RESET);
 }
-
-bool board_tropic_gpo_read(void)
-{
-    return HAL_GPIO_ReadPin(BOARD_TROPIC_GPO_PORT, BOARD_TROPIC_GPO_PIN) == GPIO_PIN_SET;
-}
