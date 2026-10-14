@@ -127,3 +127,9 @@ No SW1 touch was requested during the suites (touch policy off).
 
 `firmware.elf` text = 218 760 B, data = 140 B (`firmware.bin` 218 904 B /
 256 KB, 83.5 %); bss = 37 912 B.
+
+**nixpkgs → nixos-26.05 (same day, only input bumped):** toolchain
+Arm GNU 14.3.Rel1 → 15.2.Rel1.  Same 25 build warnings.  `firmware.elf`
+text 218 760 → 219 980 B (`firmware.bin` 220 120 B, 84.0 %).  Reflashed;
+`validate` FIDO2 5/5 + OpenPGP 16/16 and `validate-pin-md` pass again;
+host tests pass.
