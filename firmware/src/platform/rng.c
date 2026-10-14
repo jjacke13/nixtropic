@@ -68,3 +68,39 @@ int rng_read(uint8_t *buf, size_t n)
     }
     return 0;
 }
+
+/* ----- trezor-crypto randomness hook (Phase 9 M2) -----
+ *
+ * trezor-crypto's ecdsa.c calls random32() to randomise the projective
+ * Z coordinate of every P-256 point multiplication (side-channel
+ * blinding in ClientPIN keyAgreement: ecdsa_get_public_key65 and
+ * ecdh_multiply).  Until M2 the build compiled rand.c with
+ * USE_INSECURE_PRNG: a fixed-seed LCG, so the "random" blinding was the
+ * same sequence on every boot.  Now rand.c is built without it and this
+ * function supplies the STM32 TRNG.
+ *
+ * random32() cannot return an error.  On a TRNG failure it records a
+ * sticky flag and returns a counter value so the caller's rejection
+ * loop still terminates; callers check rng_failed() after the P-256
+ * operation and discard its result.  The flag stays set until reboot:
+ * deliberate (fail closed), even a one-off TRNG error disables ClientPIN
+ * until the next replug.
+ * The private scalars themselves come from TROPIC01 (tropic_random). */
+static bool s_failed;
+
+uint32_t random32(void)
+{
+    uint32_t word = 0;
+    if (rng_read((uint8_t *) &word, sizeof word) != 0) {
+        static uint32_t fallback = 0x9E3779B9u;
+        s_failed = true;
+        fallback = fallback * 1664525u + 1013904223u;
+        return fallback;
+    }
+    return word;
+}
+
+bool rng_failed(void)
+{
+    return s_failed;
+}

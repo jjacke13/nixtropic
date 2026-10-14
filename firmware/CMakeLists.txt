@@ -154,8 +154,9 @@ set(TREZOR_CRYPTO_SOURCES
     ${TREZOR_VENDOR}/ed25519-donna/ed25519-donna-basepoint-table.c
     ${TREZOR_VENDOR}/ed25519-donna/ed25519-donna-32bit-tables.c
     ${TREZOR_VENDOR}/ed25519-donna/modm-donna-32bit.c
-    # rand.c — trezor uses it for ed25519 batch verify; we don't, but
-    # linker still wants the symbol.
+    # rand.c — random_buffer/random_uniform on top of random32(), which
+    # src/platform/rng.c supplies from the STM32 TRNG (Phase 9 M2).  ecdsa.c
+    # uses it to blind every P-256 point multiplication.
     ${TREZOR_VENDOR}/rand.c
     # Phase 5 M3: P-256 ECDH for CTAP2 ClientPIN keyAgreement (ecdh_multiply
     # + ecdsa_get_public_key65). bignum256 + nist256p1 curve params + zkp
@@ -310,15 +311,16 @@ foreach(lt_src ${LIBTROPIC_SOURCES} ${LT_CAL_SOURCES} ${TREZOR_CRYPTO_SOURCES})
     COMPILE_FLAGS "-Wno-strict-prototypes -Wno-unused-parameter -Wno-undef -Wno-maybe-uninitialized -Wno-cast-align -Wno-conversion -Wno-shadow -Wno-pointer-sign -Wno-sign-compare -Wno-unused-function -Wno-implicit-fallthrough")
 endforeach()
 
-# Trezor-vendor crypto needs four extra defines per upstream's
+# Trezor-vendor crypto needs extra defines per upstream's
 # tests/functional/src/CMakeLists.txt:134 build recipe:
 #   AES_VAR                      — enable variable-key AES dispatcher (so
 #                                  aes_encrypt_key(key, key_len, ctx)
 #                                  resolves to 128/192/256 variants)
-#   USE_INSECURE_PRNG            — rand.c uses a non-secure stub PRNG;
-#                                  fine for us since we never call into
-#                                  ed25519 batch verify (key gen/sign
-#                                  happen on TROPIC01, not the MCU)
+#   (no USE_INSECURE_PRNG)       — Phase 9 M2: upstream's test recipe sets it,
+#                                  which compiles a fixed-seed LCG as
+#                                  random32().  We build rand.c without it;
+#                                  src/platform/rng.c supplies random32()
+#                                  from the STM32 TRNG.
 #   ed25519_verify=...           — collision-avoidance no-op for us
 #   USE_PRECOMPUTED_CP=0         — Phase 5 M3: disable the 127 KB
 #                                  precomputed multiplication table for
@@ -329,7 +331,7 @@ endforeach()
 #                                  slowdown is invisible.
 foreach(tz_src ${TREZOR_CRYPTO_SOURCES})
   set_source_files_properties(${tz_src} PROPERTIES
-    COMPILE_DEFINITIONS "AES_VAR;USE_INSECURE_PRNG;USE_PRECOMPUTED_CP=0;ed25519_verify=trezor_crypto_ed25519_verify")
+    COMPILE_DEFINITIONS "AES_VAR;USE_PRECOMPUTED_CP=0;ed25519_verify=trezor_crypto_ed25519_verify")
 endforeach()
 
 target_link_options(${FIRMWARE_ELF} PRIVATE
