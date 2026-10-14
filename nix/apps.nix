@@ -15,6 +15,13 @@ let firmware = openFirmware; in
 let
   inherit (pkgs) writeShellApplication dfu-util usbutils coreutils gnugrep;
 
+  # One flash step for every app (Phase 9 M0): carries its own PATH so
+  # the callers' runtimeInputs don't matter.
+  dfuFlash = pkgs.writeShellScript "nixtropic-dfu-flash" ''
+    export PATH=${pkgs.lib.makeBinPath [ dfu-util coreutils pkgs.gawk ]}:$PATH
+    exec ${pkgs.bash}/bin/bash ${../tools/dfu-flash.sh} "$@"
+  '';
+
   # ===== Flashing =====
 
   flash-stock = writeShellApplication {
@@ -53,30 +60,9 @@ let
       echo "chip is NOT touched by this operation)"
       echo ""
 
-      # dfu-util exits non-zero after a successful :leave because the
-      # device disconnects from USB to jump to user firmware before
-      # dfu-util can read the final get_status — known benign quirk on
-      # every STM32 + dfu-util combo.  Detect via the "File downloaded
-      # successfully" marker rather than exit code.
-      DFU_LOG=$(mktemp)
-      trap 'rm -f "$DFU_LOG"' EXIT
-
-      dfu-util -a 0 -s 0x08000000:leave -D "$FW_BIN" 2>&1 | tee "$DFU_LOG" || true
-      DFU_EXIT="''${PIPESTATUS[0]}"
-
-      echo ""
-      if [ "$DFU_EXIT" -eq 0 ]; then
-        echo "✓ Flash complete (clean dfu-util exit)."
-      elif grep -q "File downloaded successfully" "$DFU_LOG"; then
-        echo "✓ Flash complete."
-        echo "  ('Error during download get_status' after :leave is a benign"
-        echo "  dfu-util quirk — flash itself succeeded.)"
-      else
-        echo "✗ Flash FAILED — dfu-util exit $DFU_EXIT and no"
-        echo "  'File downloaded successfully' marker.  Dongle is likely"
-        echo "  still in DFU mode; safe to retry.  See docs/RECOVERY.md."
-        exit 1
-      fi
+      # tools/dfu-flash.sh decides success: dfu-util exit 0, or only the
+      # one known-benign :leave failure (see the script header).
+      ${dfuFlash} "$FW_BIN"
     '';
   };
 
@@ -109,20 +95,11 @@ let
           echo "✓ DFU mode detected; flashing..."
           echo ""
 
-          DFU_LOG=$(mktemp)
-          trap 'rm -f "$DFU_LOG"' EXIT
-          dfu-util -a 0 -s 0x08000000:leave -D "$FW_BIN" 2>&1 | tee "$DFU_LOG" || true
-          DFU_EXIT="''${PIPESTATUS[0]}"
-
-          echo ""
-          if [ "$DFU_EXIT" -eq 0 ] || grep -q "File downloaded successfully" "$DFU_LOG"; then
-            echo "✓ Flash complete."
-            echo "  Run \`nix run .#validate\` to confirm both surfaces work."
-          else
-            echo "✗ Flash FAILED.  Safe to retry.  Fall back to flash-stock"
-            echo "  for known-good recovery (see docs/RECOVERY.md)."
+          if ! ${dfuFlash} "$FW_BIN"; then
+            echo "  Fall back to flash-stock for known-good recovery."
             exit 1
           fi
+          echo "  Run \`nix run .#validate\` to confirm both surfaces work."
         '';
       };
 
@@ -280,15 +257,8 @@ let
             exit 1
           fi
 
-          DFU_LOG=$(mktemp)
-          trap 'rm -f "$DFU_LOG"' EXIT
           echo "Step 1/2: DFU flash..."
-          dfu-util -a 0 -s 0x08000000:leave -D "$FW_BIN" 2>&1 | tee "$DFU_LOG" >/dev/null || true
-          DFU_EXIT="''${PIPESTATUS[0]}"
-          if [ "$DFU_EXIT" -ne 0 ] && ! grep -q "File downloaded successfully" "$DFU_LOG"; then
-            echo "✗ DFU flash FAILED."
-            exit 1
-          fi
+          ${dfuFlash} "$FW_BIN" >/dev/null || { echo "✗ DFU flash FAILED."; exit 1; }
 
           echo "✓ Flash complete.  Waiting for enumeration..."
           for _ in $(seq 1 24); do
