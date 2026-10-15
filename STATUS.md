@@ -353,3 +353,34 @@ Notes:
   read error or a torn erase+write (PIN and alwaysUv lost); orphan scrub / record
   validation; other global-state writers do not mark an uncertain write; one-packet
   CTAPHID replies are dropped under IN backpressure.
+
+## 2026-10-15 — Phase 9 M3b ES256 credentials + M4 design ✅
+
+**ES256 (P-256 ECDSA) next to EdDSA** — commits 8b43157, 6ab113c, 790e630.
+MakeCredential takes the first of EdDSA (-8) / ES256 (-7) in the site's
+`pubKeyCredParams` order; RS256 stays unsupported (no RSA on the chip).  P-256 keys
+are generated and used inside TROPIC01: SDK 3 hashes `authData ‖ clientDataHash` with
+SHA-256 on the STM32, the chip signs the digest and returns raw `r ‖ s`, which
+`cose.c` turns into DER.  `cose.c` also writes both COSE key formats (MakeCredential
+and credMgmt).  The stored alg byte is minus the COSE id.  GetInfo lists both
+algorithms.  Chip facts from Jan (`PHASE-9-M4-DESIGN.md` §9); cpp-reviewer APPROVE
+(3 low, fixed in 6ab113c).
+
+| Build | Test | Result |
+|---|---|---|
+| host | `test_cose` (key encodings, DER edge cases), `test_ctap2_parse` (host order, RS256, truncation) | ✓ red first, then green |
+| debug 559c87ad | `validate_fido_m3.py` (new part 3b: EdDSA and ES256 chosen by order, both assertions verified; credMgmt keys = ES256 keys) | ✓ 60/60 |
+| release c6385131 | `validate_fido_m3.py` | ✓ 60/60 (a first run 59/60: SW1 pressed during the CANCEL check) |
+| release | www.webauthn.me, ES256 discoverable register + usernameless authenticate | ✓ (owner) |
+
+Final binaries: release `firmware.bin` sha256 `c6385131…` (on the dongle), debug
+`559c87ad…`.  Sizes: release 221 764 B (84.6 %, +1 136 B), debug 227 584 B.
+
+Notes:
+- webauthn.me's debugger defaults to RS256; pick ES256 or EdDSA.  Its Authenticate
+  finds a non-discoverable credential only if the credential ID is uploaded; a
+  discoverable one (Resident Key: required) works without.
+- opensc joined the dev shell; without it the suite skipped the CCID check.
+
+**M4 design** `docs/PHASE-9-M4-DESIGN.md`: approved by Jan at r3 (8f3a743; r1 and r2
+CHANGES REQUIRED, mapped in §11/§12).  Implementation Fri 16 Oct.

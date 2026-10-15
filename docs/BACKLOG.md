@@ -63,7 +63,7 @@ to `plugdev`, so libfido2 / browsers see the dongle without a
 manual rule.
 
 
-### 2.3 ES256 (P-256) credentials
+### 2.3 ES256 (P-256) credentials — DONE (Phase 9 M3b, 2026-10-15)
 
 GetInfo announces EdDSA only since Phase 9 M3, so sites that offer only
 ES256/RS256 (e.g. webauthn.me's default) do not see the key.  TROPIC01

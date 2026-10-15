@@ -81,8 +81,8 @@ the PIN-derived key Phase 10 builds on, so nothing here is in its way.
 | M1 | Release / debug build split | ✅ Wed 14 Oct (planned Fri 16) | M0 |
 | M2 | Chip-wrapper foundation (errors, sessions, entropy) | ✅ Thu 15 Oct (planned Sat 17) | M1 |
 | M3 | FIDO2 fixes + CTAP2.1 permission tokens + `authenticatorConfig` | ✅ Thu 15 Oct (planned Sat 17 – Sun 18) | M2 |
-| M3b | ES256 (P-256) credentials (added 15 Oct) | Thu 15 Oct evening | M3 |
-| M4 | PIN + persistent-state integrity (design doc first: Thu 15 evening) | Fri 16 Oct | M2 |
+| M3b | ES256 (P-256) credentials (added 15 Oct) | ✅ Thu 15 Oct | M3 |
+| M4 | PIN + persistent-state integrity (design ✅ approved Thu 15 evening) | Fri 16 Oct | M2 |
 | M5 | No secrets in readable R-memory (design doc first) | Sat 17 – Sun 18 Oct | M4 green by **Fri 16 Oct evening**, else Phase 10 |
 | M6 | Docs + CARD-SETUP | Sun 18 Oct | M1–M5 |
 | — | Tag v0.3.0 (Vaios decides the push) + buffer | Mon 19 Oct | — |
