@@ -38,6 +38,7 @@
 #include "platform/rng.h"
 #include "platform/spi.h"
 #include "usb/usb.h"
+#include "usb/usb_ccid.h"
 #if NIXTROPIC_DEBUG
 #include "hid_rpc/rpc.h"
 #endif
@@ -249,6 +250,7 @@ int main(void)
     /* Stage 9 — main loop */
     for (;;) {
         tud_task();
+        usb_ccid_task();          /* CCID APDUs run here only (Phase 9 M3) */
 #if NIXTROPIC_DEBUG
         hid_rpc_task();
 #endif

@@ -21,7 +21,8 @@
  *
  *    open() ─→ post EP_OUT receive ─→ host writes
  *                                          │
- *                                          ▼
+ *                                          ▼ OUT callback stores it
+ *                                    usb_ccid_task() (main loop only)
  *                                    process_message()
  *                                          │
  *                                          ▼
@@ -31,6 +32,11 @@
  *                                  post next EP_OUT receive
  *
  * pcsc-lite serialises commands per-slot, so we don't need a queue.
+ *
+ * Phase 9 M3: the APDU runs from the main loop, never inside the USB
+ * callback, so a FIDO touch wait (which pumps tud_task) cannot start an
+ * OpenPGP chip operation; a message that arrives during a wait is
+ * answered after it.
  */
 
 #include <stdint.h>
@@ -44,6 +50,7 @@
 #include "usb_ccid.h"
 #include "ccid/ccid_proto.h"
 #include "ccid/apdu_dispatch.h"
+#include "fido_hid/user_presence.h"
 
 /* Max single CCID message size we accept.  4096 B APDU body + 10 B
  * header + small headroom = round to 4112 for 16-byte alignment.
@@ -86,6 +93,11 @@ static uint8_t  s_itf_num;
 static uint8_t  s_rx_buf[CCID_MAX_MSG_LEN];
 static uint8_t  s_tx_buf[CCID_MAX_MSG_LEN];
 static uint16_t s_tx_len;
+static uint8_t  s_rhport;
+/* Length of a received bulk-OUT message waiting for usb_ccid_task()
+ * (0 = none).  RX is re-armed only after it is answered, so s_rx_buf
+ * stays stable meanwhile. */
+static volatile uint32_t s_rx_pending;
 
 /* ----- Little-endian helpers (CCID uses LE; ISO 7816 uses BE — keep
  *       distinct to avoid mixing) ----- */
@@ -246,6 +258,7 @@ static void ccid_init(void)
     memset(s_rx_buf, 0, sizeof s_rx_buf);
     memset(s_tx_buf, 0, sizeof s_tx_buf);
     s_tx_len = 0;
+    s_rx_pending = 0;
     s_itf_num = 0xFFu;
 }
 
@@ -270,6 +283,7 @@ static uint16_t ccid_open(uint8_t rhport,
     }
 
     s_itf_num = itf_desc->bInterfaceNumber;
+    s_rhport  = rhport;
 
     uint8_t const *p_desc = tu_desc_next((uint8_t const *) itf_desc);
     uint16_t consumed = (uint16_t) itf_desc->bLength;
@@ -320,20 +334,10 @@ static bool ccid_control_xfer_cb(uint8_t rhport, uint8_t stage,
 static bool ccid_xfer_cb(uint8_t rhport, uint8_t ep_addr,
                           xfer_result_t result, uint32_t xferred_bytes)
 {
-    (void) result;
-
     if (ep_addr == USB_CCID_EP_OUT) {
-        process_message(s_rx_buf, (size_t) xferred_bytes);
-        if (s_tx_len > 0) {
-            if (!usbd_edpt_xfer(rhport, USB_CCID_EP_IN, s_tx_buf, s_tx_len)) {
-                /* Couldn't queue TX — drop the response, re-arm RX so
-                 * the host's retry will land somewhere. */
-                s_tx_len = 0;
-                usbd_edpt_xfer(rhport, USB_CCID_EP_OUT, s_rx_buf,
-                               sizeof s_rx_buf);
-            }
+        if (result == XFER_RESULT_SUCCESS && xferred_bytes > 0u) {
+            s_rx_pending = xferred_bytes;      /* usb_ccid_task() answers */
         } else {
-            /* No response (truly malformed) — re-arm RX immediately. */
             usbd_edpt_xfer(rhport, USB_CCID_EP_OUT, s_rx_buf, sizeof s_rx_buf);
         }
     } else if (ep_addr == USB_CCID_EP_IN) {
@@ -358,3 +362,20 @@ const usbd_class_driver_t usb_ccid_driver = {
     .xfer_cb          = ccid_xfer_cb,
     .sof              = NULL,
 };
+
+void usb_ccid_task(void)
+{
+    uint32_t len = s_rx_pending;
+    if (len == 0u || user_presence_is_awaiting()) {
+        return;
+    }
+    s_rx_pending = 0;
+    process_message(s_rx_buf, (size_t) len);
+    if (s_tx_len > 0u
+        && usbd_edpt_xfer(s_rhport, USB_CCID_EP_IN, s_tx_buf, s_tx_len)) {
+        return;                     /* RX re-armed when the IN completes */
+    }
+    /* Nothing to send (malformed) or TX refused: listen again. */
+    s_tx_len = 0;
+    usbd_edpt_xfer(s_rhport, USB_CCID_EP_OUT, s_rx_buf, sizeof s_rx_buf);
+}

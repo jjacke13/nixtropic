@@ -129,8 +129,10 @@ static int build_authdata(const uint8_t *rp_id_hash, uint8_t flags,
 static int wait_touch(void)
 {
     /* H5 sign-canary: compare against UP_OK explicitly. */
-    return (user_presence_check(UP_TIMEOUT_MS) == UP_OK)
-               ? 0 : (int) CTAP2_ERR_OPERATION_DENIED;
+    up_result_t up = user_presence_check(UP_TIMEOUT_MS);
+    if (up == UP_OK) return 0;
+    return (up == UP_CANCEL) ? (int) CTAP2_ERR_KEEPALIVE_CANCEL
+                             : (int) CTAP2_ERR_OPERATION_DENIED;
 }
 
 /* Step 1: a zero-length pinUvAuthParam asks "touch the key you mean"

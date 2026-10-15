@@ -38,6 +38,7 @@ static volatile deb_state_t s_deb_state    = DEB_UP;
 static volatile uint8_t     s_stable_count = 0u;
 static volatile bool        s_pressed      = false;
 static volatile bool        s_awaiting     = false;
+static volatile bool        s_cancel       = false;
 
 void user_presence_systick_tick(void)
 {
@@ -94,8 +95,20 @@ bool user_presence_is_awaiting(void)
     return s_awaiting;
 }
 
+void user_presence_cancel(void)
+{
+    if (s_awaiting) s_cancel = true;
+}
+
 up_result_t user_presence_check(uint32_t timeout_ms)
 {
+    /* Phase 9 M3: one wait at a time.  The dispatch policy already keeps
+     * a second request from starting during a wait; this is the backstop
+     * so two requests can never share one press. */
+    if (s_awaiting) {
+        return UP_FAIL;
+    }
+
     /* C1: refuse fresh-consent if button is already pressed.  No LED, no
      * wait — return UP_FAIL right now.  Caller maps to OPERATION_DENIED. */
     if (s_pressed) {
@@ -103,6 +116,7 @@ up_result_t user_presence_check(uint32_t timeout_ms)
         return UP_FAIL;
     }
 
+    s_cancel   = false;
     s_awaiting = true;
     led_set_state(LED_AWAITING_TOUCH);
 
@@ -115,10 +129,13 @@ up_result_t user_presence_check(uint32_t timeout_ms)
 
     const uint32_t start = HAL_GetTick();
     while ((HAL_GetTick() - start) < timeout_ms) {
-        /* Pump USB so host doesn't time us out.  Pump CTAPHID so a host
-         * INIT on another CID can still abort a stuck channel — the
-         * is_awaiting guard in ctaphid.c rejects everything else. */
+        /* Pump USB so the host does not time us out.  CTAPHID answers
+         * INIT, takes CANCEL for this request and refuses the rest;
+         * CCID and lt-rpc wait (Phase 9 M3 dispatch policy). */
         tud_task();
+        if (s_cancel) {
+            break;
+        }
         if (s_pressed) {
             ok_a = true;
             ok_b = true;
@@ -132,6 +149,11 @@ up_result_t user_presence_check(uint32_t timeout_ms)
     if (ok_a && ok_b) {
         led_set_state(LED_CONFIRMED);
         return UP_OK;
+    }
+    if (s_cancel) {
+        s_cancel = false;
+        led_set_state(LED_ERROR);
+        return UP_CANCEL;
     }
 
     /* Timed out without a press.  Show error, return UP_FAIL. */

@@ -219,7 +219,8 @@ int fido_hid_cbor_dispatch(const uint8_t *req, size_t req_len,
         if (state_exists) {
             up_result_t up = user_presence_check(10000u);
             if (up != UP_OK) {
-                resp[0] = CTAP2_ERR_OPERATION_DENIED;
+                resp[0] = (up == UP_CANCEL) ? CTAP2_ERR_KEEPALIVE_CANCEL
+                                            : CTAP2_ERR_OPERATION_DENIED;
                 return 1;
             }
         }

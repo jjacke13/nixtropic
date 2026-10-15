@@ -22,6 +22,11 @@
 /* Returned to TinyUSB by usbd_app_driver_get_cb() in usb.c. */
 extern const usbd_class_driver_t usb_ccid_driver;
 
+/* Answer a received CCID message, from the main loop only (Phase 9 M3
+ * dispatch policy): the USB callback just stores it, so a touch wait,
+ * which pumps tud_task(), never runs an APDU. */
+void usb_ccid_task(void);
+
 /* Bulk endpoint addresses — defined in usb_descriptors.c so the descriptor
  * and the driver agree.  Declared here so usb_ccid.c can post transfers
  * on them without dragging in the descriptor file. */

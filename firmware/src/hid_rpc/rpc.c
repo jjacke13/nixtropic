@@ -14,6 +14,7 @@
 #include "rpc.h"
 #include "lt_rpc_proto.h"
 #include "usb/usb.h"
+#include "fido_hid/user_presence.h"
 
 #include <stdint.h>
 #include <stdbool.h>
@@ -157,6 +158,12 @@ static bool emit_response_packet(void)
 
 static void dispatch_request(void)
 {
+    /* Phase 9 M3 dispatch policy: no chip command while a FIDO or
+     * OpenPGP request waits for touch (its pump would run it). */
+    if (user_presence_is_awaiting()) {
+        queue_error(LT_RPC_ERR_BUSY);
+        return;
+    }
     rpc_handler_fn fn = hid_rpc_lookup(s_req_cmd);
     if (fn == NULL) {
         queue_error(LT_RPC_ERR_INVALID_CMD);

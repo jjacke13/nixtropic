@@ -33,13 +33,24 @@
 /* Sign-canary enum — see H5 above.  Constants chosen far from 0/1 so
  * accidental zero-init or bool-cast cannot produce UP_OK. */
 typedef enum {
-    UP_OK   = 0xA5C3,
-    UP_FAIL = 0x3C5A,
+    UP_OK     = 0xA5C3,
+    UP_FAIL   = 0x3C5A,
+    UP_CANCEL = 0x5A3C,     /* ended by user_presence_cancel() */
 } up_result_t;
 
 /* Block up to timeout_ms for a release→press transition.  Returns
- * UP_OK only on a fresh press from a confirmed-unpressed baseline. */
+ * UP_OK only on a fresh press from a confirmed-unpressed baseline.
+ *
+ * Phase 9 M3 dispatch policy (BACKLOG 6.6): only one wait runs at a
+ * time — a call while another wait is running fails at once — and the
+ * pump inside the wait starts no other application request (CTAPHID
+ * answers CHANNEL_BUSY, CCID is processed only from the main loop,
+ * lt-rpc answers BUSY).  The waiting request owns the consent. */
 up_result_t user_presence_check(uint32_t timeout_ms);
+
+/* End a running wait with UP_CANCEL (CTAPHID_CANCEL on the waiting
+ * request's channel).  No effect when nothing waits. */
+void user_presence_cancel(void);
 
 /* Current debounced state.  Non-blocking. */
 bool user_presence_is_pressed(void);

@@ -13,7 +13,7 @@
  *   - INIT      0x86  channel allocation + caps echo
  *   - PING      0x81  echo payload
  *   - MSG       0x83  U2F APDU passthrough → return SW=0x6E00 (CLA n/s)
- *   - CANCEL    0x91  abort current transaction
+ *   - CANCEL    0x91  end a touch wait / drop a half-received request (no reply)
  *   - CBOR      0x90  routed to fido_hid_cbor_dispatch (stub in M2)
  *
  * Same cooperative-USB caveat as lt-rpc: the tud_hid_set_report_cb fires
@@ -63,6 +63,11 @@ static uint8_t  s_resp_buf[FIDO_HID_MAX_PAYLOAD];
 /* CID allocator */
 static uint32_t s_next_cid;
 
+/* CID whose CTAPHID_CBOR request is being processed (0 = none).  While
+ * it is set the shared response buffer belongs to that request, so other
+ * answers go out at once as single packets (Phase 9 M3). */
+static uint32_t s_busy_cid;
+
 /* ===== Helpers ===== */
 
 static uint32_t read_be32(const uint8_t *p)
@@ -104,9 +109,32 @@ static void reset_assembly(void)
 
 /* ===== Response queueing ===== */
 
+/* One-packet answer sent at once, without the shared buffer.  Dropped if
+ * the IN endpoint is busy; the host retries or times out. */
+static void send_now(uint32_t cid, uint8_t cmd_with_flag,
+                     const uint8_t *payload, size_t len)
+{
+    uint8_t pkt[FIDO_HID_REPORT_LEN];
+    if (len > FIDO_HID_INIT_DATA_LEN) return;
+    memset(pkt, 0, sizeof pkt);
+    write_be32(pkt, cid);
+    pkt[4] = cmd_with_flag;
+    write_be16(&pkt[5], (uint16_t) len);
+    if (len > 0u) memcpy(&pkt[7], payload, len);
+    if (tud_hid_n_ready(USB_HID_INSTANCE_FIDO)) {
+        (void) tud_hid_n_report(USB_HID_INSTANCE_FIDO, 0, pkt, sizeof pkt);
+    }
+}
+
 static void queue_response(uint32_t cid, uint8_t cmd_with_flag,
                            const uint8_t *payload, size_t len)
 {
+    if (s_busy_cid != 0u) {
+        /* A CBOR request is waiting for touch and owns s_resp_buf: the
+         * INIT and CHANNEL_BUSY answers allowed meanwhile fit one packet. */
+        send_now(cid, cmd_with_flag, payload, len);
+        return;
+    }
     if (len > FIDO_HID_MAX_PAYLOAD) len = FIDO_HID_MAX_PAYLOAD;
     if (len > 0u) memcpy(s_resp_buf, payload, len);
     s_resp_cid     = cid;
@@ -235,25 +263,14 @@ static void handle_msg(uint32_t cid, const uint8_t *payload, size_t len)
     queue_response(cid, FIDO_HID_CMD_INIT_FLAG | FIDO_HID_CMD_MSG, sw, 2);
 }
 
-static void handle_cancel(uint32_t cid, const uint8_t *payload, size_t len)
-{
-    /* CANCEL has empty payload by spec. We treat extra bytes as
-     * non-fatal — just abort. Response is required (FIDO spec §11.2.9.1.4):
-     * empty payload, echoing CANCEL with the INIT flag. */
-    (void) payload;
-    (void) len;
-    if (s_state == FH_STATE_ASSEMBLING && s_cur_cid == cid) {
-        reset_assembly();
-    }
-    queue_response(cid, FIDO_HID_CMD_INIT_FLAG | FIDO_HID_CMD_CANCEL, NULL, 0);
-}
-
 static void handle_cbor(uint32_t cid, const uint8_t *payload, size_t len)
 {
     /* Borrow s_resp_buf as scratch — same pattern as lt-rpc. The
      * fido_hid_cbor_dispatch() prototype lives here in M2 as a weak stub
      * returning INVALID_COMMAND for everything; M3 wires real GetInfo. */
+    s_busy_cid = cid;
     int n = fido_hid_cbor_dispatch(payload, len, s_resp_buf, FIDO_HID_MAX_PAYLOAD);
+    s_busy_cid = 0u;
     if (n < 0) {
         queue_error(cid, FIDO_HID_ERR_OTHER);
         return;
@@ -294,8 +311,6 @@ static void dispatch_request(uint32_t cid)
         handle_ping(cid, s_req_buf, len);
     } else if (cmd == FIDO_HID_CMD_MSG) {
         handle_msg(cid, s_req_buf, len);
-    } else if (cmd == FIDO_HID_CMD_CANCEL) {
-        handle_cancel(cid, s_req_buf, len);
     } else if (cmd == FIDO_HID_CMD_CBOR) {
         handle_cbor(cid, s_req_buf, len);
     } else {
@@ -340,10 +355,25 @@ static void handle_init_packet(uint32_t cid, const uint8_t *pkt)
         return;
     }
 
+    /* CTAPHID_CANCEL (CTAP 2.1 §11.2.9.1.5) is never answered.  On the
+     * channel whose CBOR request waits for touch it ends the wait (that
+     * request answers KEEPALIVE_CANCEL); it also drops a half-received
+     * request of its channel.  Otherwise it is ignored.  Phase 9 M3:
+     * before, CANCEL got an echo and could not stop a wait. */
+    if (cmd == FIDO_HID_CMD_CANCEL) {
+        if (cid == s_busy_cid) {
+            user_presence_cancel();
+        }
+        if (s_state == FH_STATE_ASSEMBLING && cid == s_cur_cid) {
+            reset_assembly();
+        }
+        return;
+    }
+
     /* Phase 6 M1 — M3 reentrancy defense (docs/PHASE-6-PLAN.md §3 row
      * M3): while user_presence_check is awaiting touch, the CBOR
-     * dispatcher cannot accept any new transaction.  pin.c file-statics
-     * (s_pin_token, s_eph_priv) are not reentrant; ECC keypair gen on
+     * dispatcher cannot accept any new transaction.  pin.c / pin_token.c
+     * state (token, s_eph_priv) is not reentrant; ECC keypair gen on
      * TROPIC01 must run to completion before any new sign request.
      * Refuse with CHANNEL_BUSY regardless of CID — INIT was already
      * fast-pathed above so stuck channels can still be reset. */
