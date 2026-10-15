@@ -46,6 +46,8 @@
  *   0x01 — Phase 4 (stub backend, embedded keypair)
  *   0x02 — Phase 5 M2..M5 (TROPIC01 chip-side keys, hardware-PIN)
  *   0x03 — Phase 6 (real SW1 UP + Force-UV + credentialManagement)
+ *   0x04 — Phase 9 M3 (EdDSA only, real rk, permission tokens,
+ *          authenticatorConfig, makeCredUvNotRqd)
  *
  * AAGUID bump policy + history in docs/WEBAUTHN-NOTES.md §3.
  *
@@ -54,111 +56,84 @@ const uint8_t NIXTROPIC_AAGUID[16] = {
     0x6Eu, 0x69u, 0x78u, 0x74u,  /* "nixt" */
     0x72u, 0x6Fu, 0x70u, 0x69u,  /* "ropi" */
     0x63u, 0x00u, 0x00u, 0x00u,  /* "c" + pad */
-    0x00u, 0x00u, 0x00u, 0x03u,  /* pad + Phase 6 version */
+    0x00u, 0x00u, 0x00u, 0x04u,  /* pad + Phase 9 version */
 };
 
 /* ----- authenticatorGetInfo (0x04) -----
  *
- * Returns a CBOR map keyed by unsigned ints (CTAP §6.4 §6.4.0 Table 1):
- *   1: versions (array of strings) — REQUIRED
- *   3: aaguid (16-byte byte string) — REQUIRED
- *   4: options (map<text, bool>)
- *   5: maxMsgSize (uint)
- *   6: pinUvAuthProtocols (array of uint) — supported PIN protocol versions
- *   9: transports (array of strings)
- *   10: algorithms (array of maps with "alg" + "type")
+ * CBOR map keyed by unsigned ints (CTAP §6.4), canonical order:
+ *   1: versions            ["FIDO_2_0"]
+ *   3: aaguid
+ *   4: options             (below)
+ *   5: maxMsgSize          1024
+ *   6: pinUvAuthProtocols  [1]
+ *   9: transports          ["usb"]
+ *  10: algorithms          [{alg: -8 (EdDSA), type: "public-key"}]
  *
- * Map keys MUST appear in canonical numeric order (1, 3, 4, 5, 6, 9, 10).
- * Options map text keys also in canonical (length, then byte) order:
- *   "rk" (2) < "up" (2) < "plat" (4) < "clientPin" (9)
+ * Phase 9 M3: only what is implemented.  Not "FIDO_2_1": that version
+ * requires hmac-secret, credProtect and PIN/UV protocol 2 (CTAP §9).
+ * The CTAP 2.1 features we have are announced by their own option IDs,
+ * which clients read independently (libfido2 dev.c).  ES256 is not
+ * offered (MakeCredential signs Ed25519 only), and credentialMgmtPreview
+ * is gone (it announces command 0x41, which does not exist here).
  *
- * Algorithms (key 10) advertises COSE algorithm identifiers:
- *   -8 = EdDSA (Ed25519) — matches TROPIC01's primary curve
- *   -7 = ES256 (ECDSA over P-256) — TROPIC01 also supports
- * Type is always "public-key".
- *
- * pinUvAuthProtocols (key 6) is REQUIRED by libfido2's
- * fido_dev_set_pin / fido_do_ecdh — without it the client can't tell
- * which PIN protocol to negotiate and aborts with FIDO_ERR_INTERNAL.
- * Phase 5 M3 supports protocol 1 only.
+ * Options, canonical order (length, then bytes):
+ *   rk                discoverable credentials (GetAssertion without allowList)
+ *   up                SW1 touch
+ *   plat              false: roaming authenticator
+ *   alwaysUv          Force-UV (authenticatorConfig toggleAlwaysUv)
+ *   credMgmt          authenticatorCredentialManagement 0x0A
+ *   authnrCfg         authenticatorConfig 0x0D
+ *   clientPin         true = a PIN is set
+ *   pinUvAuthToken    ClientPIN 0x09 permission tokens
+ *   makeCredUvNotRqd  = !alwaysUv: non-discoverable credentials without
+ *                     a token when a PIN is set
  */
 static int build_get_info(uint8_t *resp, size_t resp_max)
 {
+    int always_uv = slots_force_uv_get() != 0;
     cbor_writer_t w;
     cbor_writer_init(&w, resp, resp_max);
-
-    /* Top-level map: 7 entries (Phase 5 M3 added pinUvAuthProtocols) */
     cbor_write_map_header(&w, 7);
 
-    /* key 1 → versions = ["FIDO_2_0"] */
     cbor_write_uint(&w, 1);
     cbor_write_array_header(&w, 1);
     cbor_write_text(&w, "FIDO_2_0");
 
-    /* key 3 → aaguid */
     cbor_write_uint(&w, 3);
     cbor_write_byte_string(&w, NIXTROPIC_AAGUID, sizeof NIXTROPIC_AAGUID);
 
-    /* key 4 → options.  CTAP2.1 canonical text-key order (length-then-lex
-     * on encoded bytes): rk (2), up (2), plat (4), alwaysUv (8),
-     * credMgmt (8), clientPin (9), credentialMgmtPreview (21). */
     cbor_write_uint(&w, 4);
-    cbor_write_map_header(&w, 7);
+    cbor_write_map_header(&w, 9);
+    cbor_write_text(&w, "rk");               cbor_write_bool(&w, true);
+    cbor_write_text(&w, "up");               cbor_write_bool(&w, true);
+    cbor_write_text(&w, "plat");             cbor_write_bool(&w, false);
+    cbor_write_text(&w, "alwaysUv");         cbor_write_bool(&w, always_uv);
+    cbor_write_text(&w, "credMgmt");         cbor_write_bool(&w, true);
+    cbor_write_text(&w, "authnrCfg");        cbor_write_bool(&w, true);
+    cbor_write_text(&w, "clientPin");        cbor_write_bool(&w, pin_is_set());
+    cbor_write_text(&w, "pinUvAuthToken");   cbor_write_bool(&w, true);
+    cbor_write_text(&w, "makeCredUvNotRqd"); cbor_write_bool(&w, !always_uv);
 
-    cbor_write_text(&w, "rk");
-    cbor_write_bool(&w, true);           /* Phase 5 M2: resident keys supported (TROPIC01 R-mem) */
-    cbor_write_text(&w, "up");
-    cbor_write_bool(&w, true);           /* Phase 6 M1: real user-presence via SW1 / PH3 */
-    cbor_write_text(&w, "plat");
-    cbor_write_bool(&w, false);          /* not a platform authenticator */
-    cbor_write_text(&w, "alwaysUv");
-    cbor_write_bool(&w, slots_force_uv_get() != 0);
-                                         /* Phase 6 M2: Force-UV — when true, signing ops require
-                                          * pinAuth regardless of RP's `userVerification` hint.
-                                          * Auto-enabled on first setPIN; togglable via lt-rpc. */
-    cbor_write_text(&w, "credMgmt");
-    cbor_write_bool(&w, true);           /* Phase 6 M3: authenticatorCredentialManagement (cmd 0x0A) */
-    cbor_write_text(&w, "clientPin");
-    cbor_write_bool(&w, pin_is_set());   /* Phase 5 M3: PIN protocol supported; "true" = PIN currently set */
-    cbor_write_text(&w, "credentialMgmtPreview");
-    cbor_write_bool(&w, true);           /* CTAP2.0 alias for credMgmt; libfido2 checks either. */
-
-    /* key 5 → maxMsgSize.
-     * Cap at 1024 to match FIDO_HID_MAX_PAYLOAD / 2 — half the buffer
-     * leaves room for response framing overhead. */
+    /* maxMsgSize: half of FIDO_HID_MAX_PAYLOAD, leaving room for framing. */
     cbor_write_uint(&w, 5);
     cbor_write_uint(&w, 1024);
 
-    /* key 6 → pinUvAuthProtocols = [1].
-     * Phase 5 M3 implements pinProtocol version 1 only (P-256 + AES-256-
-     * CBC + HMAC-SHA-256). pinProtocol 2 (HKDF derivation, AES-CTR, longer
-     * sharedSecret) is a Phase 6+ option if needed for newer clients. */
+    /* PIN/UV auth protocol 1 only (P-256, AES-256-CBC, HMAC-SHA-256);
+     * libfido2 needs this key to negotiate a PIN at all. */
     cbor_write_uint(&w, 6);
     cbor_write_array_header(&w, 1);
     cbor_write_uint(&w, 1);
 
-    /* key 9 → transports = ["usb"] */
     cbor_write_uint(&w, 9);
     cbor_write_array_header(&w, 1);
     cbor_write_text(&w, "usb");
 
-    /* key 10 → algorithms.
-     * Order in the array doesn't have to match anything; advertised first
-     * is preferred. Ed25519 first because TROPIC01 native curve. */
     cbor_write_uint(&w, 10);
-    cbor_write_array_header(&w, 2);
-
-    /* { "alg": -8, "type": "public-key" } */
+    cbor_write_array_header(&w, 1);
     cbor_write_map_header(&w, 2);
     cbor_write_text(&w, "alg");
-    cbor_write_negint(&w, -8);           /* COSE EdDSA */
-    cbor_write_text(&w, "type");
-    cbor_write_text(&w, "public-key");
-
-    /* { "alg": -7, "type": "public-key" } */
-    cbor_write_map_header(&w, 2);
-    cbor_write_text(&w, "alg");
-    cbor_write_negint(&w, -7);           /* COSE ES256 */
+    cbor_write_negint(&w, -8);
     cbor_write_text(&w, "type");
     cbor_write_text(&w, "public-key");
 
@@ -257,6 +232,8 @@ int fido_hid_cbor_dispatch(const uint8_t *req, size_t req_len,
     }
     case CTAP2_CMD_CREDENTIAL_MGMT:
         return credmgmt_handle_cbor(&req[1], req_len - 1u, resp, resp_max);
+    case CTAP2_CMD_CONFIG:
+        return ctap2_config(&req[1], req_len - 1u, resp, resp_max);
 
     case CTAP2_CMD_GET_NEXT_ASSERTION:
         return ctap2_get_next_assertion(resp, resp_max);

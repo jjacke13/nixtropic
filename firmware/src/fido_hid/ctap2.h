@@ -17,8 +17,9 @@
  *   0x04  authenticatorGetInfo              §6.4
  *   0x06  authenticatorClientPIN            §6.5  (pin.c — protocol v1)
  *   0x07  authenticatorReset                §6.7  (10 s post-boot window)
- *   0x08  authenticatorGetNextAssertion     §6.3  (multi-credential rp)
+ *   0x08  authenticatorGetNextAssertion     §6.3  (discoverable, several per RP)
  *   0x0A  authenticatorCredentialManagement §6.8  (credmgmt.c)
+ *   0x0D  authenticatorConfig               §6.11 (ctap2_config.c, toggleAlwaysUv)
  *
  * CBOR encoding rules: CTAP2 canonical (§7.1) — shortest length-prefix,
  * lexicographic byte ordering of map keys.  Caller responsibility for
@@ -43,6 +44,7 @@
 #define CTAP2_CMD_RESET             0x07u
 #define CTAP2_CMD_GET_NEXT_ASSERTION 0x08u
 #define CTAP2_CMD_CREDENTIAL_MGMT   0x0Au   /* CTAP2.1 §6.8 (Phase 6 M3) */
+#define CTAP2_CMD_CONFIG            0x0Du   /* CTAP2.1 §6.11 (Phase 9 M3) */
 
 /* CTAP2 status codes (CTAP §6.4). */
 #define CTAP2_OK                          0x00u
@@ -86,5 +88,8 @@ int ctap2_get_next_assertion(uint8_t *resp, size_t resp_max);
 /* Forget the GetAssertion state kept for GetNextAssertion.  The
  * dispatcher calls it for every other command (Phase 9 M3). */
 void ctap2_assertion_reset(void);
+
+/* authenticatorConfig, toggleAlwaysUv only (ctap2_config.c). */
+int ctap2_config(const uint8_t *req, size_t req_len, uint8_t *resp, size_t resp_max);
 
 #endif /* NIXTROPIC_FIDO_HID_CTAP2_H */

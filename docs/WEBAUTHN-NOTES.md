@@ -7,13 +7,13 @@ layout, plus the host-side gotchas that surface in browser UIs.
 ## AAGUID
 
 ```
-6e 69 78 74 72 6f 70 69 63 00 00 00 00 00 00 03
+6e 69 78 74 72 6f 70 69 63 00 00 00 00 00 00 04
 └─── "nixtropic" ───────┘ └─ pad ─┘ └─ version
 ```
 
 Self-allocated.  Not FIDO MDS-registered ($25k/yr not viable for an
 open-source project).  Trailing byte = capability-set version (currently
-`0x03`).
+`0x04` since Phase 9 M3).
 
 Why most RPs show `Provider: (Unavailable)`: they look up the AAGUID
 against the FIDO Alliance Metadata Service, which doesn't know us.
@@ -67,7 +67,7 @@ adversary-visible but leaks no secrets.
 
 1. Advanced Settings → Attestation → **Direct**
 2. Re-register
-3. AAGUID shows `6e697874-726f-7069-6300-000000000003`
+3. AAGUID shows `6e697874-726f-7069-6300-000000000004`
 
 ## authData byte layout
 
@@ -96,7 +96,7 @@ Exhausts after ~136 years at 1 sig/sec continuous.
 
 `fido2-token -I /dev/hidrawN` should report:
 
-- `aaguid: 6e697874726f70696300000000000003`
+- `aaguid: 6e697874726f70696300000000000004`
 - `options: rk, up, plat=false, alwaysUv, credMgmt, clientPin, credentialMgmtPreview` — `alwaysUv` is dynamic (true once a PIN is set)
 - `algorithms: eddsa, es256`
 - `pin protocols: 1`

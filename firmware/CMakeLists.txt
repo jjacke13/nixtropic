@@ -240,6 +240,7 @@ set(APP_SOURCES
     src/fido_hid/ctap2.c
     src/fido_hid/ctap2_creds.c
     src/fido_hid/ctap2_parse.c
+    src/fido_hid/ctap2_config.c
     src/fido_hid/credstore.c
     src/fido_hid/credmgmt.c
     src/fido_hid/slots.c
