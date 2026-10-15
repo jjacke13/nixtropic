@@ -15,6 +15,7 @@
 
 static struct {
     bool     written;
+    bool     masked;    /* holds data but reads SLOT_EMPTY */
     size_t   len;
     uint8_t  data[MOCK_RMEM_SIZE];
 } s_rmem[MOCK_RMEM_SLOTS];
@@ -28,7 +29,11 @@ static struct {
     unsigned at;        /* absolute call number that fails; 0 = none */
     int      rc;
     bool     executed;
+    mock_damage_t tear;  /* 0 = plain fault */
 } s_fault[MOCK_OP_COUNT];
+
+/* Damage of the call in progress (set by enter()). */
+static mock_damage_t s_tear;
 
 static uint8_t prng_byte(void)
 {
@@ -57,6 +62,29 @@ void mock_fail_nth(mock_op_t op, unsigned n, int rc, bool executed)
     s_fault[op].at = s_calls[op] + n;
     s_fault[op].rc = rc;
     s_fault[op].executed = executed;
+    s_fault[op].tear = 0;
+}
+
+void mock_tear_nth(mock_op_t op, unsigned n, int rc, mock_damage_t how)
+{
+    mock_fail_nth(op, n, rc, true);
+    s_fault[op].tear = how;
+}
+
+void mock_rmem_damage(uint16_t slot, mock_damage_t how)
+{
+    if (slot >= MOCK_RMEM_SLOTS) return;
+    if (how == MOCK_DAMAGE_MASKED) {
+        s_rmem[slot].masked = s_rmem[slot].written;
+        return;
+    }
+    if (!s_rmem[slot].written) {            /* garbage where nothing was */
+        memset(s_rmem[slot].data, 0xa5, 16);
+        s_rmem[slot].len = 16;
+        s_rmem[slot].written = true;
+        return;
+    }
+    s_rmem[slot].data[s_rmem[slot].len / 2] ^= 0x5a;
 }
 
 unsigned mock_calls(mock_op_t op)
@@ -70,9 +98,11 @@ static int enter(mock_op_t op, bool *execute)
 {
     s_calls[op]++;
     *execute = true;
+    s_tear = 0;
     if (s_fault[op].at != 0 && s_fault[op].at == s_calls[op]) {
         s_fault[op].at = 0;
         *execute = s_fault[op].executed;
+        s_tear = s_fault[op].tear;
         return s_fault[op].rc;
     }
     return 0;
@@ -102,6 +132,7 @@ int tropic_rmem_write(uint16_t slot, const uint8_t *data, size_t len)
         s_rmem[slot].len = len;
         s_rmem[slot].written = true;
     }
+    if (s_tear) mock_rmem_damage(slot, s_tear);
     return rc;
 }
 
@@ -111,7 +142,7 @@ int tropic_rmem_read(uint16_t slot, uint8_t *out, size_t max, size_t *actual)
     int rc = enter(MOCK_OP_RMEM_READ, &exec);
     if (slot >= MOCK_RMEM_SLOTS || out == NULL || max == 0u) return -1;
     if (rc != 0) return rc;
-    if (!s_rmem[slot].written) return -(int) LT_L3_R_MEM_DATA_READ_SLOT_EMPTY;
+    if (!s_rmem[slot].written || s_rmem[slot].masked) return -(int) LT_L3_R_MEM_DATA_READ_SLOT_EMPTY;
     size_t n = s_rmem[slot].len < max ? s_rmem[slot].len : max;
     memcpy(out, s_rmem[slot].data, n);
     if (actual) *actual = n;
@@ -123,9 +154,10 @@ int tropic_rmem_erase(uint16_t slot)
     bool exec;
     int rc = enter(MOCK_OP_RMEM_ERASE, &exec);
     if (slot >= MOCK_RMEM_SLOTS) return -(int) LT_L3_INVALID_CMD;
-    if (exec) {
+    if (exec && !s_tear) {
         memset(&s_rmem[slot], 0, sizeof s_rmem[slot]);
     }
+    if (s_tear) mock_rmem_damage(slot, s_tear);   /* torn erase: old content, damaged */
     return rc;
 }
 

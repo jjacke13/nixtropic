@@ -44,6 +44,8 @@ stdenv.mkDerivation {
     $CC $STRICT $SAN $INC tests/host/test_trezor_rng.c firmware/src/platform/trezor_rng.c -o test_trezor_rng
     $CC $STRICT $SAN $INC tests/host/test_pin_md_kernel.c tests/host/mock_tropic.c \
       firmware/src/tropic/pin_md_kernel.c hmac.o sha2.o memzero.o -o test_pin_md_kernel
+    $CC $STRICT $SAN $INC tests/host/test_rec_pair.c tests/host/mock_tropic.c \
+      firmware/src/tropic/rec_pair.c hmac.o sha2.o memzero.o -o test_rec_pair
     runHook postBuild
   '';
 
@@ -57,6 +59,7 @@ stdenv.mkDerivation {
     ./test_l3_result
     ./test_trezor_rng
     ./test_pin_md_kernel
+    ./test_rec_pair
     bash tests/host/test-dfu-flash.sh
     bash tests/host/test-lib-fixture.sh
     runHook postCheck

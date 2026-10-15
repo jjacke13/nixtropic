@@ -134,7 +134,7 @@ session policy).
 | VALID(g+1) | VALID(g) | the newer; repair B | cut after A was committed |
 | VALID | EMPTY / BAD | that copy; repair | cut inside a write, or one damaged copy |
 | EMPTY | EMPTY | **ABSENT** → guards, §2.5 | never written, or cleared |
-| BAD | EMPTY / BAD | **CORRUPT** | none |
+| BAD | EMPTY / BAD | **CORRUPT** | a cut inside the first write of an init, or inside the last erase of an init/clear (§13) |
 
 (and symmetric). Under one fault the result is never older than the last
 acknowledged write: a write is acknowledged only after **both** copies hold it, so a
@@ -599,3 +599,16 @@ unverified.
 
 r3: **APPROVE** (Jan). Nonblocking wording fix folded in: the last-slot lockout also
 follows a fault before the M&D call or after the re-key (§3.3).
+
+## 13. Implementation notes (step 1, `rec_pair`, 2026-10-16)
+
+- The single-fault sweep found one case the §2.2 table missed: an init or clear erases
+  B, then A, and an init then writes A first. A cut **inside** the erase of A, or
+  inside the first write of A, can leave A `BAD` with B `EMPTY` → **CORRUPT**, which
+  is neither the state before nor after. It fails closed (no access gained, the
+  application refuses and its reset/TERMINATE path re-initialises), so the code keeps
+  the table's CORRUPT. Open for Jan: accept this as a second exception in §1.1, or
+  read `BAD`+`EMPTY` as ABSENT (then the §2.5 guards decide, as they already must for
+  masked damage).
+- A record with generation 0 reads `BAD` (generations start at 1). Two valid copies
+  whose generations differ by more than 1 read **ERROR**: no single fault explains a gap.

@@ -44,4 +44,21 @@ void mock_fail_nth(mock_op_t op, unsigned n, int rc, bool executed);
 /* Number of calls of `op` since mock_reset. */
 unsigned mock_calls(mock_op_t op);
 
+/* R-mem damage (Phase 9 M4).  A damaged slot either reads back with wrong
+ * content, or reads SLOT_EMPTY although it holds data: the chip reports a
+ * failed decrypt as an empty slot [Jan J1b].  A masked slot still refuses a
+ * write until it is erased. */
+typedef enum {
+    MOCK_DAMAGE_GARBLE = 1,
+    MOCK_DAMAGE_MASKED,
+} mock_damage_t;
+
+/* Damage `slot` at rest. */
+void mock_rmem_damage(uint16_t slot, mock_damage_t how);
+
+/* The n-th next call of `op` (MOCK_OP_RMEM_WRITE or _ERASE) is torn: the
+ * chip acts, the slot ends damaged `how`, and the call returns `rc`
+ * (0 = the chip claims success). */
+void mock_tear_nth(mock_op_t op, unsigned n, int rc, mock_damage_t how);
+
 #endif /* NIXTROPIC_TESTS_MOCK_TROPIC_H */
