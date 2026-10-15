@@ -34,6 +34,8 @@ stdenv.mkDerivation {
     done
 
     $CC $STRICT $SAN $INC tests/host/test_cbor.c firmware/src/fido_hid/cbor.c -o test_cbor
+    $CC $STRICT $SAN $INC tests/host/test_ctap2_parse.c firmware/src/fido_hid/ctap2_parse.c \
+      firmware/src/fido_hid/cbor.c -o test_ctap2_parse
     $CC $STRICT $SAN $INC tests/host/test_l3_result.c -o test_l3_result
     $CC $STRICT $SAN $INC tests/host/test_trezor_rng.c firmware/src/platform/trezor_rng.c -o test_trezor_rng
     $CC $STRICT $SAN $INC tests/host/test_pin_md_kernel.c tests/host/mock_tropic.c \
@@ -45,6 +47,7 @@ stdenv.mkDerivation {
   checkPhase = ''
     runHook preCheck
     ./test_cbor
+    ./test_ctap2_parse
     ./test_l3_result
     ./test_trezor_rng
     ./test_pin_md_kernel
