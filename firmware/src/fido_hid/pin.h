@@ -19,10 +19,12 @@
  *   - Encryption: AES-256-CBC with IV=0, key=shared_key
  *   - MAC: pinAuth = LEFT(HMAC-SHA256(shared_key, msg), 16)
  *
- * pinUvAuthToken: 32 B random, generated on every successful getPinToken,
- * lives in RAM only. Wiped at boot and on factory reset. Used by the
- * platform to authenticate subsequent MakeCred/GetAssertion calls via
- *   pinAuth = LEFT(HMAC-SHA256(pinUvAuthToken, clientDataHash), 16)
+ * pinUvAuthToken: 32 B random, generated on every successful getPinToken
+ * (0x05, permissions mc+ga) or getPinUvAuthTokenUsingPinWithPermissions
+ * (0x09, CTAP2.1, Phase 9 M3).  RAM only; its state (permissions, RP ID,
+ * timers) lives in pin_token.c.  Wiped at boot, on set/changePIN and on
+ * factory reset.  The platform authenticates later commands with
+ *   pinAuth = LEFT(HMAC-SHA256(pinUvAuthToken, message), 16)
  *
  * Retry logic (Phase 5 M3 — RAM-only retry counter sub-throttle):
  *   - R-mem-backed pin_retries: 8 max, decrements on every WRONG-PIN
@@ -55,6 +57,13 @@
  * @return 0 on success; negative on chip error.
  */
 int pin_init(void);
+
+/**
+ * @brief Forget the pinUvAuthToken, the in-boot PIN failure state, and
+ *        rotate the key-agreement key.  authenticatorReset calls this
+ *        (Phase 9 M3).
+ */
+void pin_reset_ram(void);
 
 /**
  * @brief Handle a CTAP2_CMD_CLIENT_PIN (0x06) sub-command.

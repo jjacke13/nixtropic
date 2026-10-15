@@ -243,6 +243,7 @@ set(APP_SOURCES
     src/fido_hid/credmgmt.c
     src/fido_hid/slots.c
     src/fido_hid/pin.c
+    src/fido_hid/pin_token.c
     src/fido_hid/pin_md.c
     src/fido_hid/user_presence.c
     src/tropic/tropic.c

@@ -34,6 +34,7 @@
 
 #include "pin.h"
 #include "pin_md.h"
+#include "pin_token.h"
 #include "ctap2.h"
 #include "cbor.h"
 #include "slots.h"
@@ -51,6 +52,8 @@
 #include "nist256p1.h"
 #include "memzero.h"
 
+#include "stm32u5xx_hal.h"   /* HAL_GetTick: token timers */
+
 /* ----- CBOR keys (request map) ----- */
 #define CP_KEY_PIN_PROTOCOL   1u
 #define CP_KEY_SUB_COMMAND    2u
@@ -58,6 +61,8 @@
 #define CP_KEY_PIN_AUTH       4u
 #define CP_KEY_NEW_PIN_ENC    5u
 #define CP_KEY_PIN_HASH_ENC   6u
+#define CP_KEY_PERMISSIONS    9u
+#define CP_KEY_RP_ID         10u
 
 /* ----- CBOR keys (response map) ----- */
 #define CP_RESP_KEY_AGREEMENT 1u
@@ -70,6 +75,7 @@
 #define CP_SUB_SET_PIN         0x03u
 #define CP_SUB_CHANGE_PIN      0x04u
 #define CP_SUB_GET_PIN_TOKEN   0x05u
+#define CP_SUB_GET_PIN_UV_TOKEN_PERMS 0x09u  /* CTAP2.1 getPinUvAuthTokenUsingPinWithPermissions */
 
 /* ----- State (RAM-only) ----- */
 static int     s_initted;
@@ -77,9 +83,7 @@ static int     s_initted;
 static uint8_t s_eph_priv[32];
 /* P-256 public key uncompressed: byte[0] = 0x04 || X[32] || Y[32]. */
 static uint8_t s_eph_pub65[65];
-/* pinUvAuthToken — RAM only, regenerated on every successful getPinToken. */
-static uint8_t s_pin_token[PIN_TOKEN_LEN];
-static int     s_pin_token_valid;
+/* The pinUvAuthToken and its state live in pin_token.c (Phase 9 M3). */
 /* Consecutive wrong PINs THIS BOOT. Reset to 0 only on successful PIN
  * (which also resets retries to max). CTAP2 §5.5.4: at ≥3 consec fails,
  * authenticator MUST refuse further PIN ops until power-cycle. */
@@ -426,8 +430,7 @@ static int handle_set_pin(cbor_reader_t *r, size_t n_keys, uint8_t *resp, size_t
     /* Forward secrecy: rotate ephemeral keypair. */
     (void) regen_eph();
     /* New PIN means any previous pinUvAuthToken is no longer valid. */
-    memzero(s_pin_token, sizeof s_pin_token);
-    s_pin_token_valid = 0;
+    puat_reset();
     s_consec_fails = 0;
     s_auth_blocked = 0;
 
@@ -603,82 +606,109 @@ static int handle_change_pin(cbor_reader_t *r, size_t n_keys, uint8_t *resp, siz
 
     /* Success: rotate ephemeral, reset RAM counters, invalidate old token. */
     (void) regen_eph();
-    memzero(s_pin_token, sizeof s_pin_token);
-    s_pin_token_valid = 0;
+    puat_reset();
     s_consec_fails = 0;
 
     resp[0] = CTAP2_OK;
     return 1;
 }
 
-/* getPinToken sub-command (0x05). Spec §5.5.4.6.
- * Request fields:
- *   3: keyAgreement
- *   6: pinHashEnc (16 B, AES-CBC encrypted SHA-256(currentPin)[:16])
- * On success returns encrypted pinUvAuthToken.
- */
-static int handle_get_pin_token(cbor_reader_t *r, size_t n_keys,
-                                uint8_t *resp, size_t resp_max)
+/* Parameters of getPinToken (0x05) / getPinUvAuthTokenUsingPinWithPermissions
+ * (0x09).  The platform key is kept and the shared key derived only after
+ * the cheap checks, so no early return has a secret to wipe. */
+typedef struct {
+    uint8_t        peer_xy[64];
+    uint8_t        pin_hash_enc[16];
+    int            got_ka, got_phe, got_perms, got_rp;
+    uint64_t       perms;
+    const uint8_t *rp_id;
+    size_t         rp_id_len;
+} token_req_t;
+
+static int parse_token_req(cbor_reader_t *r, size_t n_keys, token_req_t *t)
 {
-    int pin_set = 0;
-    uint32_t retries = 0;
-    uint8_t stored_hash[PIN_HASH_LEN] = {0};
-    if (slots_global_pin_get(&pin_set, &retries, stored_hash) != 0) {
-        resp[0] = CTAP2_ERR_OTHER; return 1;
-    }
-    if (!pin_set) {
-        resp[0] = CTAP2_ERR_PIN_NOT_SET; return 1;
-    }
-    if (retries == 0u) {
-        resp[0] = CTAP2_ERR_PIN_BLOCKED; return 1;
-    }
-    if (s_auth_blocked) {
-        resp[0] = CTAP2_ERR_PIN_AUTH_BLOCKED; return 1;
-    }
-
-    uint8_t shared_key[32]    = {0};
-    uint8_t pin_hash_enc[16]  = {0};
-    int got_ka = 0, got_phe = 0;
-
+    memset(t, 0, sizeof *t);
     for (size_t i = 0; i < n_keys; ++i) {
         uint8_t mt; uint64_t key;
         if (cbor_reader_read_head(r, &mt, &key) < 0 || mt != 0u) {
-            resp[0] = CTAP2_ERR_INVALID_CBOR; return 1;
+            return CTAP2_ERR_INVALID_CBOR;
         }
         if (key == CP_KEY_KEY_AGREEMENT) {
-            if (parse_and_compute_shared_key(r, shared_key) != 0) {
-                resp[0] = CTAP2_ERR_OTHER; return 1;
+            /* An unusable platform key = decapsulate error (CTAP §6.5.5.7). */
+            if (parse_cose_p256_pubkey(r, t->peer_xy) != 0) {
+                return CTAP1_ERR_INVALID_PARAMETER;
             }
-            got_ka = 1;
+            t->got_ka = 1;
         } else if (key == CP_KEY_PIN_HASH_ENC) {
             const uint8_t *p; size_t L;
             if (cbor_reader_read_bytes(r, &p, &L) < 0 || L != 16u) {
-                resp[0] = CTAP2_ERR_INVALID_CBOR; return 1;
+                return CTAP2_ERR_INVALID_CBOR;
             }
-            memcpy(pin_hash_enc, p, 16); got_phe = 1;
-        } else {
-            if (cbor_reader_skip(r) < 0) {
-                resp[0] = CTAP2_ERR_INVALID_CBOR; return 1;
+            memcpy(t->pin_hash_enc, p, 16);
+            t->got_phe = 1;
+        } else if (key == CP_KEY_PERMISSIONS) {
+            if (cbor_reader_read_uint(r, &t->perms) < 0) {
+                return CTAP2_ERR_CBOR_UNEXPECTED_TYPE;
             }
+            t->got_perms = 1;
+        } else if (key == CP_KEY_RP_ID) {
+            if (cbor_reader_read_text(r, &t->rp_id, &t->rp_id_len) < 0) {
+                return CTAP2_ERR_CBOR_UNEXPECTED_TYPE;
+            }
+            t->got_rp = 1;
+        } else if (cbor_reader_skip(r) < 0) {
+            return CTAP2_ERR_INVALID_CBOR;
         }
     }
-    if (!got_ka || !got_phe) {
-        memzero(shared_key, sizeof shared_key);
-        resp[0] = CTAP2_ERR_MISSING_PARAMETER; return 1;
-    }
+    return 0;
+}
 
+/* CTAP §6.5.5.7.1 / .2 parameter checks, in the spec's order. */
+static int check_token_req(const token_req_t *t, int with_perms, uint8_t *perms)
+{
+    if (!t->got_ka || !t->got_phe || (with_perms && !t->got_perms)) {
+        return CTAP2_ERR_MISSING_PARAMETER;
+    }
+    if (!with_perms) {
+        /* Legacy getPinToken: no permissions or rpId; default mc + ga. */
+        if (t->got_perms || t->got_rp) return CTAP1_ERR_INVALID_PARAMETER;
+        *perms = (uint8_t)(PUAT_PERM_MC | PUAT_PERM_GA);
+        return 0;
+    }
+    if (t->perms == 0u) return CTAP1_ERR_INVALID_PARAMETER;
+    /* be: no bioEnroll; lbw: no largeBlobs.  cm, acfg, mc, ga are offered. */
+    if (t->perms & (PUAT_PERM_BE | PUAT_PERM_LBW)) {
+        return CTAP2_ERR_UNAUTHORIZED_PERMISSION;
+    }
+    *perms = (uint8_t)(t->perms & PUAT_PERMS_KNOWN);   /* undefined bits ignored */
+    return 0;
+}
+
+/* Wrong-PIN bookkeeping shared by the failure paths. */
+static uint8_t pin_mismatch_status(uint32_t new_retries)
+{
+    s_consec_fails++;
+    if (s_consec_fails >= PIN_AUTH_BLOCKED_CONSEC) s_auth_blocked = 1;
+    (void) regen_eph();
+    if (new_retries == 0u) return CTAP2_ERR_PIN_BLOCKED;
+    if (s_auth_blocked)    return CTAP2_ERR_PIN_AUTH_BLOCKED;
+    return CTAP2_ERR_PIN_INVALID;
+}
+
+/* Check the PIN behind pinHashEnc (R-mem hash + M&D, Phase 5 M3/M4).
+ * Returns 0 if correct, otherwise the CTAP2 status to send. */
+static int verify_pin_hash_enc(const uint8_t shared_key[32],
+                               const uint8_t pin_hash_enc[16],
+                               const uint8_t stored_hash[PIN_HASH_LEN])
+{
     /* Decrement retries BEFORE checking. */
     uint32_t new_retries = 0;
     (void) slots_global_pin_dec_retries(&new_retries);
 
-    /* Decrypt submitted hash; then defense-in-depth two-layer check
-     * (M3 R-mem hash + M4 hardware-enforced M&D slot consumption). */
     uint8_t submitted_hash[PIN_HASH_LEN];
     if (aes_cbc_dec_iv0(shared_key, pin_hash_enc, 16, submitted_hash) != 0) {
-        memzero(shared_key, sizeof shared_key);
-        resp[0] = CTAP2_ERR_OTHER; return 1;
+        return CTAP2_ERR_OTHER;
     }
-
     int m3_ok = (ct_memcmp(submitted_hash, stored_hash, PIN_HASH_LEN) == 0);
     int md_correct = 0;
     int md_rc = pin_md_verify(submitted_hash, &md_correct);
@@ -686,64 +716,93 @@ static int handle_get_pin_token(cbor_reader_t *r, size_t n_keys,
 
     if (md_rc == -2) {
         /* HW lockout — all 8 slots consumed. Needs factory_reset. */
-        memzero(shared_key, sizeof shared_key);
         (void) regen_eph();
-        resp[0] = CTAP2_ERR_PIN_BLOCKED;
-        return 1;
+        return CTAP2_ERR_PIN_BLOCKED;
     }
     if (md_rc != 0 || !m3_ok || !md_correct) {
-        memzero(shared_key, sizeof shared_key);
-        s_consec_fails++;
-        if (s_consec_fails >= PIN_AUTH_BLOCKED_CONSEC) s_auth_blocked = 1;
-        (void) regen_eph();
-        if (new_retries == 0u) {
-            resp[0] = CTAP2_ERR_PIN_BLOCKED;
-        } else if (s_auth_blocked) {
-            resp[0] = CTAP2_ERR_PIN_AUTH_BLOCKED;
-        } else {
-            resp[0] = CTAP2_ERR_PIN_INVALID;
-        }
+        return pin_mismatch_status(new_retries);
+    }
+    (void) slots_global_pin_reset_retries();
+    s_consec_fails = 0;
+    return 0;
+}
+
+/* Issue a new token: every older token dies first (resetPinUvAuthToken),
+ * then the encrypted token goes into resp. */
+static int issue_token(const uint8_t shared_key[32], uint8_t perms,
+                       const token_req_t *t, uint8_t *resp, size_t resp_max)
+{
+    puat_reset();
+    uint8_t token[PUAT_TOKEN_LEN];
+    if (tropic_random(token, sizeof token) != 0) {
+        resp[0] = CTAP2_ERR_OTHER;
+        return 1;
+    }
+    uint8_t rp_hash[32];
+    if (t->got_rp) sha256_Raw(t->rp_id, (uint32_t) t->rp_id_len, rp_hash);
+    puat_begin(token, perms, t->got_rp ? rp_hash : NULL, HAL_GetTick());
+
+    uint8_t token_enc[PUAT_TOKEN_LEN];
+    int enc_rc = aes_cbc_enc_iv0(shared_key, token, sizeof token, token_enc);
+    memzero(token, sizeof token);
+    if (enc_rc != 0) {
+        puat_reset();
+        resp[0] = CTAP2_ERR_OTHER;
         return 1;
     }
 
-    /* Correct PIN. Reset retries, generate new pinUvAuthToken, encrypt. */
-    (void) slots_global_pin_reset_retries();
-    s_consec_fails = 0;
-    if (tropic_random(s_pin_token, PIN_TOKEN_LEN) != 0) {
-        memzero(shared_key, sizeof shared_key);
-        resp[0] = CTAP2_ERR_OTHER; return 1;
-    }
-    s_pin_token_valid = 1;
-
-    uint8_t token_enc[PIN_TOKEN_LEN];
-    if (aes_cbc_enc_iv0(shared_key, s_pin_token, PIN_TOKEN_LEN, token_enc) != 0) {
-        memzero(shared_key, sizeof shared_key);
-        resp[0] = CTAP2_ERR_OTHER; return 1;
-    }
-    memzero(shared_key, sizeof shared_key);
-
-    if (resp_max < 1u) {
-        memzero(token_enc, sizeof token_enc);
-        return -1;
-    }
     resp[0] = CTAP2_OK;
-
     cbor_writer_t w;
     cbor_writer_init(&w, &resp[1], resp_max - 1u);
     cbor_write_map_header(&w, 1);
     cbor_write_uint(&w, CP_RESP_PIN_TOKEN);
-    cbor_write_byte_string(&w, token_enc, PIN_TOKEN_LEN);
+    cbor_write_byte_string(&w, token_enc, PUAT_TOKEN_LEN);
     memzero(token_enc, sizeof token_enc);
-
     if (cbor_writer_error(&w)) {
+        puat_reset();
         resp[0] = CTAP2_ERR_OTHER;
         return 1;
     }
-    /* NOTE: we deliberately do NOT rotate the ephemeral keypair after
-     * getPinToken — the spec says it's preserved between getPinToken calls
-     * for the same session so the platform can reuse keyAgreement.
-     * Rotation happens on setPin/changePin only. */
     return (int)(1u + cbor_writer_len(&w));
+}
+
+/* getPinToken (0x05, with_perms = 0) and
+ * getPinUvAuthTokenUsingPinWithPermissions (0x09, with_perms = 1),
+ * CTAP §6.5.5.7.1 / §6.5.5.7.2.  The ephemeral keypair is NOT rotated on
+ * success: the platform may reuse its keyAgreement for the next call. */
+static int handle_get_pin_token(cbor_reader_t *r, size_t n_keys,
+                                uint8_t *resp, size_t resp_max, int with_perms)
+{
+    token_req_t t;
+    uint8_t perms = 0;
+    int rc = parse_token_req(r, n_keys, &t);
+    if (rc == 0) rc = check_token_req(&t, with_perms, &perms);
+    if (rc != 0) { resp[0] = (uint8_t) rc; return 1; }
+
+    int pin_set = 0;
+    uint32_t retries = 0;
+    uint8_t stored_hash[PIN_HASH_LEN] = {0};
+    if (slots_global_pin_get(&pin_set, &retries, stored_hash) != 0) {
+        resp[0] = CTAP2_ERR_OTHER; return 1;
+    }
+    if (!pin_set)          { resp[0] = CTAP2_ERR_PIN_NOT_SET;      return 1; }
+    if (retries == 0u)     { resp[0] = CTAP2_ERR_PIN_BLOCKED;      return 1; }
+    if (s_auth_blocked)    { resp[0] = CTAP2_ERR_PIN_AUTH_BLOCKED; return 1; }
+
+    uint8_t shared_key[32];
+    if (compute_shared_key(t.peer_xy, shared_key) != 0) {
+        resp[0] = CTAP1_ERR_INVALID_PARAMETER; return 1;
+    }
+    rc = verify_pin_hash_enc(shared_key, t.pin_hash_enc, stored_hash);
+    memzero(stored_hash, sizeof stored_hash);
+    if (rc != 0) {
+        memzero(shared_key, sizeof shared_key);
+        resp[0] = (uint8_t) rc;
+        return 1;
+    }
+    rc = issue_token(shared_key, perms, &t, resp, resp_max);
+    memzero(shared_key, sizeof shared_key);
+    return rc;
 }
 
 /* ----- Public surface ----- */
@@ -752,12 +811,19 @@ int pin_init(void)
 {
     int rc = regen_eph();
     if (rc != 0) return rc;
-    memzero(s_pin_token, sizeof s_pin_token);
-    s_pin_token_valid = 0;
+    puat_reset();
     s_consec_fails    = 0;
     s_auth_blocked    = 0;
     s_initted = 1;
     return 0;
+}
+
+void pin_reset_ram(void)
+{
+    puat_reset();
+    s_consec_fails = 0;
+    s_auth_blocked = 0;
+    (void) regen_eph();
 }
 
 int pin_is_set(void)
@@ -769,30 +835,20 @@ int pin_is_set(void)
 
 int pin_token_is_valid(void)
 {
-    return s_pin_token_valid;
+    return puat_token() != NULL;
 }
 
 int pin_verify_pinauth(const uint8_t pinauth_16[PIN_AUTH_LEN],
                        const uint8_t client_data_hash_32[32])
 {
-    if (!s_pin_token_valid) return -1;
-    uint8_t expected[16];
-    pin_auth_compute(s_pin_token, client_data_hash_32, 32, expected);
-    int rc = ct_memcmp(expected, pinauth_16, 16);
-    memzero(expected, sizeof expected);
-    return (rc == 0) ? 0 : -1;
+    return puat_verify(pinauth_16, PIN_AUTH_LEN, client_data_hash_32, 32,
+                       HAL_GetTick());
 }
 
 int pin_verify_pinauth_data(const uint8_t pinauth_16[PIN_AUTH_LEN],
                             const uint8_t *data, size_t data_len)
 {
-    if (!s_pin_token_valid) return -1;
-    if (!data && data_len > 0) return -1;
-    uint8_t expected[16];
-    pin_auth_compute(s_pin_token, data, data_len, expected);
-    int rc = ct_memcmp(expected, pinauth_16, 16);
-    memzero(expected, sizeof expected);
-    return (rc == 0) ? 0 : -1;
+    return puat_verify(pinauth_16, PIN_AUTH_LEN, data, data_len, HAL_GetTick());
 }
 
 int pin_handle_cbor(const uint8_t *req, size_t req_len,
@@ -848,6 +904,10 @@ int pin_handle_cbor(const uint8_t *req, size_t req_len,
 
     size_t rest = n_keys - 2u;
 
+    if (sc_v > 0xFFu) {               /* no truncation onto a real sub-command */
+        resp[0] = CTAP1_ERR_INVALID_PARAMETER;
+        return 1;
+    }
     switch ((uint8_t) sc_v) {
     case CP_SUB_GET_RETRIES:
         /* Skip remaining keys (spec allows but doesn't require them). */
@@ -867,7 +927,9 @@ int pin_handle_cbor(const uint8_t *req, size_t req_len,
     case CP_SUB_CHANGE_PIN:
         return handle_change_pin(&r, rest, resp, resp_max);
     case CP_SUB_GET_PIN_TOKEN:
-        return handle_get_pin_token(&r, rest, resp, resp_max);
+        return handle_get_pin_token(&r, rest, resp, resp_max, 0);
+    case CP_SUB_GET_PIN_UV_TOKEN_PERMS:
+        return handle_get_pin_token(&r, rest, resp, resp_max, 1);
     default:
         resp[0] = CTAP1_ERR_INVALID_PARAMETER;
         return 1;
