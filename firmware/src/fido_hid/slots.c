@@ -671,6 +671,7 @@ int slots_factory_reset(void)
     }
     s_bitmap = 0;
     s_initted = 1;
+    s_store_uncertain = 0;      /* a known state was just written */
     return erase_failed ? -1 : 0;
 }
 
