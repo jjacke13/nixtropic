@@ -159,6 +159,14 @@ int slots_lookup_by_credid(const uint8_t *cred_id, size_t cred_id_len,
 int slots_take_fresh_store(void);
 
 /**
+ * @brief 0 after a bitmap write whose outcome is unknown: until the next
+ *        boot or a successful factory reset, every slot operation (lookup,
+ *        metadata, allocation, erase, global-state write) is refused and
+ *        callers must not touch credential keys (Phase 9 M3).
+ */
+int slots_usable(void);
+
+/**
  * @brief The 18 B credential ID of a slot: [0x01, slot_idx, nonce(16)].
  */
 void slots_make_cred_id(int slot_idx, const slot_meta_t *meta,

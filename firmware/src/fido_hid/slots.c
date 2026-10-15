@@ -162,6 +162,12 @@ static uint8_t  s_force_uv;
  * in s_pin_*, s_md_*, and s_force_uv. */
 static int write_global(uint32_t bitmap)
 {
+    /* Never persist a RAM copy that may disagree with the chip (Phase 9 M3,
+     * Jan round 2): PIN, M&D and Force-UV writes would carry the stale
+     * bitmap back.  slots_factory_reset clears the flag first. */
+    if (s_store_uncertain) {
+        return -1;
+    }
     uint8_t buf[SLOTS_GLOBAL_PAYLOAD_LEN];
     memset(buf, 0, sizeof buf);
 
@@ -539,6 +545,9 @@ int slots_alloc(const uint8_t rp_id_hash[SLOTS_RP_ID_HASH_LEN],
 int slots_lookup_by_credid(const uint8_t *cred_id, size_t cred_id_len,
                            int *out_slot_idx, slot_meta_t *out_meta)
 {
+    if (s_store_uncertain) {
+        return -1;
+    }
     if (cred_id == NULL || out_slot_idx == NULL) {
         return -1;
     }
@@ -608,10 +617,16 @@ int slots_erase(int slot_idx)
 
 uint32_t slots_bitmap(void)
 {
+    if (s_store_uncertain) return 0;
     if (!s_initted) {
         if (slots_init() != 0) return 0;
     }
     return s_bitmap;
+}
+
+int slots_usable(void)
+{
+    return !s_store_uncertain;
 }
 
 int slots_count_used(void)
@@ -627,6 +642,9 @@ int slots_count_used(void)
 
 int slots_read_meta(int slot_idx, slot_meta_t *out)
 {
+    if (s_store_uncertain) {
+        return -2;
+    }
     if (slot_idx < 0 || slot_idx >= (int) SLOTS_MAX || out == NULL) {
         return -1;
     }
@@ -664,14 +682,15 @@ int slots_factory_reset(void)
     memset(s_md_tag, 0, sizeof s_md_tag);
     memset(s_md_ci,  0, sizeof s_md_ci);
     s_force_uv = 0;
+    s_store_uncertain = 0;      /* the explicit reset writes a known state */
     if (write_global(0) != 0) {
+        s_store_uncertain = 1;
         s_bitmap = 0;
         s_initted = 0;
         return -1;
     }
     s_bitmap = 0;
     s_initted = 1;
-    s_store_uncertain = 0;      /* a known state was just written */
     return erase_failed ? -1 : 0;
 }
 

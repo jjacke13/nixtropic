@@ -105,6 +105,11 @@ int credstore_make(const uint8_t rp_id_hash[SLOTS_RP_ID_HASH_LEN],
         /* M2 only supports Ed25519. P-256 deferred to later phase. */
         return -1;
     }
+    /* No key operation while the slot bitmap may disagree with the chip:
+     * a "free" slot could hold a possibly-published key (Jan, M3 round 2). */
+    if (!slots_usable()) {
+        return -2;
+    }
     if (!s_initted) {
         int rc = credstore_init();
         if (rc != 0) return -2;
@@ -176,6 +181,9 @@ int credstore_erase_slot(int slot_idx)
 {
     if (slot_idx < 0 || slot_idx >= (int) FIDO_SLOTS_MAX) {
         return -1;
+    }
+    if (!slots_usable()) {
+        return -2;              /* see credstore_make */
     }
     s_credstore_mutating = 1;
     /* ECC slot first (destroys the chip-side private key), then R-mem
