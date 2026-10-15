@@ -41,6 +41,11 @@ static bool valid_layout(const pin_md_layout_t *L)
     for (uint8_t r = 0; r < L->ranges; ++r) {
         if ((unsigned) L->base[r] + L->rounds > 128u) return false;   /* M&D slots 0..127 */
     }
+    /* Overlapping A/B would let a retirement destroy the live range. */
+    if (L->ranges == 2u && L->base[0] < L->base[1] + L->rounds
+        && L->base[1] < L->base[0] + L->rounds) {
+        return false;
+    }
     return true;
 }
 
@@ -179,13 +184,17 @@ static int setup_s(const pin_md_layout_t *L, const uint8_t *mat, uint8_t pin_len
         slot_xor(L, w, mat, s, nb.ci[i]);
     }
     if (store(L, &nb, !have) != PMD_OK) goto out;        /* the commit */
-    rc = PMD_OK;
-    /* After the commit the new PIN is live; a failed retirement stays
-     * pending and the next call's settle finishes it. */
-    if (have && retire(L, cur.range) == PMD_OK) {
+    /* From here the new PIN is live.  Success (and k) only once the old
+     * range is retired and that is recorded: until then a copied old record
+     * plus the old PIN still opens s (§3.3 step 4, §3.4).  A failure here
+     * returns PMD_ERR with the new binding live and retire_pending set —
+     * never rolled back; the next call's settle finishes the retirement. */
+    if (have) {
+        if (retire(L, cur.range) != PMD_OK) goto out;
         nb.retire_pending = 0;
-        (void) store(L, &nb, false);
+        if (store(L, &nb, false) != PMD_OK) goto out;
     }
+    rc = PMD_OK;
 out:
     memzero(&cur, sizeof cur);
     memzero(&nb, sizeof nb);
@@ -257,6 +266,8 @@ pmd_state_t pin_md_kernel_status(const pin_md_layout_t *L, uint8_t *attempts,
 {
     binding_t b;
     pmd_state_t res = PMD_ERROR;
+    if (attempts != NULL) *attempts = 0;   /* never a stale "retries" on ABSENT / ERROR */
+    if (pin_len != NULL) *pin_len = 0;
     if (!valid_layout(L)) return PMD_ERROR;
     rec_status_t st = settle(L, &b);
     if (st == REC_ABSENT) {
@@ -305,7 +316,9 @@ int pin_md_kernel_change(const pin_md_layout_t *L, const uint8_t *old_mat,
     k_wipe(out_k);
     if (out_correct == NULL) return PMD_ERR;
     *out_correct = 0;
-    if (!valid_layout(L) || old_mat == NULL || new_mat == NULL) return PMD_ERR;
+    if (!valid_layout(L) || L->ranges < 2u || old_mat == NULL || new_mat == NULL) {
+        return PMD_ERR;                                   /* RC: clear + setup (§3.3) */
+    }
     int rc = verify_s(L, old_mat, out_correct, s);
     if (rc == PMD_OK && *out_correct == 1) {
         rc = setup_s(L, new_mat, new_pin_len, s);        /* same s: k survives (D4) */

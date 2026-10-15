@@ -34,6 +34,7 @@ static struct {
 
 /* Damage of the call in progress (set by enter()). */
 static mock_damage_t s_tear;
+static unsigned s_mut_at_fault;
 
 static uint8_t prng_byte(void)
 {
@@ -92,6 +93,17 @@ void mock_disarm(void)
     memset(s_fault, 0, sizeof s_fault);
 }
 
+unsigned mock_mutations(void)
+{
+    return s_calls[MOCK_OP_RMEM_WRITE] + s_calls[MOCK_OP_RMEM_ERASE]
+         + s_calls[MOCK_OP_MAC_AND_DESTROY];
+}
+
+unsigned mock_mutations_at_fault(void)
+{
+    return s_mut_at_fault;
+}
+
 unsigned mock_calls(mock_op_t op)
 {
     return s_calls[op];
@@ -106,6 +118,7 @@ static int enter(mock_op_t op, bool *execute)
     s_tear = 0;
     if (s_fault[op].at != 0 && s_fault[op].at == s_calls[op]) {
         s_fault[op].at = 0;
+        s_mut_at_fault = mock_mutations();
         *execute = s_fault[op].executed;
         s_tear = s_fault[op].tear;
         return s_fault[op].rc;

@@ -627,8 +627,15 @@ follows a fault before the M&D call or after the re-key (§3.3).
   write must leave the pair uncertain; silent-mask fault added) → fixed; Jan APPROVE.
 
 **Step 2 (kernel v2, 2026-10-16):**
-- `setup` returns OK once the record is committed (the new PIN is live); a failed
-  retirement after that stays `retire_pending` and the next call's settle finishes it.
+- `setup` / `change` return OK (and k) only after the old range is retired **and** the
+  record says so (Jan r1 HIGH: a "successful" change with a failed retirement still let a
+  replayed old record + old PIN recover the same k). A failure after the commit returns
+  an error although the **new** PIN is live and `retire_pending` is set; never rolled
+  back; the next call's settle finishes the retirement. Callers must not read an error
+  from setup/change as "nothing changed".
+- `valid_layout` refuses overlapping A/B ranges (a retirement would destroy the live
+  range); `status` zeroes its outputs on ABSENT / ERROR; `change` refuses a one-range
+  layout up front.
 - `status` settles too, so it can write; `clear` does not settle and needs no readable
   record (retire every range, then clear the pair), so it also recovers a damaged one.
 - A record whose fields are out of range (range, `retire_pending`, `next_slot`, length)

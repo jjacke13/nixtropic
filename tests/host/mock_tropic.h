@@ -46,6 +46,11 @@ void mock_fail_nth(mock_op_t op, unsigned n, int rc, bool executed);
 /* Drop every pending fault. */
 void mock_disarm(void);
 
+/* Chip-state-changing calls so far (R-mem write + erase + M&D), and that
+ * count at the moment the last injected fault fired. */
+unsigned mock_mutations(void);
+unsigned mock_mutations_at_fault(void);
+
 /* Number of calls of `op` since mock_reset. */
 unsigned mock_calls(mock_op_t op);
 

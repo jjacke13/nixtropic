@@ -50,13 +50,16 @@ typedef enum { PMD_ABSENT, PMD_ACTIVE, PMD_BLOCKED, PMD_ERROR } pmd_state_t;
 
 /* Settles, then reports the PIN.  ABSENT is the record's view only: the
  * caller checks its guard.  `attempts` / `pin_len` (nullable) are set for
- * ACTIVE and BLOCKED.  A read error, damaged record or failed settle is
+ * ACTIVE and BLOCKED, 0 otherwise.  A read error, damaged record or failed settle is
  * PMD_ERROR, never "not set" or "full retries" (F4, F6). */
 pmd_state_t pin_md_kernel_status(const pin_md_layout_t *L, uint8_t *attempts,
                                  uint8_t *pin_len);
 
 /* New binding with a fresh s, over no binding or over an existing one
- * (reset paths; refused for a one-range layout that is not ABSENT). */
+ * (reset paths; refused for a one-range layout that is not ABSENT).
+ * PMD_ERR does not always mean "nothing changed": a failure after the
+ * commit (retiring the old range) leaves the NEW PIN live, retirement
+ * pending (setup and change alike). */
 int pin_md_kernel_setup(const pin_md_layout_t *L, const uint8_t *mat,
                         uint8_t pin_len, uint8_t out_k[PIN_MD_KERNEL_K_LEN]);
 
