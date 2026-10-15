@@ -83,6 +83,9 @@ typedef struct {
      * Old (Phase 5) creds read user_handle_len=0 here. */
     uint8_t  user_handle_len;
     uint8_t  user_handle[SLOTS_USER_HANDLE_MAX];
+    /* Phase 9 M3 — creation sequence (1 + highest at creation time), for
+     * newest-first discovery.  Older credentials read 0. */
+    uint32_t created;
 } slot_meta_t;
 
 /**
@@ -108,16 +111,23 @@ int slots_init(void);
  *
  * @param  rp_id_hash       SHA-256 of rp.id (32 B); persisted in meta.
  * @param  alg              COSE alg id (only SLOTS_ALG_ED25519 in M1).
+ * @param  flags            SLOTS_FLAG_* (RESIDENT = discoverable, Phase 9 M3).
  * @param  user_handle      User handle from MakeCredential (optional;
  *                          may be NULL for Phase-5-style alloc).
  * @param  user_handle_len  0..SLOTS_USER_HANDLE_MAX.  Pass 0 to omit.
+ * @param  created          Creation sequence stored in the metadata.
+ * @param  replace_mask     Bitmap bits cleared by the SAME bitmap write that
+ *                          adds the new credential (same-account overwrite,
+ *                          Phase 9 M3): the old IDs stop resolving in one
+ *                          step.  The caller erases their keys afterwards.
  * @param  out_cred_id      Caller buffer; 18 B written on success.
- * @param  out_slot_idx     Caller's slot index out (0..31).
+ * @param  out_slot_idx     Caller's slot index out (0..28).
  * @return 0 on success; -1 if full or invalid params; -2 on TROPIC01 error.
  */
 int slots_alloc(const uint8_t rp_id_hash[SLOTS_RP_ID_HASH_LEN],
-                uint8_t alg,
+                uint8_t alg, uint8_t flags,
                 const uint8_t *user_handle, size_t user_handle_len,
+                uint32_t created, uint32_t replace_mask,
                 uint8_t out_cred_id[SLOTS_CRED_ID_LEN],
                 int *out_slot_idx);
 
@@ -125,14 +135,30 @@ int slots_alloc(const uint8_t rp_id_hash[SLOTS_RP_ID_HASH_LEN],
  * @brief Resolve a credential ID to a slot index.
  *
  *   1. Reject if cred_id_len != 18 or version byte != 0x01.
- *   2. Read slot_idx from byte[1]; reject if ≥ 32.
+ *   2. Read slot_idx from byte[1]; reject if ≥ FIDO_SLOTS_MAX (29).
  *   3. Read per-credential R-mem; reject if magic mismatch.
  *   4. Constant-time compare nonce; reject on mismatch.
  *
+ * @param out_meta  optional (NULL): the credential's metadata.
  * @return 0 on success (out_slot_idx populated); -1 on not-found.
  */
 int slots_lookup_by_credid(const uint8_t *cred_id, size_t cred_id_len,
-                           int *out_slot_idx);
+                           int *out_slot_idx, slot_meta_t *out_meta);
+
+/**
+ * @brief 1 if this boot's slots_init found global R-mem slot 0 reported
+ *        empty by the chip (SLOT_EMPTY, never written) and wrote fresh
+ *        state — a genuine first boot.  Read errors never count (Phase 9
+ *        M3: the only case besides authenticatorReset in which the FIDO
+ *        signature counter may be initialised).
+ */
+int slots_fresh_store(void);
+
+/**
+ * @brief The 18 B credential ID of a slot: [0x01, slot_idx, nonce(16)].
+ */
+void slots_make_cred_id(int slot_idx, const slot_meta_t *meta,
+                        uint8_t out_cred_id[SLOTS_CRED_ID_LEN]);
 
 /**
  * @brief Erase a credential slot: clear bitmap bit, erase R-mem slot.

@@ -61,6 +61,9 @@
  * (Phase 5) have zero-init here, decoding as user_handle_len = 0. */
 #define CRED_USER_HANDLE_LEN_OFF 56
 #define CRED_USER_HANDLE_OFF     57
+/* Phase 9 M3 — creation sequence, BE, right after the 64 B user_handle
+ * area (57..120).  Older writers zeroed the whole slot: reads as 0. */
+#define CRED_CREATED_OFF        121
 
 /* Magic byte values.
  *
@@ -104,6 +107,8 @@ static const uint8_t CRED_MAGIC[CRED_MAGIC_LEN]               = { 'N', 'X', 'C',
 /* Cached state — populated in slots_init from R-mem slot 0. */
 static uint32_t s_bitmap;
 static int      s_initted;
+/* Phase 9 M3: this boot found slot 0 never written (see slots_fresh_store). */
+static int      s_fresh_store;
 
 /* ----- Helpers ----- */
 
@@ -199,6 +204,9 @@ static int read_global(uint32_t *out_bitmap)
     size_t   got = 0;
 
     int rc = tropic_rmem_read(SLOTS_RMEM_GLOBAL_SLOT, buf, sizeof buf, &got);
+    if (rc == TROPIC_ERR_RMEM_SLOT_EMPTY) {
+        return -5;      /* the chip says: never written (Phase 9 M3) */
+    }
     if (rc != 0 || got < (GLOBAL_PIN_RETRIES_OFF + 4u)) {
         return -2;
     }
@@ -278,7 +286,8 @@ static int write_cred(int slot_idx,
                       uint8_t flags,
                       const uint8_t rp_id_hash[SLOTS_RP_ID_HASH_LEN],
                       const uint8_t cred_id_nonce[SLOTS_CRED_ID_NONCE_LEN],
-                      const uint8_t *user_handle, size_t user_handle_len)
+                      const uint8_t *user_handle, size_t user_handle_len,
+                      uint32_t created)
 {
     uint8_t buf[SLOTS_CRED_PAYLOAD_LEN];
     memset(buf, 0, sizeof buf);
@@ -298,6 +307,10 @@ static int write_cred(int slot_idx,
         buf[CRED_USER_HANDLE_LEN_OFF] = (uint8_t) cap;
         memcpy(&buf[CRED_USER_HANDLE_OFF], user_handle, cap);
     }
+    buf[CRED_CREATED_OFF]      = (uint8_t)(created >> 24);
+    buf[CRED_CREATED_OFF + 1]  = (uint8_t)(created >> 16);
+    buf[CRED_CREATED_OFF + 2]  = (uint8_t)(created >> 8);
+    buf[CRED_CREATED_OFF + 3]  = (uint8_t) created;
 
     uint16_t rs = SLOTS_RMEM_SLOT_FOR(slot_idx);
     if (tropic_rmem_erase(rs) != 0) {
@@ -340,6 +353,13 @@ static int read_cred(int slot_idx, slot_meta_t *out)
                        &buf[CRED_USER_HANDLE_OFF], len);
             }
         }
+        out->created = 0;
+        if (got >= (size_t)(CRED_CREATED_OFF + 4)) {
+            out->created = ((uint32_t) buf[CRED_CREATED_OFF] << 24)
+                         | ((uint32_t) buf[CRED_CREATED_OFF + 1] << 16)
+                         | ((uint32_t) buf[CRED_CREATED_OFF + 2] << 8)
+                         |  (uint32_t) buf[CRED_CREATED_OFF + 3];
+        }
     }
     return 0;
 }
@@ -375,7 +395,14 @@ int slots_init(void)
 
     uint32_t bitmap = 0;
     int rc = read_global(&bitmap);
-    if (rc == -1) {
+    if (rc == -5) {
+        /* Genuine first boot: the chip reports slot 0 empty. */
+        if (write_global(0) != 0) {
+            return -2;
+        }
+        bitmap = 0;
+        s_fresh_store = 1;
+    } else if (rc == -1) {
         /* First boot — magic mismatch (or never written). Write fresh. */
         if (write_global(0) != 0) {
             return -2;
@@ -433,8 +460,9 @@ int slots_init(void)
 }
 
 int slots_alloc(const uint8_t rp_id_hash[SLOTS_RP_ID_HASH_LEN],
-                uint8_t alg,
+                uint8_t alg, uint8_t flags,
                 const uint8_t *user_handle, size_t user_handle_len,
+                uint32_t created, uint32_t replace_mask,
                 uint8_t out_cred_id[SLOTS_CRED_ID_LEN],
                 int *out_slot_idx)
 {
@@ -475,12 +503,15 @@ int slots_alloc(const uint8_t rp_id_hash[SLOTS_RP_ID_HASH_LEN],
      * This makes a power-loss-mid-alloc safe: the bitmap bit stays 0,
      * so the orphan slot is invisible to lookup and will be overwritten
      * by the next alloc. */
-    if (write_cred(idx, alg, SLOTS_FLAG_RESIDENT, rp_id_hash, nonce,
-                   user_handle, user_handle_len) != 0) {
+    if (write_cred(idx, alg, flags, rp_id_hash, nonce,
+                   user_handle, user_handle_len, created) != 0) {
         return -2;
     }
 
-    uint32_t new_bitmap = s_bitmap | (1u << idx);
+    /* One bitmap write adds the new credential and drops the ones it
+     * replaces (only allocated FIDO slots can be replaced). */
+    uint32_t fido_mask  = (1u << FIDO_SLOTS_MAX) - 1u;
+    uint32_t new_bitmap = (s_bitmap | (1u << idx)) & ~(replace_mask & fido_mask);
     if (write_global(new_bitmap) != 0) {
         /* R-mem cred written but bitmap not committed — leave it; the
          * orphan_scrub on next boot would NOT remove it because magic
@@ -499,7 +530,7 @@ int slots_alloc(const uint8_t rp_id_hash[SLOTS_RP_ID_HASH_LEN],
 }
 
 int slots_lookup_by_credid(const uint8_t *cred_id, size_t cred_id_len,
-                           int *out_slot_idx)
+                           int *out_slot_idx, slot_meta_t *out_meta)
 {
     if (cred_id == NULL || out_slot_idx == NULL) {
         return -1;
@@ -511,7 +542,7 @@ int slots_lookup_by_credid(const uint8_t *cred_id, size_t cred_id_len,
         return -1;
     }
     uint8_t idx = cred_id[1];
-    if (idx >= SLOTS_MAX) {
+    if (idx >= FIDO_SLOTS_MAX) {      /* 29..31 are OpenPGP key slots */
         return -1;
     }
     if (!s_initted) {
@@ -530,6 +561,9 @@ int slots_lookup_by_credid(const uint8_t *cred_id, size_t cred_id_len,
         return -1;
     }
     *out_slot_idx = (int) idx;
+    if (out_meta != NULL) {
+        *out_meta = meta;
+    }
     return 0;
 }
 
@@ -740,4 +774,17 @@ int slots_force_uv_set(int value)
     }
     s_force_uv = (value != 0) ? 1u : 0u;
     return write_global(s_bitmap);
+}
+
+int slots_fresh_store(void)
+{
+    return s_fresh_store;
+}
+
+void slots_make_cred_id(int slot_idx, const slot_meta_t *meta,
+                        uint8_t out_cred_id[SLOTS_CRED_ID_LEN])
+{
+    out_cred_id[0] = 0x01u;
+    out_cred_id[1] = (uint8_t) slot_idx;
+    memcpy(&out_cred_id[2], meta->cred_id_nonce, SLOTS_CRED_ID_NONCE_LEN);
 }

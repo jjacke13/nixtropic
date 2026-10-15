@@ -147,6 +147,11 @@ extern int      tropic_last_ensure_step;
  */
 int tropic_rmem_write(uint16_t slot, const uint8_t *data, size_t len);
 
+/* Chip results callers branch on (Phase 9 M3).  Wrappers return
+ * -(lt_ret_t); tropic.c checks these against libtropic at compile time. */
+#define TROPIC_ERR_COUNTER_INVALID   (-17)  /* LT_L3_COUNTER_INVALID */
+#define TROPIC_ERR_RMEM_SLOT_EMPTY   (-28)  /* LT_L3_R_MEM_DATA_READ_SLOT_EMPTY */
+
 /**
  * @brief Read up to `max` bytes from R-mem slot into `out`. Sets *actual
  *        to the number of bytes written. Returns 0 on success.

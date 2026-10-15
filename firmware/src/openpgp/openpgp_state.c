@@ -142,7 +142,7 @@ static int read_payload(uint8_t out[OPENPGP_RMEM_PRIMARY_SIZE])
          * this, the M6 M3 audit fix would refuse to initialise the
          * slot on the very first boot after a schema bump that
          * relocated the primary slot to virgin R-mem territory. */
-        if (rc == -28) {
+        if (rc == TROPIC_ERR_RMEM_SLOT_EMPTY) {
             return -1;
         }
         return -3;

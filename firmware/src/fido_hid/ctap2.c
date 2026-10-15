@@ -185,6 +185,11 @@ int fido_hid_cbor_dispatch(const uint8_t *req, size_t req_len,
     if (sub != CTAP2_CMD_CREDENTIAL_MGMT) {
         credmgmt_reset_iterator();
     }
+    /* Same for the GetNextAssertion state (CTAP §6.3).  GetAssertion
+     * replaces it itself. */
+    if (sub != CTAP2_CMD_GET_ASSERTION && sub != CTAP2_CMD_GET_NEXT_ASSERTION) {
+        ctap2_assertion_reset();
+    }
 
     /* Phase 9 M3: one structural check of the whole parameter map before
      * any handler reads a field (nesting depth, lengths, no trailing
@@ -243,22 +248,18 @@ int fido_hid_cbor_dispatch(const uint8_t *req, size_t req_len,
                 return 1;
             }
         }
-        if (credstore_factory_reset() != 0) {
-            resp[0] = CTAP2_ERR_OTHER;
-            return 1;
-        }
-        resp[0] = CTAP2_OK;
+        /* Tokens and PIN failure state die with the PIN (Phase 9 M3),
+         * also when the wipe stopped part-way. */
+        int reset_rc = credstore_factory_reset();
+        pin_reset_ram();
+        resp[0] = (reset_rc == 0) ? CTAP2_OK : CTAP2_ERR_OTHER;
         return 1;
     }
     case CTAP2_CMD_CREDENTIAL_MGMT:
         return credmgmt_handle_cbor(&req[1], req_len - 1u, resp, resp_max);
 
     case CTAP2_CMD_GET_NEXT_ASSERTION:
-        /* GetNextAssertion iterates multiple matches per allowList.
-         * Our single-credential-per-allowList-entry flow doesn't need
-         * it. CTAP2 §6.3: returning NOT_ALLOWED is valid. */
-        resp[0] = CTAP2_ERR_NOT_ALLOWED;
-        return 1;
+        return ctap2_get_next_assertion(resp, resp_max);
     default:
         resp[0] = CTAP1_ERR_INVALID_COMMAND;
         return 1;

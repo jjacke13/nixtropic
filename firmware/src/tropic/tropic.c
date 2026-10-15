@@ -48,6 +48,11 @@ static lt_ctx_trezor_crypto_t  s_crypto_ctx;
  * s_handle.l3.session_status (Phase 9 M2), not a copy kept here. */
 static bool                    s_lt_ready = false;
 
+_Static_assert(TROPIC_ERR_COUNTER_INVALID == -(int) LT_L3_COUNTER_INVALID,
+               "tropic.h result code out of sync with libtropic");
+_Static_assert(TROPIC_ERR_RMEM_SLOT_EMPTY == -(int) LT_L3_R_MEM_DATA_READ_SLOT_EMPTY,
+               "tropic.h result code out of sync with libtropic");
+
 /* Every L3 wrapper returns through here (Phase 9 M2, plan guard rails 4
  * and 5).  A result that does not prove the chip answered inside the
  * session ends the session on the host side, so the next call

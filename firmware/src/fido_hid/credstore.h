@@ -16,16 +16,16 @@
  *
  * Signature counter: a single SHARED monotonic counter (TROPIC01 hw
  * counter 0).  Per WebAuthn Level 2 §6.1.1 a shared counter is
- * compliant.  Initialized to TR01_MCOUNTER_VALUE_MAX (0xFFFFFFFE) on
- * first use, then decremented per assertion; observed signCount =
+ * compliant.  Initialized to TR01_MCOUNTER_VALUE_MAX (0xFFFFFFFE) on a
+ * genuine first boot or by authenticatorReset, then decremented per
+ * assertion; observed signCount =
  * MAX − chip_value, so it increases over time.  At 1 signature/sec
  * continuous the counter exhausts after ~136 years.
  *
- * The signcount peek/commit pattern (Phase 4 cpp-reviewer audit
- * finding): peek returns the count for the next assertion WITHOUT
- * advancing; commit advances.  Callers run peek → build response →
- * commit.  A build-failure path never advances the on-chip counter
- * so it stays in sync with what the relying party expects.
+ * Phase 9 M3: an assertion reserves its value first (Update, then Get)
+ * and signs that value; a failure afterwards leaves a gap, which RPs
+ * accept, instead of a repeated value, which they treat as a clone.
+ * Counter errors fail the operation; there is no fallback value.
  *
  * Future work — per-credential counters
  * (if RP compatibility testing shows a benefit). Phase 5 keeps it shared.
@@ -52,8 +52,10 @@ typedef int credstore_handle_t;
 
 /**
  * @brief Initialize the credential store.
- *        Calls slots_init() and ensures the TROPIC01 monotonic counter 0
- *        is set to MAX (for the shared signCount). Idempotent.
+ *        Calls slots_init() and reads the TROPIC01 monotonic counter 0
+ *        (shared signCount).  Initializes the counter only on a genuine
+ *        first boot (slots_fresh_store); any other counter error fails
+ *        closed (Phase 9 M3).  Idempotent.
  *
  * @return 0 on success; negative on TROPIC01 error.
  */
@@ -64,21 +66,17 @@ int credstore_init(void);
  *        TROPIC01, allocate a slot, persist metadata, return the bits
  *        the host's MakeCredential response needs.
  *
- *   1. slots_alloc(rp_id_hash, alg) — picks free slot, writes R-mem
- *   2. tropic_ecc_erase(slot)       — idempotent clean
- *   3. tropic_ecc_generate(slot, CURVE_ED25519)
- *   4. tropic_ecc_pubkey_read(slot, out_pubkey, 32)
- *
- * Power-loss between (1) and (4) leaves an orphan with valid R-mem +
- * empty ECC slot — future GetAssertion for the credId fails at sign-
- * time (returns CTAP2 error). Recoverable via factory_reset.
- *
- * If (2-4) fail, credstore_make rolls back the slots allocation
- * (slots_erase) so the bitmap stays consistent.
+ * Phase 9 M3: the key is generated and read back in a FREE slot first;
+ * only then does slots_alloc publish it (metadata, then one bitmap write
+ * that also drops `replace_mask`).  A failure before publication erases
+ * the new key again.
  *
  * @param  rp_id_hash    SHA-256(rpId) — 32 bytes
  * @param  alg           Currently must be 8 (Ed25519 / COSE -8); other
  *                       values rejected with CTAP2_ERR_UNSUPPORTED_ALGORITHM
+ * @param  flags         SLOTS_FLAG_RESIDENT for a discoverable credential
+ * @param  created       creation sequence (see slot_meta_t)
+ * @param  replace_mask  slots this credential replaces (same RP + user)
  * @param  out_pubkey    32-byte Ed25519 public key
  * @param  out_cred_id   18-byte credentialId for the relying party
  * @param  out_handle    Handle for the immediate MakeCred self-attestation
@@ -86,8 +84,9 @@ int credstore_init(void);
  * @return 0 on success; -1 if out of slots; -2 on chip error
  */
 int credstore_make(const uint8_t rp_id_hash[SLOTS_RP_ID_HASH_LEN],
-                   uint8_t alg,
+                   uint8_t alg, uint8_t flags,
                    const uint8_t *user_handle, size_t user_handle_len,
+                   uint32_t created, uint32_t replace_mask,
                    uint8_t out_pubkey[CREDSTORE_PUBKEY_LEN],
                    uint8_t out_cred_id[CREDSTORE_CRED_ID_LEN],
                    credstore_handle_t *out_handle);
@@ -120,19 +119,28 @@ int credstore_sign(credstore_handle_t h,
                    uint8_t out_sig[CREDSTORE_SIG_LEN]);
 
 /**
- * @brief Peek the signCount that the next assertion will use.
- *        Internally reads TROPIC01 mcounter 0 and returns
- *        TR01_MCOUNTER_VALUE_MAX - current_chip_value, so the result
- *        increases over time. Returns 0 if the chip read fails (logged).
+ * @brief Find a credential by ID, bound to the given RP (Phase 9 M3):
+ *        succeeds only if the ID resolves AND its stored rpIdHash equals
+ *        rp_id_hash.  out_meta (optional) receives the slot metadata.
+ * @return 0 on success; -1 if not found or bound to another RP.
  */
-uint32_t credstore_peek_signcount(void);
+int credstore_find(const uint8_t *cred_id, size_t cred_id_len,
+                   const uint8_t rp_id_hash[SLOTS_RP_ID_HASH_LEN],
+                   credstore_handle_t *out_handle, slot_meta_t *out_meta);
 
 /**
- * @brief Commit the signCount advance. Decrements TROPIC01 mcounter 0,
- *        which causes credstore_peek_signcount to return a value one
- *        higher next time.
+ * @brief Current signCount without advancing it (MakeCredential).
+ * @return 0 on success; negative on a counter error (never a fake 0).
  */
-void credstore_commit_signcount(void);
+int credstore_signcount_peek(uint32_t *out);
+
+/**
+ * @brief Reserve the next signCount for an assertion: Update the chip
+ *        counter, then read it.  A later failure leaves a gap, never a
+ *        repeat.  No retry (an ambiguous Update may have run).
+ * @return 0 on success; negative on a counter error.
+ */
+int credstore_signcount_next(uint32_t *out);
 
 /* ===== Phase 6 M3: read + delete helpers for credentialManagement ===== */
 
@@ -158,12 +166,14 @@ int credstore_erase_slot(int slot_idx);
 int credstore_is_mutating(void);
 
 /**
- * @brief Factory reset: wipe ALL credentials.
+ * @brief Factory reset: wipe ALL FIDO credentials.
  *
- *   1. tropic_ecc_erase(slot) for each of the 32 ECC slots — destroys
- *      chip-side private keys.
+ *   1. tropic_ecc_erase(slot) for FIDO ECC slots 0..28 — destroys the
+ *      chip-side private keys.  If any erase fails, stop here and
+ *      return an error: nothing else is wiped (Phase 9 M3).
  *   2. slots_factory_reset() — clears the R-mem bitmap + every per-
  *      credential R-mem entry + PIN state + M&D state.
+ *   3. signature counter back to its start value.
  *
  * After this, the authenticator looks like a fresh device. Used by
  * authenticatorReset (CTAP2 cmd 0x07) and by the lt-rpc debug

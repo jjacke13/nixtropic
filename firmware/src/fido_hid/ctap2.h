@@ -81,5 +81,10 @@ int ctap2_make_credential(const uint8_t *req, size_t req_len,
                           uint8_t *resp, size_t resp_max);
 int ctap2_get_assertion(const uint8_t *req, size_t req_len,
                         uint8_t *resp, size_t resp_max);
+int ctap2_get_next_assertion(uint8_t *resp, size_t resp_max);
+
+/* Forget the GetAssertion state kept for GetNextAssertion.  The
+ * dispatcher calls it for every other command (Phase 9 M3). */
+void ctap2_assertion_reset(void);
 
 #endif /* NIXTROPIC_FIDO_HID_CTAP2_H */

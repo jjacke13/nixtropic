@@ -222,7 +222,7 @@ int main(void)
         if (rc != 0) {
             printf("[credstore] init failed: %d (FIDO2 paths will error)\n", rc);
         } else {
-            printf("[slots] bitmap=0x%08lx used=%d/32\n",
+            printf("[slots] bitmap=0x%08lx used=%d/29\n",
                    (unsigned long) slots_bitmap(), slots_count_used());
         }
     }
