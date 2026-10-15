@@ -113,23 +113,23 @@ rec_status_t rec_pair_read(rec_pair_t *p, uint8_t *payload, size_t max,
 
     const uint8_t *win;
     size_t nwin;
-    int repair = 0;   /* 0 none, 'a' / 'b' = rewrite that copy from the winner */
+    const uint16_t *repair = NULL;   /* the copy to rewrite from the winner */
     if (a == COPY_VALID && b == COPY_VALID) {
         uint32_t ga = gen_of(s_a), gb = gen_of(s_b);
         if (ga == gb) {
             if (na != nb || memcmp(s_a, s_b, na) != 0) return REC_ERROR;  /* a bug */
             win = s_a; nwin = na;
         } else if (ga == gb + 1u) {
-            win = s_a; nwin = na; repair = 'b';     /* cut after A was committed */
+            win = s_a; nwin = na; repair = &p->slot_b;     /* cut after A was committed */
         } else if (gb == ga + 1u) {
-            win = s_b; nwin = nb; repair = 'a';
+            win = s_b; nwin = nb; repair = &p->slot_a;
         } else {
             return REC_ERROR;                       /* no single fault explains a gap */
         }
     } else if (a == COPY_VALID) {
-        win = s_a; nwin = na; repair = 'b';
+        win = s_a; nwin = na; repair = &p->slot_b;
     } else if (b == COPY_VALID) {
-        win = s_b; nwin = nb; repair = 'a';
+        win = s_b; nwin = nb; repair = &p->slot_a;
     } else if (a == COPY_EMPTY && b == COPY_EMPTY) {
         return REC_ABSENT;
     } else {
@@ -138,10 +138,7 @@ rec_status_t rec_pair_read(rec_pair_t *p, uint8_t *payload, size_t max,
 
     size_t plen = len_of(win);
     if (payload != NULL && plen > max) return REC_ERROR;
-    if (repair != 0
-        && !commit_copy(repair == 'a' ? p->slot_a : p->slot_b, win, nwin)) {
-        return uncertain(p);
-    }
+    if (repair != NULL && !commit_copy(*repair, win, nwin)) return uncertain(p);
     if (payload != NULL && plen != 0u) memcpy(payload, win + REC_HDR, plen);
     if (len != NULL) *len = plen;
     if (gen != NULL) *gen = gen_of(win);

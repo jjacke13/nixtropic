@@ -44,7 +44,9 @@ factory PIN or no PIN, no extra usable PIN attempt, no weaker policy or revived
 credential), and the device ends either in the state before the operation or the one
 after it — with one exception that M&D itself imposes: a fault inside a correct
 verification that uses a PIN's **last remaining slot** leaves that PIN blocked (§3.3,
-"Last slot"). Combinations of faults (a cut **and then** a damaged slot before the next
+"Last slot"); and one that R-mem imposes: a cut **inside** an init or clear can leave
+that object CORRUPT (§13), which fails closed and is recovered by the application's
+reset / TERMINATE. Combinations of faults (a cut **and then** a damaged slot before the next
 boot repairs it) are listed as residuals in §10; where it costs nothing, they fail
 closed too. Hardware fault injection is not used (PLAN rule 9): all fault cases run
 on the host mock.
@@ -602,13 +604,24 @@ follows a fault before the M&D call or after the re-key (§3.3).
 
 ## 13. Implementation notes (step 1, `rec_pair`, 2026-10-16)
 
-- The single-fault sweep found one case the §2.2 table missed: an init or clear erases
-  B, then A, and an init then writes A first. A cut **inside** the erase of A, or
-  inside the first write of A, can leave A `BAD` with B `EMPTY` → **CORRUPT**, which
-  is neither the state before nor after. It fails closed (no access gained, the
-  application refuses and its reset/TERMINATE path re-initialises), so the code keeps
-  the table's CORRUPT. Open for Jan: accept this as a second exception in §1.1, or
-  read `BAD`+`EMPTY` as ABSENT (then the §2.5 guards decide, as they already must for
-  masked damage).
+- **Interrupted init/clear → CORRUPT (Jan: keep, 2026-10-16).** An init or clear erases
+  B, then A; an init then writes A first. A cut **inside** the erase of A, inside the
+  first write of A, or inside an erase of an already-empty copy can leave one copy
+  `BAD` and the other `EMPTY` = CORRUPT: neither the state before nor after. It fails
+  closed (no access gained; FIDO refuses all but Reset, OpenPGP recovers by TERMINATE),
+  so it is the second availability exception in §1.1. It stays CORRUPT, not ABSENT: a
+  malformed record is evidence and must not be discarded. Init is destructive, not an
+  atomic replacement: a cut after both erases leaves ABSENT.
+- **Checked erase proves "reads empty", not physical erasure** [J1b]: erase OK, then a
+  read answers `SLOT_EMPTY` (or length 0). A slot that is masked after an erase that
+  answered OK passes, and if it ever decrypted again the cleared record would come
+  back (one copy, older generation; outside the one-fault model). An erase error or
+  lost reply is never turned into success by a later empty read. The sweep injects
+  this case (`F_SILENT_MASK`) to keep the limit visible.
+- Reads can write: a read whose copies differ repairs one. Callers keep one request at
+  a time, and the legacy-layout check (§2.6) runs **before** any pair read.
 - A record with generation 0 reads `BAD` (generations start at 1). Two valid copies
   whose generations differ by more than 1 read **ERROR**: no single fault explains a gap.
+- Reviews: cpp-reviewer CHANGES REQUIRED on test strength only (raw state checked right
+  after an acknowledged action; CORRUPT allowed only inside the window above; a failed
+  write must leave the pair uncertain; silent-mask fault added) → fixed; Jan APPROVE.

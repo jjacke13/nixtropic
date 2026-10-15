@@ -160,7 +160,7 @@ static void test_rules_table(void)
         { V1, W,   REC_OK, 1, true },  { V1, S, REC_OK, 1, true },
         { V1, Z,   REC_OK, 1, true },  { T, V1, REC_OK, 1, true },
         { C, V1,   REC_OK, 1, true },  { C, E, REC_CORRUPT, 0, false },
-        { Z, E,    REC_CORRUPT, 0, false },
+        { Z, E,    REC_CORRUPT, 0, false }, { E, T, REC_CORRUPT, 0, false },
         { E, E,    REC_ABSENT, 0, false },
         { M, M,    REC_ABSENT, 0, false },
         { G, E,    REC_CORRUPT, 0, false }, { E, G, REC_CORRUPT, 0, false },
@@ -262,7 +262,7 @@ static void test_repair_failure(void)
 
 /* ---- single-fault sweep ---- */
 
-enum fault { F_ERR, F_LOST, F_GARBLE, F_MASK, F_SILENT, F_COUNT };
+enum fault { F_ERR, F_LOST, F_GARBLE, F_MASK, F_SILENT, F_SILENT_MASK, F_COUNT };
 enum action { A_WRITE, A_INIT, A_INIT_FRESH, A_CLEAR };
 
 static void arm(mock_op_t op, unsigned n, enum fault f)
@@ -273,6 +273,7 @@ static void arm(mock_op_t op, unsigned n, enum fault f)
     case F_GARBLE: mock_tear_nth(op, n, -1, MOCK_DAMAGE_GARBLE); break;
     case F_MASK:   mock_tear_nth(op, n, -1, MOCK_DAMAGE_MASKED); break;
     case F_SILENT: mock_tear_nth(op, n, 0, MOCK_DAMAGE_GARBLE); break;
+    case F_SILENT_MASK: mock_tear_nth(op, n, 0, MOCK_DAMAGE_MASKED); break;   /* §13 limit */
     default: break;
     }
 }
@@ -305,10 +306,34 @@ static unsigned clean_calls(enum action a, mock_op_t op)
     return mock_calls(op) - c0;
 }
 
+/* The §13 window: a torn call on one copy while the other holds no valid
+ * record.  Clear = erase B, erase A; init = clear, then (erase, write) A,
+ * then (erase, write) B. */
+static bool corrupt_window(enum action a, mock_op_t op, unsigned n)
+{
+    if (op == MOCK_OP_RMEM_WRITE) return (a == A_INIT || a == A_INIT_FRESH) && n == 1u;
+    if (op != MOCK_OP_RMEM_ERASE) return false;
+    switch (a) {
+    case A_CLEAR:      return n == 2u;
+    case A_INIT:       return n == 2u || n == 3u;
+    case A_INIT_FRESH: return n <= 3u;
+    default:           return false;
+    }
+}
+
+/* Raw chip state right after an acknowledged action, before any repairing read. */
+static bool acked_raw(enum action a)
+{
+    uint8_t want[444], got[475];
+    if (a == A_CLEAR) return slot_get(SA, got) == 0 && slot_get(SB, got) == 0;
+    size_t n = raw(want, OBJ, SCHEMA, a == A_WRITE ? 3 : 1, "new", 3);
+    return slots_equal() && slot_get(SA, got) == n && memcmp(got, want, n) == 0;
+}
+
 static void check_after(enum action a, enum fault f, mock_op_t op, unsigned n,
                         rec_status_t acted, rec_pair_t *p)
 {
-    bool tear = f == F_GARBLE || f == F_MASK || f == F_SILENT;
+    bool tear = f == F_GARBLE || f == F_MASK || f == F_SILENT || f == F_SILENT_MASK;
     bool is_old = a != A_INIT_FRESH && reads(p, 2, "old");
     bool is_new = a != A_CLEAR && reads(p, a == A_WRITE ? 3 : 1, "new");
     rec_status_t st = (is_old || is_new) ? REC_OK : status(p);
@@ -320,7 +345,8 @@ static void check_after(enum action a, enum fault f, mock_op_t op, unsigned n,
     } else {
         /* init/clear: before, after, or absent; a tear inside the last
          * erase / first write of an empty pair fails closed (CORRUPT). */
-        ok = is_old || is_new || st == REC_ABSENT || (tear && st == REC_CORRUPT);
+        ok = is_old || is_new || st == REC_ABSENT
+          || (tear && corrupt_window(a, op, n) && st == REC_CORRUPT);
     }
     if ((is_old || is_new) && !slots_equal()) ok = false;      /* repaired */
     CHECK(ok);
@@ -341,10 +367,13 @@ static void sweep(enum action a)
                 before(&p, a);
                 arm(op, n, (enum fault) f);
                 rec_status_t acted = act(&p, a);
-                if (acted != REC_OK) {
-                    /* Same session: refused, or (a write whose first read
-                     * failed, nothing written) still the old record. */
-                    CHECK(status(&p) == REC_ERROR || (a == A_WRITE && reads(&p, 2, "old")));
+                if (acted == REC_OK) {
+                    CHECK(acked_raw(a));               /* both copies proven, no repair needed */
+                } else if (a == A_WRITE && op == MOCK_OP_RMEM_READ && n <= 2u) {
+                    /* the write's first read failed: nothing written */
+                    CHECK(!p.uncertain && reads(&p, 2, "old"));
+                } else {
+                    CHECK(p.uncertain && status(&p) == REC_ERROR);
                 }
                 p = pair();                                            /* reboot */
                 check_after(a, (enum fault) f, op, n, acted, &p);
