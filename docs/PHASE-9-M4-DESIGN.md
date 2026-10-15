@@ -1,7 +1,7 @@
 # Phase 9 M4 — Design: PIN + persistent-state integrity
 
-Status: **draft r2 for review** (2026-10-15). r1 (09fe256) was reviewed by Jan:
-CHANGES REQUIRED, six findings; §11 maps each to the change. Contract:
+Status: **draft r3 for review** (2026-10-15). r1 (09fe256) and r2 (ffb1471) were reviewed by Jan:
+CHANGES REQUIRED both times; §11 maps every finding to its change. Contract:
 `PHASE-9-PLAN.md` §6 (items 1–7) plus the M4 inputs from the M3 reviews (§5 end).
 Chip facts marked **[J1a]…[J4]** come from Jan (§9), from the documents, not
 measured.
@@ -42,7 +42,9 @@ M4 tolerates **one fault**, at any point of any operation:
 "Tolerates" means: no access is gained (no PIN reads "not set", no key ends under a
 factory PIN or no PIN, no extra usable PIN attempt, no weaker policy or revived
 credential), and the device ends either in the state before the operation or the one
-after it. Combinations of faults (a cut **and then** a damaged slot before the next
+after it — with one exception that M&D itself imposes: a fault inside a correct
+verification that uses a PIN's **last remaining slot** leaves that PIN blocked (§3.3,
+"Last slot"). Combinations of faults (a cut **and then** a damaged slot before the next
 boot repairs it) are listed as residuals in §10; where it costs nothing, they fail
 closed too. Hardware fault injection is not used (PLAN rule 9): all fault cases run
 on the host mock.
@@ -75,8 +77,10 @@ on the host mock.
   rewrites these records anyway, and with D5 nothing reads the hash. M5 shrinks to
   the DEC key wrap.
 - **D7. One explicit destructive migration** from the v0.2/M3 layout (PLAN rule 8,
-  §6 item 6): recognised old layout → checked wipe of that application → fresh
-  bootstrap. Anything unrecognised fails closed. Release notes say so.
+  §6 item 6), **global** (§2.6): while either application still shows its old
+  layout, neither serves anything; the migration retires every old M&D slot, wipes
+  both applications (checked), and only then do they initialise fresh. Anything
+  unrecognised fails closed. Release notes say so.
 - **D8. Destruction before defaults, as hard barriers.** Reset, TERMINATE, bootstrap,
   migration: keys and secret-bearing records are erased and **checked** first; any
   failure stops the sequence before a PIN is cleared or set to a factory value (rule 8).
@@ -209,6 +213,25 @@ the object is cleared. A cut between leaves "object present, guard 0", which boo
 repairs (sets the guard), or "object absent, guard 1" = ERROR, which the
 application's reset/TERMINATE recovers. Residual: §10 R1.
 
+### 2.6 Migration from the v0.2/M3 layout (global barrier)
+
+The new M&D layout reuses slots of the old one (new FIDO B 8–15 and PW1 A 16–18 lie in
+the old OpenPGP ranges 8–16), and M&D slots belong to no application on the chip (PIN
+§3.2, API Table 37). So the migration is one routine for the whole device, run at
+boot before either application serves:
+
+- **Old-layout markers**: FIDO R-mem slot 0 = `NX7K` v4 (full length) with slot 40
+  empty; OpenPGP slot 33 = `PG7R` schema 6 with slot 43 empty.
+- While **either** marker is present, FIDO and OpenPGP refuse every command (except
+  GetInfo / SELECT), and the routine (re)runs from step 1:
+  1. retire M&D slots 0–16 (checked; nothing of the new layout exists yet);
+  2. FIDO checked wipe (keys 0–28, metadata 1–29), then checked erase of slot 0;
+  3. `pgp_wipe` plus checked erase of 50–52, then checked erase of slot 33.
+- Any failure stops; the next boot repeats from step 1, which is safe because no
+  new-layout binding can exist while a marker remains.
+- With both markers gone, both applications find their objects ABSENT and initialise
+  fresh (§4, §5).
+
 ---
 
 ## 3. M&D kernel v2 (`firmware/src/tropic/pin_md_kernel.{c,h}`)
@@ -289,9 +312,18 @@ most the number of intact slots, whatever the record says. A reservation lost to
 fault is either a slot that was then consumed (any verify through it fails) or one
 that was never used (that attempt never happened).
 
+**Last slot.** With `next = rounds − 1`, step 2 commits `next = rounds`. A cut or a
+lost reply after the M&D call of a *correct* PIN and before the restore leaves every
+slot consumed: s existed only in RAM, so no copy of any record can bring it back (PIN
+§3.5 steps 3–12). The PIN reads BLOCKED and recovers the documented way: FIDO
+authenticatorReset, OpenPGP RESET RETRY COUNTER (RC or PW3) for PW1, TERMINATE without
+PW3 for PW3 (§7.2.16). Fail-closed, no extra guess, and inherent to M&D; the same holds
+for the verify inside a change. With more than one slot left, the same fault only
+counts the attempt: the next correct PIN goes through an intact slot and restores all.
+
 **change(old, new)**: verify(old) with s' kept on the stack → setup(new, s') →
 wipe. A fault after the verify leaves the old PIN working (restored); after the
-setup commit, the new PIN.
+setup commit, the new PIN (except the last-slot case above).
 
 **clear**: retire every range of the PIN (checked; a failure stops), then clear the
 pair (§2.3).
@@ -349,8 +381,8 @@ measured on hardware in the M4 validation (KEEPALIVE stays BACKLOG 6.7).
     → checked wipe of what FIDO owns (keys 0–28, metadata 1–29, `kernel_clear` O2),
     then init O1. Only a completed checked wipe authorises initialising the signature
     counter (replaces the M3 `slots_take_fresh_store` EMPTY inference);
-  - O1 old layout (`NX7K` v4, full length, slot 40 empty) → destructive migration
-    (D7): retire the old FIDO range 0–7, checked wipe, erase slot 0 → ABSENT path;
+  - an old-layout marker of either application → the global migration (§2.6) runs
+    first; FIDO serves nothing until both markers are gone;
   - ERROR / CORRUPT / uncertain → FIDO refuses everything except
     authenticatorReset (the documented way out; it erases blindly and inits).
 
@@ -386,7 +418,7 @@ them) → `kernel_clear` PW1, PW3, RC. Any failure stops it.
 | Bootstrap (O3 ABSENT) | `pgp_wipe` → bind PW1 `123456`, PW3 `12345678` (fresh s) → init O3 OPERATIONAL | ABSENT → bootstrap again |
 | TERMINATE (PW3 verified; or without PW3 when PW3 is blocked or the state is unreadable, §7.2.16) | `pgp_wipe` → init O3 TERMINATED | ABSENT → bootstrap, or TERMINATED |
 | ACTIVATE (only when O3 reads OK and TERMINATED) | bind factory PINs → write O3 OPERATIONAL | TERMINATED (send ACTIVATE again) |
-| Old layout (`PG7R` schema 6 in slot 33, slot 43 empty) | retire old ranges 8–16, `pgp_wipe` (+ erase 50–52) → bootstrap | old layout or ABSENT → repeat |
+| Old layout of either application | global migration (§2.6) → bootstrap | migration repeats from step 1 |
 | O3 ERROR / CORRUPT | refuse all but SELECT, VERIFY 83, TERMINATE | — |
 
 Bootstrap and ACTIVATE bind factory PINs only after `pgp_wipe` has completed with
@@ -405,7 +437,8 @@ TERMINATED state, which O3 read cleanly.
 | `retire_pending` | settle, continue | settle, continue |
 | ERROR (read error) / CORRUPT | refuse all but Reset | refuse; TERMINATE without PW3 recovers |
 | uncertain write | refuse until reboot | refuse until reboot |
-| old layout | destructive migration | destructive migration |
+| old layout (either app) | both refuse; global migration (§2.6) | both refuse; global migration |
+| last-slot fault (§3.3) | PIN BLOCKED → Reset | PIN BLOCKED → RC/PW3 reset, TERMINATE |
 | any wipe step fails | stop, report, retry next time | stop, report, retry next time |
 
 Never: init on a read error, a software PIN check, a default value for a counter
@@ -427,13 +460,20 @@ that could not be read, factory PINs before a checked wipe.
   bootstrap, TERMINATE, ACTIVATE and migration, inject one fault at every chip call n
   (cut / lost reply / error), or damage one copy of one object at rest; reboot
   (repair + settle) and check:
-  - I1 after a change: the old or the new PIN works, never both after settle;
+  - I1 after a change: the old or the new PIN works, never both after settle — except
+    the last-slot case (§3.3), where the PIN reads BLOCKED and its documented reset
+    works;
   - I2 evaluated wrong guesses never exceed `rounds` without a correct PIN;
   - I3 no state with keys or a DEC key present under no PIN or a factory PIN;
   - I4 k unchanged by change, changed by RC/PW3 reset;
   - I5 a read error never causes init, migration or a write;
   - I6 no object reads older than its last acknowledged write; no guard, policy
     (alwaysUv, C4, UIF) or bitmap rolls back.
+- A correct verification on the last remaining slot, and a fault at every restore
+  boundary (before, between and after the re-key calls and the two record copies).
+- Migration: a fault at every step of §2.6, with an attempted FIDO setPin and an
+  OpenPGP VERIFY between boots — both refused until the migration completes; no
+  new-layout binding is ever retired by a repeated step 1.
 - Selected double faults from §10 (cut, then damage before repair) to show which
   fail closed.
 - Pair rules (§2.2) row by row; generation compare and `UINT32_MAX`; checksum.
@@ -545,3 +585,11 @@ unverified.
 | Q5 | TERMINATE without PW3 when blocked? | yes (§7.2.16), used in D11 |
 | D10 | changePin order | confirmed |
 | other | M&D 32/33 cross a UAP group; orphan scrub on read errors; counter init by EMPTY; F2 wording; timing claim | layout inside 0–31 (§3.1); scrub fix and counter authorised by a checked wipe (§4); F2 "may"; timing "measured" (§3.5) |
+
+## 12. Review r2 → r3 (Jan, 2026-10-15, CHANGES REQUIRED; r1 findings resolved)
+
+| # | Finding | Change |
+|---|---|---|
+| 1 MED | A fault inside a correct verification on the last slot leaves neither PIN usable | inherent to M&D (s only in RAM, every slot consumed): stated as the one exception in §1.1, "Last slot" in §3.3, I1 qualified, §6 row, host tests at every restore boundary |
+| 2 MED | Overlapping old/new M&D ranges need a global migration barrier | §2.6: one device-wide migration; while either old marker exists both applications refuse and the routine reruns from step 1; §4/§5/§6 point to it; migration fault tests |
+| ES256 | J3 facts vs 8b43157 | no contradiction (Jan) |
