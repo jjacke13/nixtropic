@@ -31,6 +31,8 @@ typedef enum {
     MOCK_OP_RMEM_WRITE,
     MOCK_OP_RMEM_ERASE,
     MOCK_OP_MAC_AND_DESTROY,
+    MOCK_OP_ECC_ERASE,
+    MOCK_OP_MCOUNTER,          /* init and get */
     MOCK_OP_COUNT
 } mock_op_t;
 
@@ -42,6 +44,13 @@ void mock_reset(uint32_t seed);
  * performs the operation first: the caller sees an error although the
  * state changed.  One pending fault per op. */
 void mock_fail_nth(mock_op_t op, unsigned n, int rc, bool executed);
+
+/* ECC key slots (Phase 9 M4 step 3): put a key / ask whether one is there. */
+void mock_ecc_put(uint8_t slot);
+bool mock_ecc_present(uint8_t slot);
+
+/* Current value of M&D slot `idx` (to prove another PIN's slots untouched). */
+void mock_mad_peek(uint8_t idx, uint8_t out[32]);
 
 /* Drop every pending fault. */
 void mock_disarm(void);

@@ -248,6 +248,7 @@ set(APP_SOURCES
     src/fido_hid/pin.c
     src/fido_hid/pin_token.c
     src/fido_hid/pin_md.c
+    src/fido_hid/fido_state.c
     src/fido_hid/user_presence.c
     src/tropic/tropic.c
     src/tropic/pin_md_legacy.c

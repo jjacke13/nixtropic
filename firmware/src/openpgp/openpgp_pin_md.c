@@ -210,13 +210,21 @@ static const pin_md_legacy_layout_t *layout_for(enum openpgp_pin_md_which which)
     return &LAYOUTS[which];
 }
 
-/* ---- Public API ---- */
+/* ---- Public API ----
+ *
+ * Phase 9 M4 step 3 -> step 4 TRANSITION GATE (Jan, 2026-10-16): FIDO now
+ * runs kernel v2 with M&D range B = slots 8..15, which overlaps these
+ * legacy OpenPGP ranges 8..16.  Until step 4 moves OpenPGP to kernel v2,
+ * legacy OpenPGP issues no M&D call at all and fails closed: every PIN
+ * reads as M&D-active (no software fallback) and every setup / verify is
+ * refused.  OpenPGP PINs do not work in a build at this commit range. */
+#define OPENPGP_LEGACY_MD_DISABLED 1
 
 int openpgp_pin_md_setup(enum openpgp_pin_md_which which,
                          const uint8_t pin_material[OPENPGP_PIN_MD_MATERIAL_LEN])
 {
     const pin_md_legacy_layout_t *L = layout_for(which);
-    if (!L) return -1;
+    if (!L || OPENPGP_LEGACY_MD_DISABLED) return -1;
     return pin_md_legacy_setup(L, pin_material);
 }
 
@@ -225,7 +233,7 @@ int openpgp_pin_md_verify(enum openpgp_pin_md_which which,
                           int *out_correct)
 {
     const pin_md_legacy_layout_t *L = layout_for(which);
-    if (!L) return -1;
+    if (!L || OPENPGP_LEGACY_MD_DISABLED) return -1;
     return pin_md_legacy_verify(L, pin_material, out_correct);
 }
 
@@ -233,6 +241,7 @@ int openpgp_pin_md_is_active(enum openpgp_pin_md_which which)
 {
     const pin_md_legacy_layout_t *L = layout_for(which);
     if (!L) return 0;
+    if (OPENPGP_LEGACY_MD_DISABLED) return 1;     /* no software fallback */
     return pin_md_legacy_is_active(L);
 }
 

@@ -53,10 +53,9 @@ typedef int credstore_handle_t;
 
 /**
  * @brief Initialize the credential store.
- *        Calls slots_init() and reads the TROPIC01 monotonic counter 0
- *        (shared signCount).  Initializes the counter only on a genuine
- *        first boot (slots_fresh_store); any other counter error fails
- *        closed (Phase 9 M3).  Idempotent.
+ *        fido_state_boot(): O1 + PIN binding + signature counter (design
+ *        §4; an absent O1 = checked wipe, anything unusable = only
+ *        authenticatorReset works).  Idempotent once it succeeded.
  *
  * @return 0 on success; negative on TROPIC01 error.
  */
@@ -171,12 +170,9 @@ int credstore_is_mutating(void);
 /**
  * @brief Factory reset: wipe ALL FIDO credentials.
  *
- *   1. tropic_ecc_erase(slot) for FIDO ECC slots 0..28 — destroys the
- *      chip-side private keys.  If any erase fails, stop here and
- *      return an error: nothing else is wiped (Phase 9 M3).
- *   2. slots_factory_reset() — clears the R-mem bitmap + every per-
- *      credential R-mem entry + PIN state + M&D state.
- *   3. signature counter back to its start value.
+ *   fido_state_wipe() (Phase 9 M4): FIDO keys → metadata → PIN binding
+ *   → fresh O1 → signature counter, each step checked; a failure stops
+ *   it before the PIN is cleared or defaults are written.
  *
  * After this, the authenticator looks like a fresh device. Used by
  * authenticatorReset (CTAP2 cmd 0x07) and by the lt-rpc debug

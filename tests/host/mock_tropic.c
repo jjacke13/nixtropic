@@ -21,6 +21,9 @@ static struct {
 } s_rmem[MOCK_RMEM_SLOTS];
 
 static uint8_t  s_mad[MOCK_MAD_SLOTS][32];
+static bool     s_ecc[32];
+static bool     s_mcounter_set;
+static uint32_t s_mcounter;
 static uint8_t  s_kfa[32];
 static uint32_t s_prng;
 
@@ -48,6 +51,9 @@ static uint8_t prng_byte(void)
 void mock_reset(uint32_t seed)
 {
     memset(s_rmem, 0, sizeof s_rmem);
+    memset(s_ecc, 0, sizeof s_ecc);
+    s_mcounter_set = false;
+    s_mcounter = 0;
     memset(s_calls, 0, sizeof s_calls);
     memset(s_fault, 0, sizeof s_fault);
     s_prng = seed ? seed : 0x6e697874u;
@@ -88,6 +94,21 @@ void mock_rmem_damage(uint16_t slot, mock_damage_t how)
     s_rmem[slot].data[s_rmem[slot].len / 2] ^= 0x5a;
 }
 
+void mock_ecc_put(uint8_t slot)
+{
+    if (slot < 32u) s_ecc[slot] = true;
+}
+
+bool mock_ecc_present(uint8_t slot)
+{
+    return slot < 32u && s_ecc[slot];
+}
+
+void mock_mad_peek(uint8_t idx, uint8_t out[32])
+{
+    memcpy(out, s_mad[idx % MOCK_MAD_SLOTS], 32);
+}
+
 void mock_disarm(void)
 {
     memset(s_fault, 0, sizeof s_fault);
@@ -96,7 +117,7 @@ void mock_disarm(void)
 unsigned mock_mutations(void)
 {
     return s_calls[MOCK_OP_RMEM_WRITE] + s_calls[MOCK_OP_RMEM_ERASE]
-         + s_calls[MOCK_OP_MAC_AND_DESTROY];
+         + s_calls[MOCK_OP_MAC_AND_DESTROY] + s_calls[MOCK_OP_ECC_ERASE];
 }
 
 unsigned mock_mutations_at_fault(void)
@@ -195,4 +216,41 @@ int tropic_mac_and_destroy(uint8_t idx, const uint8_t *data_out, uint8_t *data_i
         if (rc == 0) memcpy(data_in, out, 32);   /* lost response: caller gets nothing */
     }
     return rc;
+}
+
+int tropic_l3_session_ensure(void)
+{
+    return 0;
+}
+
+int tropic_ecc_erase(uint8_t slot)
+{
+    bool exec;
+    int rc = enter(MOCK_OP_ECC_ERASE, &exec);
+    if (slot >= 32u) return -1;
+    if (exec) s_ecc[slot] = false;
+    return rc;
+}
+
+int tropic_mcounter_init(uint8_t idx, uint32_t value)
+{
+    bool exec;
+    int rc = enter(MOCK_OP_MCOUNTER, &exec);
+    if (idx != 0u) return -1;          /* the tests use counter 0 only */
+    if (exec) {
+        s_mcounter_set = true;
+        s_mcounter = value;
+    }
+    return rc;
+}
+
+int tropic_mcounter_get(uint8_t idx, uint32_t *out_value)
+{
+    bool exec;
+    int rc = enter(MOCK_OP_MCOUNTER, &exec);
+    if (idx != 0u || out_value == NULL) return -1;
+    if (rc != 0) return rc;
+    if (!s_mcounter_set) return TROPIC_ERR_COUNTER_INVALID;
+    *out_value = s_mcounter;
+    return 0;
 }

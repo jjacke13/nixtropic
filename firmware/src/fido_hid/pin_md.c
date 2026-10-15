@@ -1,110 +1,86 @@
 /*
- * Phase 5 M4 — MAC-and-Destroy PIN scheme, FIDO front-end.
- *
- * Phase 8 M4.A: the algorithm itself was extracted to
- * `firmware/src/tropic/pin_md_legacy.{c,h}` so the OpenPGP applet
- * (and any future caller) can reuse the same scheme with its own
- * slot range and R-mem layout.  This file is now a thin wrapper:
- * it just provides the FIDO-specific `pin_md_legacy_layout_t` (M&D slots
- * 0..7, state in R-mem slot 0 via `slots_global_md_*`) and forwards
- * each `pin_md_setup / verify / is_active / attempts_remaining`
- * to the generic kernel.
- *
- * Wire-compatibility:  byte-for-byte identical to the Phase 5 M4
- * implementation — same TROPIC01 M&D slot range, same R-mem
- * accessors, same crypto constants.  Existing PIN-set state on the
- * chip continues to verify after the refactor.
+ * FIDO PIN state on the M&D kernel v2.  See pin_md.h.
  */
-
 #include "pin_md.h"
 #include "slots.h"
 
-#include "tropic/pin_md_legacy.h"
-
-#include <stdint.h>
 #include <stddef.h>
 
-_Static_assert(PIN_MD_LEGACY_SLOT_SIZE == SLOTS_MD_SLOT_SIZE,
-               "kernel slot size must match slots.h SLOTS_MD_SLOT_SIZE");
-_Static_assert(PIN_MD_LEGACY_TAG_LEN == SLOTS_MD_TAG_LEN,
-               "kernel tag len must match slots.h SLOTS_MD_TAG_LEN");
+#include "tropic/pin_md_kernel.h"
+#include "tropic/rec_pair.h"
 
-/* ----- Adapter callbacks ----- */
+static rec_pair_t s_o2 = REC_PAIR(41, 42, 2, 1);
 
-/* FIDO doesn't need a per-call context — the entire state is at a
- * single fixed R-mem slot, addressed by slots_global_md_*.  The ctx
- * parameter is here only for API symmetry with OpenPGP, which uses
- * it to carry the per-PIN R-mem slot index. */
-
-static int adapt_state_get(void *ctx,
-                           uint8_t *out_active,
-                           uint8_t *out_next_slot,
-                           uint8_t  out_tag[PIN_MD_LEGACY_TAG_LEN],
-                           uint8_t *out_ci)
-{
-    (void) ctx;
-    int active_int = 0;
-    int rc = slots_global_md_get(out_active ? &active_int : NULL,
-                                 out_next_slot,
-                                 out_tag,
-                                 out_ci);
-    if (rc != 0) return rc;
-    if (out_active) {
-        *out_active = active_int ? 1u : 0u;
-    }
-    return 0;
-}
-
-static int adapt_state_set(void *ctx,
-                           uint8_t active,
-                           uint8_t next_slot,
-                           const uint8_t tag[PIN_MD_LEGACY_TAG_LEN],
-                           const uint8_t *ci)
-{
-    (void) ctx;
-    return slots_global_md_set((int) active, next_slot, tag, ci);
-}
-
-static int adapt_state_advance(void *ctx, uint8_t *out_new)
-{
-    (void) ctx;
-    return slots_global_md_advance(out_new);
-}
-
-/* ----- Layout ----- */
-
-static const pin_md_legacy_layout_t FIDO_LAYOUT = {
-    .md_slot_base    = 0u,
-    .rounds          = SLOTS_MD_ROUNDS,
-    .pin_material_len = PIN_MD_MATERIAL_LEN,
-    .user_ctx        = NULL,
-    .state_get       = adapt_state_get,
-    .state_set       = adapt_state_set,
-    .state_advance   = adapt_state_advance,
+static const pin_md_layout_t FIDO_LAYOUT = {
+    .rec = &s_o2, .base = { 0, 8 }, .ranges = 2,
+    .rounds = FIDO_PIN_ROUNDS, .mat_len = PIN_MD_MATERIAL_LEN,
 };
 
-_Static_assert(SLOTS_MD_ROUNDS <= PIN_MD_LEGACY_ROUNDS_MAX,
-               "FIDO ROUNDS exceeds kernel ROUNDS_MAX");
+_Static_assert(FIDO_PIN_ROUNDS <= PIN_MD_KERNEL_ROUNDS_MAX, "FIDO rounds");
 
-/* ----- Public API ----- */
-
-int pin_md_is_active(void)
+fido_pin_state_t fido_pin_state(uint8_t *attempts)
 {
-    return pin_md_legacy_is_active(&FIDO_LAYOUT);
+    uint8_t att = 0;
+    if (attempts != NULL) *attempts = 0;
+    int bound = slots_pin_bound();
+    if (bound < 0) return FPIN_ERROR;
+    switch (pin_md_kernel_status(&FIDO_LAYOUT, &att, NULL)) {
+    case PMD_ABSENT:
+        return bound ? FPIN_ERROR : FPIN_NOT_SET;
+    case PMD_ACTIVE:
+        if (attempts != NULL) *attempts = att;
+        return FPIN_SET;
+    case PMD_BLOCKED:
+        return FPIN_BLOCKED;
+    default:
+        return FPIN_ERROR;
+    }
 }
 
-int pin_md_attempts_remaining(void)
+int fido_pin_set(const uint8_t mat[PIN_MD_MATERIAL_LEN], uint8_t pin_len)
 {
-    return pin_md_legacy_attempts_remaining(&FIDO_LAYOUT);
+    if (fido_pin_state(NULL) != FPIN_NOT_SET) return -1;
+    if (pin_md_kernel_setup(&FIDO_LAYOUT, mat, pin_len, NULL) != PMD_OK) return -1;
+    return slots_set_pin_bound(1, 1);
 }
 
-int pin_md_setup(const uint8_t pin_material[PIN_MD_MATERIAL_LEN])
+static int map_rc(int rc)
 {
-    return pin_md_legacy_setup(&FIDO_LAYOUT, pin_material);
+    if (rc == PMD_OK) return 0;
+    return rc == PMD_ERR_BLOCKED ? -2 : -1;
 }
 
-int pin_md_verify(const uint8_t pin_material[PIN_MD_MATERIAL_LEN],
-                  int *out_correct)
+int fido_pin_verify(const uint8_t mat[PIN_MD_MATERIAL_LEN], int *correct)
 {
-    return pin_md_legacy_verify(&FIDO_LAYOUT, pin_material, out_correct);
+    return map_rc(pin_md_kernel_verify(&FIDO_LAYOUT, mat, correct, NULL));
 }
+
+int fido_pin_change(const uint8_t old_mat[PIN_MD_MATERIAL_LEN],
+                    const uint8_t new_mat[PIN_MD_MATERIAL_LEN], uint8_t new_pin_len,
+                    int *correct)
+{
+    return map_rc(pin_md_kernel_change(&FIDO_LAYOUT, old_mat, new_mat, new_pin_len,
+                                       correct, NULL));
+}
+
+int fido_pin_clear(void)
+{
+    return pin_md_kernel_clear(&FIDO_LAYOUT) == PMD_OK ? 0 : -1;
+}
+
+int fido_pin_boot(void)
+{
+    int bound = slots_pin_bound();
+    if (bound < 0) return -1;
+    pmd_state_t st = pin_md_kernel_status(&FIDO_LAYOUT, NULL, NULL);
+    if (st == PMD_ERROR) return -1;
+    if (st == PMD_ABSENT) return bound ? -1 : 0;     /* guard set, binding gone */
+    return bound ? 0 : slots_set_pin_bound(1, 0);    /* committed, guard missing */
+}
+
+#ifdef NIXTROPIC_HOST_TEST
+void fido_pin_test_reboot(void)
+{
+    s_o2.uncertain = false;
+}
+#endif

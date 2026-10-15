@@ -215,7 +215,17 @@ the object is cleared. A cut between leaves "object present, guard 0", which boo
 repairs (sets the guard), or "object absent, guard 1" = ERROR, which the
 application's reset/TERMINATE recovers. Residual: §10 R1.
 
-### 2.6 Migration from the v0.2/M3 layout (global barrier)
+### 2.6 Migration from the v0.2/M3 layout (global barrier) — SUPERSEDED
+
+**Dropped 2026-10-16** (Vaios: old state and old keys do not matter, he is the only
+user; Jan approved). No automatic migration: an old record never reads as a valid
+`NXR1` record, so each application finds its objects damaged, fails closed, and the
+user runs its documented reset once after flashing (FIDO authenticatorReset; OpenPGP
+TERMINATE + ACTIVATE). The new M&D ranges are disjoint between applications, so the
+two resets are independent. Kept from this section: checked whole-application wipes
+before any fresh state (a masked old record next to an empty partner reads ABSENT
+after one fault). The original text below is history.
+
 
 The new M&D layout reuses slots of the old one (new FIDO B 8–15 and PW1 A 16–18 lie in
 the old OpenPGP ranges 8–16), and M&D slots belong to no application on the chip (PIN
@@ -386,8 +396,7 @@ measured on hardware in the M4 validation (KEEPALIVE stays BACKLOG 6.7).
     → checked wipe of what FIDO owns (keys 0–28, metadata 1–29, `kernel_clear` O2),
     then init O1. Only a completed checked wipe authorises initialising the signature
     counter (replaces the M3 `slots_take_fresh_store` EMPTY inference);
-  - an old-layout marker of either application → the global migration (§2.6) runs
-    first; FIDO serves nothing until both markers are gone;
+  - an old-layout slot 0 reads damaged → the ERROR case below (no migration, §2.6);
   - ERROR / CORRUPT / uncertain → FIDO refuses everything except
     authenticatorReset (the documented way out; it erases blindly and inits).
 
@@ -442,7 +451,7 @@ TERMINATED state, which O3 read cleanly.
 | `retire_pending` | settle, continue | settle, continue |
 | ERROR (read error) / CORRUPT | refuse all but Reset | refuse; TERMINATE without PW3 recovers |
 | uncertain write | refuse until reboot | refuse until reboot |
-| old layout (either app) | both refuse; global migration (§2.6) | both refuse; global migration |
+| old layout | refuse; authenticatorReset (§2.6 dropped) | refuse; TERMINATE + ACTIVATE |
 | last-slot fault (§3.3) | PIN BLOCKED → Reset | PIN BLOCKED → RC/PW3 reset, TERMINATE |
 | any wipe step fails | stop, report, retry next time | stop, report, retry next time |
 
@@ -486,7 +495,8 @@ that could not be read, factory PINs before a checked wipe.
   stored length, ACTIVATE refused unless TERMINATED.
 
 **Hardware (fixture PINs only; no fault injection):**
-- First flash = the migration: FIDO and OpenPGP come up fresh; logged.
+- First flash: both applications refuse (old layout); authenticatorReset and TERMINATE +
+  ACTIVATE bring them up fresh (the release note says so).
 - `validate-pin-md.sh --destroy-my-pin` (FIDO lockout, then reset).
 - FIDO setPin/changePin/getRetries; webauthn.io login after a change; timing of
   setPin / changePin / verify.
@@ -644,3 +654,18 @@ follows a fault before the M&D call or after the re-key (§3.3).
   is ERROR, never a binding. A one-range layout (RC) refuses `setup` unless ABSENT.
 - Kernel v1 lives on as `pin_md_legacy` until FIDO (step 3) and OpenPGP (step 4) move.
 - The host M&D mock now models §7: slot ← `F1(data ‖ slot)`, answer `F2(old, new, slot)`.
+
+**Step 3 (FIDO, 2026-10-16):**
+- O1 (slots 0/40) holds bitmap, Force-UV and `pin_bound`; the PIN fields left slot 0.
+  `fido_state.c` owns boot and the reset wipe; `pin_md.c` is the FIDO PIN on kernel v2
+  (O2 41/42, ranges 0–7 / 8–15).
+- Reset order: every key (stop at the first failure) → checked metadata erase → kernel
+  clear O2 → fresh O1 (bitmap 0, Force-UV off, guard 0) → counter. One O1 write instead
+  of §4's two: a cut after the O2 clear leaves the old O1 (guard 1) over an ABSENT O2 =
+  ERROR, which the next reset completes. A cut inside the O2 clear (keys and metadata
+  already gone) can leave a dead PIN that still reads SET: fails closed over nothing.
+- changePin per D10: the pinAuth check first; then old PIN (attempt spent), then the
+  new one; a new PIN that breaks the policy is reported only after the old PIN was
+  checked (spec steps 6–10), via a plain verify.
+- Transition gate (Jan): until step 4, legacy OpenPGP issues no M&D call (its ranges
+  8–16 overlap FIDO B) and fails closed; OpenPGP PINs do not work in between.

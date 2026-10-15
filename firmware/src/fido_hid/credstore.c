@@ -8,6 +8,7 @@
 
 #include "credstore.h"
 #include "slots.h"
+#include "fido_state.h"
 #include "cose.h"
 
 #include <stdint.h>
@@ -17,16 +18,10 @@
 
 #include "tropic/tropic.h"
 
-/* TROPIC01 hw monotonic counter index used as the shared signCount source.
- * 0..15 available; we own counter 0 for Phase 5 FIDO2. Phase 7 (OpenPGP
- * card) may claim counter 1 for its key-use counter if needed. */
-#define CREDSTORE_SIGNCOUNT_MCOUNTER  0u
-
-/* Per TROPIC01 spec the mcounter init range is [0, TR01_MCOUNTER_VALUE_MAX].
- * Mirror the libtropic_common.h value here so we don't depend on its
- * private headers — defined as 0xFFFFFFFE (0xFFFFFFFF means "empty" and
- * is refused by the chip). */
-#define CREDSTORE_MCOUNTER_MAX  0xFFFFFFFEu
+/* TROPIC01 monotonic counter 0 = the shared signCount (fido_state.h owns
+ * its index, start value and when it may be initialised). */
+#define CREDSTORE_SIGNCOUNT_MCOUNTER  FIDO_SIGNCOUNT_MCOUNTER
+#define CREDSTORE_MCOUNTER_MAX        FIDO_MCOUNTER_MAX
 
 /* tropic_ecc_generate's curve parameter. */
 #define CREDSTORE_CURVE_ED25519   0u
@@ -54,44 +49,17 @@ static volatile int s_credstore_mutating;
 
 /* ----- Init ----- */
 
-/* Phase 9 M3 (Jan, M3 review): the counter is never initialised because
- * a read failed.  COUNTER_INVALID also means "corrupt" or "disabled", so
- * it starts a fresh counter only on a genuine first boot (slots_init saw
- * slot 0 reported empty by the chip: no credential can exist).  Any
- * other failure leaves FIDO failing closed; authenticatorReset is the
- * explicit way out. */
+/* Boot rules and the counter policy live in fido_state.c (Phase 9 M4). */
 int credstore_init(void)
 {
     if (s_initted) {
         return 0;
     }
-    if (slots_init() != 0) {
+    int rc = fido_state_boot();
+    if (rc != 0) {
+        printf("[credstore] FIDO state unusable (%d): only authenticatorReset works\n", rc);
         return -1;
     }
-
-    uint32_t v;
-    int rc = tropic_mcounter_get(CREDSTORE_SIGNCOUNT_MCOUNTER, &v);
-    /* Taken (and so consumed) whatever the counter says: the bootstrap
-     * right exists once, at the first init of a genuine first boot. */
-    int fresh = slots_take_fresh_store();
-    if (rc == TROPIC_ERR_COUNTER_INVALID && fresh) {
-        if (tropic_mcounter_init(CREDSTORE_SIGNCOUNT_MCOUNTER,
-                                 CREDSTORE_MCOUNTER_MAX) != 0) {
-            printf("[credstore] mcounter init FAILED\n");
-            return -2;
-        }
-        printf("[credstore] first boot: mcounter 0 initialized (signCount=0)\n");
-    } else if (rc != 0) {
-        printf("[credstore] mcounter 0 unreadable (%d): FIDO2 disabled until reset\n", rc);
-        return -2;
-    } else if (v > CREDSTORE_MCOUNTER_MAX) {
-        printf("[credstore] mcounter 0 out of range\n");
-        return -2;
-    } else {
-        printf("[credstore] mcounter 0 resumed at chip=%lu signCount=%lu\n",
-               (unsigned long) v, (unsigned long)(CREDSTORE_MCOUNTER_MAX - v));
-    }
-
     s_initted = 1;
     return 0;
 }
@@ -309,29 +277,10 @@ int credstore_signcount_next(uint32_t *out)
 
 /* ----- Factory reset ----- */
 
-/* Phase 9 M3 (Jan, M3 review 2): keys first, all or nothing.  If any FIDO
- * key erase fails, stop BEFORE the PIN, bitmap and metadata are wiped, so
- * no surviving key ends up with its protection reset.  Only after the
- * state wipe succeeded does the signature counter start again.  OpenPGP
- * slots 29..31 and its R-mem state are not touched. */
+/* Design §4 / D8: keys, metadata, PIN binding, fresh O1, counter — each
+ * step checked, any failure stops it (fido_state_wipe). */
 int credstore_factory_reset(void)
 {
-    int erase_failed = 0;
-    for (uint8_t i = 0; i < FIDO_SLOTS_MAX; ++i) {
-        if (tropic_ecc_erase(i) != 0) erase_failed = 1;
-    }
     s_initted = 0;              /* re-check everything on next use */
-    if (erase_failed) {
-        return -1;
-    }
-    if (slots_factory_reset() != 0) {
-        return -1;
-    }
-    /* cpp-reviewer audit 2026-05-11 M2: a post-reset credential must
-     * start at signCount 0, not leak the old count. */
-    if (tropic_mcounter_init(CREDSTORE_SIGNCOUNT_MCOUNTER,
-                             CREDSTORE_MCOUNTER_MAX) != 0) {
-        return -1;
-    }
-    return 0;
+    return fido_state_wipe() == 0 ? 0 : -1;
 }

@@ -47,6 +47,10 @@ stdenv.mkDerivation {
     $CC $STRICT $SAN $INC tests/host/test_pin_md_kernel.c tests/host/mock_tropic.c \
       firmware/src/tropic/pin_md_kernel.c firmware/src/tropic/rec_pair.c \
       hmac.o sha2.o memzero.o -o test_pin_md_kernel
+    $CC $STRICT $SAN $INC -DNIXTROPIC_HOST_TEST tests/host/test_fido_state.c tests/host/mock_tropic.c \
+      firmware/src/fido_hid/fido_state.c firmware/src/fido_hid/pin_md.c firmware/src/fido_hid/slots.c \
+      firmware/src/tropic/pin_md_kernel.c firmware/src/tropic/rec_pair.c \
+      hmac.o sha2.o memzero.o -o test_fido_state
     $CC $STRICT $SAN $INC tests/host/test_rec_pair.c tests/host/mock_tropic.c \
       firmware/src/tropic/rec_pair.c hmac.o sha2.o memzero.o -o test_rec_pair
     runHook postBuild
@@ -63,6 +67,7 @@ stdenv.mkDerivation {
     ./test_trezor_rng
     ./test_pin_md_legacy
     ./test_pin_md_kernel
+    ./test_fido_state
     ./test_rec_pair
     bash tests/host/test-dfu-flash.sh
     bash tests/host/test-lib-fixture.sh

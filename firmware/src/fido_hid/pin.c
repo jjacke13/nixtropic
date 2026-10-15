@@ -27,9 +27,9 @@
  *   - In-boot consec_fails (3 max, RAM): forces power-cycle after
  *     3 wrong PINs even if persistent counter has retries left.
  *     CTAP2 §5.5.4 mandates.
- *   - Persistent retries: MAC-and-Destroy-backed (Phase 5 M4) —
- *     8 chip slots physically consumed by wrong PINs; defends
- *     against firmware-reflash brute-force.  See pin_md.c.
+ *   - Persistent retries: the MAC-and-Destroy binding itself (Phase 9 M4,
+ *     pin_md.c on kernel v2) — 8 chip slots, retries = slots left.  No
+ *     stored PIN hash and no software counter (design D5, D6).
  */
 
 #include "pin.h"
@@ -247,14 +247,16 @@ static int build_cose_p256_pubkey(cbor_writer_t *w)
 
 static int handle_get_retries(uint8_t *resp, size_t resp_max)
 {
-    int pin_set = 0;
-    uint32_t retries = 0;
-    if (slots_global_pin_get(&pin_set, &retries, NULL) != 0) {
-        resp[0] = CTAP2_ERR_OTHER;
+    uint8_t att = 0;
+    uint32_t retries;
+    switch (fido_pin_state(&att)) {
+    case FPIN_NOT_SET: retries = FIDO_PIN_ROUNDS; break;   /* maxRetries */
+    case FPIN_SET:     retries = att; break;
+    case FPIN_BLOCKED: retries = 0; break;
+    default:
+        resp[0] = CTAP2_ERR_OTHER;                         /* never "full retries" */
         return 1;
     }
-    /* Spec: if no PIN set, retries can still be reported. We report 8. */
-    if (!pin_set) retries = SLOTS_PIN_RETRIES_INITIAL;
 
     if (resp_max < 1u) return -1;
     resp[0] = CTAP2_OK;
@@ -313,13 +315,13 @@ static int parse_and_compute_shared_key(cbor_reader_t *r, uint8_t shared_key[32]
  * §5.5.4 step 6. (Platform must use changePin instead.) */
 static int handle_set_pin(cbor_reader_t *r, size_t n_keys, uint8_t *resp, size_t resp_max)
 {
-    /* Refuse if a PIN already exists. */
-    int pin_already_set = 0;
-    if (slots_global_pin_get(&pin_already_set, NULL, NULL) != 0) {
+    /* Refuse if a PIN already exists (or its state cannot be read). */
+    fido_pin_state_t st = fido_pin_state(NULL);
+    if (st == FPIN_ERROR) {
         resp[0] = CTAP2_ERR_OTHER;
         return 1;
     }
-    if (pin_already_set) {
+    if (st != FPIN_NOT_SET) {
         resp[0] = CTAP2_ERR_PIN_AUTH_INVALID;
         return 1;
     }
@@ -392,39 +394,18 @@ static int handle_set_pin(cbor_reader_t *r, size_t n_keys, uint8_t *resp, size_t
         return 1;
     }
 
-    /* Phase 6 M2 — capture pre-state for the "first setPIN" detection
-     * before slots_global_pin_set flips s_pin_set to 1. */
-    int was_pin_set = pin_is_set();
-
-    /* Hash and store (M3 layer: SHA-256(PIN)[:16] in R-mem). */
+    /* The M&D binding over LEFT(SHA-256(PIN), 16) — what the platform sends
+     * as pinHashEnc later.  fido_pin_set also sets the O1 guard and
+     * auto-enables Force-UV on this first PIN (Phase 6 M2, PHASE-6-PLAN
+     * §4.4; the user can turn it off with toggleAlwaysUv). */
     uint8_t pin_hash[32];
     sha256_Raw(pin_padded, (uint32_t) pin_len, pin_hash);
     memzero(pin_padded, sizeof pin_padded);
-    int rc = slots_global_pin_set(pin_hash);
-    if (rc != 0) {
-        memzero(pin_hash, sizeof pin_hash);
-        resp[0] = CTAP2_ERR_OTHER;
-        return 1;
-    }
-
-    /* M4: initialize hardware-enforced M&D retry counter using the same
-     * 16 B pin material (consistent with what the platform sends in
-     * pinHashEnc for subsequent getPinToken calls). */
-    int md_rc = pin_md_setup(pin_hash);
+    int rc = fido_pin_set(pin_hash, (uint8_t) pin_len);
     memzero(pin_hash, sizeof pin_hash);
-    if (md_rc != 0) {
+    if (rc != 0) {
         resp[0] = CTAP2_ERR_OTHER;
         return 1;
-    }
-
-    /* Phase 6 M2 — auto-enable Force-UV on the no-PIN → PIN-set
-     * transition.  Reasoning: a user who set a PIN signalled "I want
-     * PIN required"; honour that intent without making them run a
-     * separate vendor command.  More secure than Yubikey's default-off
-     * Force-UV.  User can still opt out via the lt-rpc `force-uv-set
-     * 0` vendor command (PIN-gated).  See docs/PHASE-6-PLAN.md §4.4. */
-    if (!was_pin_set) {
-        (void) slots_force_uv_set(1);
     }
 
     /* Forward secrecy: rotate ephemeral keypair. */
@@ -438,6 +419,25 @@ static int handle_set_pin(cbor_reader_t *r, size_t n_keys, uint8_t *resp, size_t
     return 1;  /* empty response body for setPin */
 }
 
+/* Attempts left on the binding now (0 when blocked or unreadable). */
+static uint8_t attempts_left(void)
+{
+    uint8_t att = 0;
+    (void) fido_pin_state(&att);
+    return att;
+}
+
+/* Wrong-PIN bookkeeping shared by the failure paths. */
+static uint8_t pin_mismatch_status(uint8_t new_retries)
+{
+    s_consec_fails++;
+    if (s_consec_fails >= PIN_AUTH_BLOCKED_CONSEC) s_auth_blocked = 1;
+    (void) regen_eph();
+    if (new_retries == 0u) return CTAP2_ERR_PIN_BLOCKED;
+    if (s_auth_blocked)    return CTAP2_ERR_PIN_AUTH_BLOCKED;
+    return CTAP2_ERR_PIN_INVALID;
+}
+
 /* changePin sub-command (0x04). Spec §5.5.4.5.
  * Request fields (in addition to protocol + subCommand):
  *   3: keyAgreement
@@ -447,17 +447,12 @@ static int handle_set_pin(cbor_reader_t *r, size_t n_keys, uint8_t *resp, size_t
  */
 static int handle_change_pin(cbor_reader_t *r, size_t n_keys, uint8_t *resp, size_t resp_max)
 {
-    int pin_set = 0;
-    uint32_t retries = 0;
-    uint8_t expected_old_hash[PIN_HASH_LEN] = {0};
-    if (slots_global_pin_get(&pin_set, &retries, expected_old_hash) != 0) {
-        resp[0] = CTAP2_ERR_OTHER; return 1;
-    }
-    if (!pin_set) {
-        resp[0] = CTAP2_ERR_PIN_NOT_SET; return 1;
-    }
-    if (retries == 0u) {
-        resp[0] = CTAP2_ERR_PIN_BLOCKED; return 1;
+    (void) resp_max;
+    switch (fido_pin_state(NULL)) {
+    case FPIN_SET:     break;
+    case FPIN_NOT_SET: resp[0] = CTAP2_ERR_PIN_NOT_SET; return 1;
+    case FPIN_BLOCKED: resp[0] = CTAP2_ERR_PIN_BLOCKED; return 1;
+    default:           resp[0] = CTAP2_ERR_OTHER;       return 1;
     }
     if (s_auth_blocked) {
         resp[0] = CTAP2_ERR_PIN_AUTH_BLOCKED; return 1;
@@ -508,107 +503,66 @@ static int handle_change_pin(cbor_reader_t *r, size_t n_keys, uint8_t *resp, siz
         resp[0] = CTAP2_ERR_MISSING_PARAMETER; return 1;
     }
 
-    /* Decrement retries BEFORE any crypto check (pinAuth OR pinHash).
-     * cpp-reviewer audit 2026-05-11 H1: previously the decrement
-     * happened AFTER the pinAuth MAC check, giving an adversary who
-     * could forge or replay MACs a free probe oracle. Now the cost is
-     * paid up-front for any attempt, matching getPinToken's ordering. */
-    uint32_t new_retries = 0;
-    (void) slots_global_pin_dec_retries(&new_retries);
-
-    /* Verify pinAuth = LEFT(HMAC(shared_key, newPinEnc || pinHashEnc), 16). */
+    /* CTAP 2.1 §6.5.5.6 (design D10): a wrong pinUvAuthParam is answered
+     * before any attempt is spent; the MAC check reveals nothing about the
+     * PIN, so it is no probe oracle. */
     uint8_t auth_input[PIN_ENC_BUF_LEN + 16];
     memcpy(auth_input,                   new_pin_enc,  PIN_ENC_BUF_LEN);
     memcpy(&auth_input[PIN_ENC_BUF_LEN], pin_hash_enc, 16);
     uint8_t expected_auth[16];
     pin_auth_compute(shared_key, auth_input, sizeof auth_input, expected_auth);
     int auth_ok = (ct_memcmp(expected_auth, pin_auth_in, 16) == 0);
-    /* M1 fix: always wipe expected_auth regardless of branch outcome. */
     memzero(expected_auth, sizeof expected_auth);
     if (!auth_ok) {
         memzero(shared_key, sizeof shared_key);
         resp[0] = CTAP2_ERR_PIN_AUTH_INVALID; return 1;
     }
 
-    /* Decrypt pinHashEnc → 16 B submitted hash. */
-    uint8_t submitted_hash[PIN_HASH_LEN];
-    if (aes_cbc_dec_iv0(shared_key, pin_hash_enc, 16, submitted_hash) != 0) {
-        memzero(shared_key, sizeof shared_key);
-        resp[0] = CTAP2_ERR_OTHER; return 1;
-    }
-
-    /* Two-layer PIN check:
-     *   (1) M3 ct_memcmp against stored hash (fast).
-     *   (2) M4 pin_md_verify (hardware-enforced — consumes M&D slot).
-     * If EITHER layer rejects, return PIN_INVALID. M&D must always be
-     * run when M3 says OK because firmware compromise could bypass
-     * the ct_memcmp; M&D is the ground truth. */
-    int m3_ok = (ct_memcmp(submitted_hash, expected_old_hash, PIN_HASH_LEN) == 0);
-    int md_correct = 0;
-    int md_rc = pin_md_verify(submitted_hash, &md_correct);
-    memzero(submitted_hash, sizeof submitted_hash);
-
-    if (md_rc == -2) {
-        /* HW-enforced lockout from M&D side. */
-        memzero(shared_key, sizeof shared_key);
-        (void) regen_eph();
-        resp[0] = CTAP2_ERR_PIN_BLOCKED;
-        return 1;
-    }
-    if (md_rc != 0 || !m3_ok || !md_correct) {
-        /* Wrong old-PIN. M&D slot was consumed regardless. */
-        memzero(shared_key, sizeof shared_key);
-        s_consec_fails++;
-        if (s_consec_fails >= PIN_AUTH_BLOCKED_CONSEC) s_auth_blocked = 1;
-        (void) regen_eph();
-        if (new_retries == 0u) {
-            resp[0] = CTAP2_ERR_PIN_BLOCKED;
-        } else if (s_auth_blocked) {
-            resp[0] = CTAP2_ERR_PIN_AUTH_BLOCKED;
-        } else {
-            resp[0] = CTAP2_ERR_PIN_INVALID;
-        }
-        return 1;
-    }
-
-    /* Correct old-PIN. Decrypt newPinEnc and install. */
+    uint8_t old_hash[PIN_HASH_LEN];
     uint8_t pin_padded[PIN_ENC_BUF_LEN];
-    if (aes_cbc_dec_iv0(shared_key, new_pin_enc, PIN_ENC_BUF_LEN, pin_padded) != 0) {
-        memzero(shared_key, sizeof shared_key);
+    int dec_failed = aes_cbc_dec_iv0(shared_key, pin_hash_enc, 16, old_hash) != 0
+                  || aes_cbc_dec_iv0(shared_key, new_pin_enc, PIN_ENC_BUF_LEN, pin_padded) != 0;
+    memzero(shared_key, sizeof shared_key);
+    if (dec_failed) {
+        memzero(old_hash, sizeof old_hash);
+        memzero(pin_padded, sizeof pin_padded);
         resp[0] = CTAP2_ERR_OTHER; return 1;
     }
-    memzero(shared_key, sizeof shared_key);
-
     size_t pin_len = PIN_ENC_BUF_LEN;
     while (pin_len > 0 && pin_padded[pin_len - 1] == 0u) pin_len--;
-    if (pin_len < PIN_MIN_BYTES || pin_len > PIN_MAX_BYTES) {
-        memzero(pin_padded, sizeof pin_padded);
-        resp[0] = CTAP2_ERR_PIN_POLICY_VIOLATION; return 1;
-    }
-    uint8_t new_pin_hash[32];
-    sha256_Raw(pin_padded, (uint32_t) pin_len, new_pin_hash);
+    int policy_ok = pin_len >= PIN_MIN_BYTES && pin_len <= PIN_MAX_BYTES;
+    uint8_t new_hash[32];
+    sha256_Raw(pin_padded, (uint32_t) pin_len, new_hash);
     memzero(pin_padded, sizeof pin_padded);
 
-    int rc = slots_global_pin_set(new_pin_hash);
+    /* Old PIN first (the attempt is spent either way, spec step 6), then the
+     * new one: a bad new PIN only after the old one was checked (step 10). */
+    int correct = 0;
+    int rc = policy_ok ? fido_pin_change(old_hash, new_hash, (uint8_t) pin_len, &correct)
+                       : fido_pin_verify(old_hash, &correct);
+    memzero(old_hash, sizeof old_hash);
+    memzero(new_hash, sizeof new_hash);
+    if (rc == -2) {
+        (void) regen_eph();
+        resp[0] = CTAP2_ERR_PIN_BLOCKED; return 1;
+    }
     if (rc != 0) {
-        memzero(new_pin_hash, sizeof new_pin_hash);
+        /* After the commit an error can mean the NEW PIN is live
+         * (pin_md_kernel.h): the host must not assume nothing changed. */
         resp[0] = CTAP2_ERR_OTHER; return 1;
     }
-
-    /* M4: re-initialize M&D state with the new PIN. The old M&D slots
-     * are reset by pin_md_verify above (it re-initialized them on
-     * successful match); pin_md_setup overwrites with new keying. */
-    int md_setup_rc = pin_md_setup(new_pin_hash);
-    memzero(new_pin_hash, sizeof new_pin_hash);
-    if (md_setup_rc != 0) {
-        resp[0] = CTAP2_ERR_OTHER; return 1;
+    if (!correct) {
+        resp[0] = pin_mismatch_status(attempts_left());
+        return 1;
+    }
+    s_consec_fails = 0;
+    if (!policy_ok) {
+        resp[0] = CTAP2_ERR_PIN_POLICY_VIOLATION; return 1;
     }
 
-    /* Success: rotate ephemeral, reset RAM counters, invalidate old token. */
+    /* Success: rotate ephemeral, invalidate old tokens. */
     (void) regen_eph();
     puat_reset();
-    s_consec_fails = 0;
-
     resp[0] = CTAP2_OK;
     return 1;
 }
@@ -684,45 +638,24 @@ static int check_token_req(const token_req_t *t, int with_perms, uint8_t *perms)
     return 0;
 }
 
-/* Wrong-PIN bookkeeping shared by the failure paths. */
-static uint8_t pin_mismatch_status(uint32_t new_retries)
-{
-    s_consec_fails++;
-    if (s_consec_fails >= PIN_AUTH_BLOCKED_CONSEC) s_auth_blocked = 1;
-    (void) regen_eph();
-    if (new_retries == 0u) return CTAP2_ERR_PIN_BLOCKED;
-    if (s_auth_blocked)    return CTAP2_ERR_PIN_AUTH_BLOCKED;
-    return CTAP2_ERR_PIN_INVALID;
-}
-
-/* Check the PIN behind pinHashEnc (R-mem hash + M&D, Phase 5 M3/M4).
- * Returns 0 if correct, otherwise the CTAP2 status to send. */
+/* Check the PIN behind pinHashEnc against the M&D binding.  Returns 0 if
+ * correct, otherwise the CTAP2 status to send. */
 static int verify_pin_hash_enc(const uint8_t shared_key[32],
-                               const uint8_t pin_hash_enc[16],
-                               const uint8_t stored_hash[PIN_HASH_LEN])
+                               const uint8_t pin_hash_enc[16])
 {
-    /* Decrement retries BEFORE checking. */
-    uint32_t new_retries = 0;
-    (void) slots_global_pin_dec_retries(&new_retries);
-
     uint8_t submitted_hash[PIN_HASH_LEN];
     if (aes_cbc_dec_iv0(shared_key, pin_hash_enc, 16, submitted_hash) != 0) {
         return CTAP2_ERR_OTHER;
     }
-    int m3_ok = (ct_memcmp(submitted_hash, stored_hash, PIN_HASH_LEN) == 0);
-    int md_correct = 0;
-    int md_rc = pin_md_verify(submitted_hash, &md_correct);
+    int correct = 0;
+    int rc = fido_pin_verify(submitted_hash, &correct);
     memzero(submitted_hash, sizeof submitted_hash);
-
-    if (md_rc == -2) {
-        /* HW lockout — all 8 slots consumed. Needs factory_reset. */
+    if (rc == -2) {
         (void) regen_eph();
         return CTAP2_ERR_PIN_BLOCKED;
     }
-    if (md_rc != 0 || !m3_ok || !md_correct) {
-        return pin_mismatch_status(new_retries);
-    }
-    (void) slots_global_pin_reset_retries();
+    if (rc != 0) return CTAP2_ERR_OTHER;
+    if (!correct) return pin_mismatch_status(attempts_left());
     s_consec_fails = 0;
     return 0;
 }
@@ -779,22 +712,19 @@ static int handle_get_pin_token(cbor_reader_t *r, size_t n_keys,
     if (rc == 0) rc = check_token_req(&t, with_perms, &perms);
     if (rc != 0) { resp[0] = (uint8_t) rc; return 1; }
 
-    int pin_set = 0;
-    uint32_t retries = 0;
-    uint8_t stored_hash[PIN_HASH_LEN] = {0};
-    if (slots_global_pin_get(&pin_set, &retries, stored_hash) != 0) {
-        resp[0] = CTAP2_ERR_OTHER; return 1;
+    switch (fido_pin_state(NULL)) {
+    case FPIN_SET:     break;
+    case FPIN_NOT_SET: resp[0] = CTAP2_ERR_PIN_NOT_SET; return 1;
+    case FPIN_BLOCKED: resp[0] = CTAP2_ERR_PIN_BLOCKED; return 1;
+    default:           resp[0] = CTAP2_ERR_OTHER;       return 1;
     }
-    if (!pin_set)          { resp[0] = CTAP2_ERR_PIN_NOT_SET;      return 1; }
-    if (retries == 0u)     { resp[0] = CTAP2_ERR_PIN_BLOCKED;      return 1; }
-    if (s_auth_blocked)    { resp[0] = CTAP2_ERR_PIN_AUTH_BLOCKED; return 1; }
+    if (s_auth_blocked) { resp[0] = CTAP2_ERR_PIN_AUTH_BLOCKED; return 1; }
 
     uint8_t shared_key[32];
     if (compute_shared_key(t.peer_xy, shared_key) != 0) {
         resp[0] = CTAP1_ERR_INVALID_PARAMETER; return 1;
     }
-    rc = verify_pin_hash_enc(shared_key, t.pin_hash_enc, stored_hash);
-    memzero(stored_hash, sizeof stored_hash);
+    rc = verify_pin_hash_enc(shared_key, t.pin_hash_enc);
     if (rc != 0) {
         memzero(shared_key, sizeof shared_key);
         resp[0] = (uint8_t) rc;
@@ -830,9 +760,7 @@ int pin_is_set(void)
 {
     /* An unreadable PIN state counts as "PIN set": every check that asks
      * then demands the stricter path (Phase 9 M3). */
-    int pin_set = 0;
-    if (slots_global_pin_get(&pin_set, NULL, NULL) != 0) return 1;
-    return pin_set;
+    return fido_pin_state(NULL) != FPIN_NOT_SET;
 }
 
 int pin_token_is_valid(void)

@@ -9,19 +9,22 @@
  *   - TROPIC01 ECC slot (TR01_ECC_SLOT_0 + idx)        — private key, on chip
  *   - TROPIC01 R-mem slot (idx + 1)                    — metadata (256 B)
  *
- * R-mem slot 0 is the global state (allocation bitmap, schema magic
- * "NX7K" Phase 7, PIN state, M&D bookkeeping).  See
- * docs/PHASE-5-PLAN.md §4.2 for the full layout.
+ * FIDO global state = object O1, a mirrored record pair in R-mem slots 0
+ * and 40 (Phase 9 M4, docs/PHASE-9-M4-DESIGN.md §2, §4): allocation
+ * bitmap, Force-UV flag, and the `pin_bound` guard of the PIN binding O2.
+ * No PIN state lives here any more (pin_md.c, kernel v2).
  *
  * Persistence model:
- *   - R-mem is written/read over libtropic L3 — atomic per slot per spec.
- *   - First boot detection: read slot 0, check magic "NX5K".
- *     If missing or wrong, write fresh global state with bitmap=0.
- *   - Orphan-scrub: at boot, for every claimed bit in bitmap, verify the
- *     per-credential R-mem slot has matching "NXCR" magic. If not,
- *     clear the bit. Symmetric direction (ECC populated, bitmap empty)
- *     is harder to detect cheaply and is deferred to M2 when we wire
- *     credstore_make to lt_ecc_key_generate.
+ *   - O1 changes only through rec_pair (both copies, read-back proven); a
+ *     failed write leaves the pair uncertain and every slot operation is
+ *     refused until the next boot.
+ *   - slots_init never writes fresh state by itself: O1 ABSENT is the
+ *     caller's cue for a checked FIDO wipe (fido_state.c), O1 damaged or
+ *     unreadable is an error (FIDO refuses all but authenticatorReset).
+ *   - Orphan-scrub: at boot a bitmap bit is cleared only when its metadata
+ *     slot reads empty; a read error or bad content keeps the bit (the
+ *     credential then fails to resolve).  The key is erased before a slot
+ *     is reused (Phase 9 M3).
  *
  * Credential ID format (returned to relying party):
  *   [0]   version = 0x01
@@ -90,13 +93,33 @@ typedef struct {
     uint32_t created;
 } slot_meta_t;
 
+/* slots_init results. */
+#define SLOTS_INIT_OK       0
+#define SLOTS_INIT_ABSENT   1    /* O1 never written or cleared: wipe, then slots_init_fresh */
+
 /**
- * @brief First-boot init: open L3 session, read slot 0, detect magic.
- *        Idempotent — safe to call multiple times.
+ * @brief Read O1 (repairing a pair whose copies differ) and orphan-scrub.
+ *        Idempotent once it succeeded.
  *
- * @return 0 on success; negative on libtropic error.
+ * @return SLOTS_INIT_OK; SLOTS_INIT_ABSENT; negative on a chip error or a
+ *         damaged / uncertain O1 (FIDO must refuse all but Reset).
  */
 int slots_init(void);
+
+/**
+ * @brief Write a fresh O1 (bitmap 0, Force-UV off, pin_bound 0): checked
+ *        erase of both copies, then both written.  Only after a completed
+ *        checked wipe of everything FIDO owns (fido_state.c).
+ * @return 0 on success; -1 on chip error (O1 uncertain until reboot).
+ */
+int slots_init_fresh(void);
+
+/**
+ * @brief Checked erase of every FIDO metadata slot (R-mem 1..29): erase,
+ *        then the slot must read empty.  Stops at the first failure.
+ * @return 0 on success; -1 on chip error.
+ */
+int slots_wipe_meta(void);
 
 /**
  * @brief Allocate the next free slot for a new credential.
@@ -151,20 +174,10 @@ int slots_lookup_by_credid(const uint8_t *cred_id, size_t cred_id_len,
                            int *out_slot_idx, slot_meta_t *out_meta);
 
 /**
- * @brief 1 (once per boot) if this boot's slots_init found global R-mem
- *        slot 0 reported empty by the chip (SLOT_EMPTY, never written),
- *        wrote fresh state, AND every per-credential R-mem slot reads
- *        empty too — a genuine first boot.  Read errors never count.
- *        Phase 9 M3: the only case besides authenticatorReset in which
- *        the FIDO signature counter may be initialised.
- */
-int slots_take_fresh_store(void);
-
-/**
- * @brief 0 after a bitmap write whose outcome is unknown: until the next
- *        boot or a successful factory reset, every slot operation (lookup,
+ * @brief 0 unless O1 was read (or freshly written) this boot and no O1
+ *        write has failed since: then every slot operation (lookup,
  *        metadata, allocation, erase, global-state write) is refused and
- *        callers must not touch credential keys (Phase 9 M3).
+ *        callers must not touch credential keys (Phase 9 M3/M4).
  */
 int slots_usable(void);
 
@@ -203,125 +216,21 @@ int slots_count_used(void);
 int slots_read_meta(int slot_idx, slot_meta_t *out);
 
 /**
- * @brief WIPE EVERYTHING. Used by authenticatorReset (M5) and by the
- *        debug `nixtropic factory-reset` host command (M1).
- *        Erases bitmap, all per-credential R-mem entries (slots 1..32),
- *        and global slot 0. ECC slots untouched (credstore wipes those
- *        separately in M2+).
- *
- * @return 0 on success; -1 on TROPIC01 error.
+ * @brief The `pin_bound` guard of the FIDO PIN binding (design §2.5):
+ *        1 = a PIN binding was committed, 0 = none; -1 if O1 is unusable.
  */
-int slots_factory_reset(void);
-
-/* ===== Phase 5 M3: PIN state on global R-mem slot 0 =====
- *
- * The PIN state is persisted alongside the credential bitmap in R-mem
- * slot 0, at offsets 10..30 per docs/PHASE-5-PLAN.md §4.2.
- *
- * On-disk layout (additive over M1; old schema=1 reads 0x00 at these
- * offsets, which correctly reports "no PIN set"):
- *   [10]      pin_set    (1 byte: 0=not set, 1=set)
- *   [11..26]  pin_hash   (16 bytes: LEFT(SHA-256(PIN), 16))
- *   [27..30]  pin_retries (uint32_BE)
- *
- * Wraps every R-mem touch in cached-then-write semantics (re-read after
- * write to confirm). All accessors require slots_init() already ran. */
-
-#define SLOTS_PIN_HASH_LEN       16u
-#define SLOTS_PIN_RETRIES_INITIAL 8u
+int slots_pin_bound(void);
 
 /**
- * @brief Read PIN state from R-mem slot 0.
- * @param out_pin_set    1 if a PIN is currently set, 0 otherwise.
- * @param out_retries    current retries-remaining count (only meaningful when pin_set).
- * @param out_pin_hash   16 B; populated only when pin_set==1.
- * @return 0 on success; -1 on chip error.
+ * @brief One O1 write: pin_bound := bound and, if `force_uv_on`, Force-UV
+ *        on (the first-PIN auto-enable, Phase 6).
+ * @return 0 on success; -1 on chip error (O1 uncertain until reboot).
  */
-int slots_global_pin_get(int *out_pin_set,
-                         uint32_t *out_retries,
-                         uint8_t out_pin_hash[SLOTS_PIN_HASH_LEN]);
-
-/**
- * @brief Set / replace the PIN. Stores hash, resets retries to 8,
- *        marks pin_set=1. Overwrites any previous PIN.
- * @return 0 on success; -1 on chip error.
- */
-int slots_global_pin_set(const uint8_t pin_hash[SLOTS_PIN_HASH_LEN]);
-
-/**
- * @brief Decrement PIN retries counter (after a wrong-PIN attempt).
- *        Floor at 0. Returns the new value via out_new.
- * @return 0 on success; -1 on chip error.
- */
-int slots_global_pin_dec_retries(uint32_t *out_new);
-
-/**
- * @brief Restore PIN retries to INITIAL (after a correct PIN).
- * @return 0 on success; -1 on chip error.
- */
-int slots_global_pin_reset_retries(void);
-
-/* ===== Phase 5 M4: MAC-and-Destroy state =====
- *
- * Layout in R-mem slot 0 (extends M3 PIN state). See
- * docs/PHASE-5-M4-DESIGN.md §"R-mem slot 0 layout (M4 extension)".
- *
- *   [31]      md_active (0 = not initialized, 1 = active)
- *   [32]      md_next_slot (0..7) — next slot index to consume
- *   [33..64]  md_tag (32 B) — verification tag
- *   [65..320] md_ci (8 * 32 B = 256 B) — encrypted master_secret per slot
- *
- * Schema version 2 (was 1 in M1/M3). Old schema=1 state is migrated by
- * factory_reset (acceptable in Phase 5 dev — user re-sets PIN). */
-
-#define SLOTS_MD_ROUNDS              8u
-#define SLOTS_MD_SLOT_SIZE          32u
-#define SLOTS_MD_CI_LEN            (SLOTS_MD_ROUNDS * SLOTS_MD_SLOT_SIZE)
-#define SLOTS_MD_TAG_LEN            32u
-
-/**
- * @brief Read M&D state.
- *
- * @param out_active        1 = M&D slots are initialized (PIN set), 0 = not.
- * @param out_next_slot     Next slot to consume on attempt (0..ROUNDS).
- *                          When equal to ROUNDS, no slots remaining
- *                          (PIN exhausted at HW level — needs factory_reset).
- * @param out_tag           32 B verification tag.
- * @param out_ci            256 B encrypted secrets array.
- * @return 0 on success; -1 on chip error.
- */
-int slots_global_md_get(int *out_active,
-                        uint8_t *out_next_slot,
-                        uint8_t out_tag[SLOTS_MD_TAG_LEN],
-                        uint8_t out_ci[SLOTS_MD_CI_LEN]);
-
-/**
- * @brief Persist M&D state to R-mem slot 0.
- *
- * @param active      1 = M&D active.
- * @param next_slot   Next slot pointer (0..ROUNDS).
- * @param tag         Verification tag.
- * @param ci          256 B encrypted secrets array.
- * @return 0 on success; -1 on chip error.
- */
-int slots_global_md_set(int active,
-                        uint8_t next_slot,
-                        const uint8_t tag[SLOTS_MD_TAG_LEN],
-                        const uint8_t ci[SLOTS_MD_CI_LEN]);
-
-/**
- * @brief Advance the M&D next-slot pointer by one (commit attempt
- *        BEFORE doing the M&D op — power-loss-safe). Writes R-mem.
- *        Sets *out_new to the value AFTER increment.
- * @return 0 on success; -1 on chip error.
- */
-int slots_global_md_advance(uint8_t *out_new);
+int slots_set_pin_bound(int bound, int force_uv_on);
 
 /* ===== Phase 6 M2: Force-UV flag =====
  *
- * Persisted in R-mem slot 0 at offset 321 (just past the M&D ci[] array
- * which ends at 320).  Schema v3 introduces this byte and bumps the
- * global magic from "NX5K" → "NX6K".
+ * Persisted in O1 (Phase 9 M4).
  *
  * Semantics (docs/PHASE-6-PLAN.md §4.4):
  *   0 = honour RP's `userVerification` hint (Phase 5 behaviour).
@@ -335,7 +244,8 @@ int slots_global_md_advance(uint8_t *out_new);
 
 /**
  * @brief Read the Force-UV flag.
- * @return 1 if Force-UV is enabled, 0 otherwise.
+ * @return 1 if Force-UV is enabled or O1 is unusable (the stricter
+ *         policy), 0 otherwise.
  */
 int slots_force_uv_get(void);
 
@@ -345,5 +255,10 @@ int slots_force_uv_get(void);
  * @return 0 on success; -1 on chip error.
  */
 int slots_force_uv_set(int value);
+
+#ifdef NIXTROPIC_HOST_TEST
+/* Host tests only: forget the RAM state, as a reboot does. */
+void slots_test_reboot(void);
+#endif
 
 #endif /* NIXTROPIC_FIDO_HID_SLOTS_H */

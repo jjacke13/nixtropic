@@ -1,23 +1,21 @@
 /*
- * Phase 5 M1 — TROPIC01 slot manager implementation. See slots.h.
+ * TROPIC01 slot manager implementation. See slots.h.
  *
- * Wire encoding (big-endian for all multi-byte fields):
+ * O1 = FIDO global state, a rec_pair in R-mem slots 0 / 40 (Phase 9 M4,
+ * docs/PHASE-9-M4-DESIGN.md §2, §4).  Payload (big-endian):
+ *   [0..3]  bitmap (uint32; bit i = credential slot i allocated)
+ *   [4]     force_uv (0 / 1)
+ *   [5]     pin_bound (0 / 1): guard of the PIN binding O2 (§2.5)
  *
- * Slot 0 (global state, 256 B):
- *   [0..3]   magic   "NX5K" (0x4E 0x58 0x35 0x4B)
- *   [4..5]   schema_version = 1
- *   [6..9]   bitmap (uint32_BE; bit i = slot i used)
- *   [10..255] reserved, zero-filled  (will hold PIN state in M3)
- *
- * Slot N+1 (per-credential, 256 B):
+ * Slot N+1 (per-credential metadata, 256 B), written once per credential:
  *   [0..3]   magic   "NXCR" (0x4E 0x58 0x43 0x52)
- *   [4]      schema_version = 1
+ *   [4]      schema_version
  *   [5]      alg (SLOTS_ALG_ED25519 = 8, SLOTS_ALG_ES256 = 7)
  *   [6]      flags
  *   [7]      reserved
  *   [8..39]  rp_id_hash (32 B)
  *   [40..55] cred_id_nonce (16 B)
- *   [56..255] reserved (will hold user_handle / rp_name / user_name in M3)
+ *   [56]     user_handle_len, [57..120] user_handle, [121..124] created
  */
 
 #include "slots.h"
@@ -26,29 +24,14 @@
 #include <stddef.h>
 #include <string.h>
 
+#include "tropic/rec_pair.h"
 #include "tropic/tropic.h"
 
-/* Wire layout offsets — kept as #defines, not magic numbers in code. */
-#define GLOBAL_MAGIC_OFF          0
-#define GLOBAL_MAGIC_LEN          4
-#define GLOBAL_SCHEMA_OFF         4
-#define GLOBAL_BITMAP_OFF         6
-#define GLOBAL_BITMAP_LEN         4
-/* PIN state (Phase 5 M3). Stored at offsets 10..30 in global R-mem slot. */
-#define GLOBAL_PIN_SET_OFF       10
-#define GLOBAL_PIN_HASH_OFF      11
-#define GLOBAL_PIN_RETRIES_OFF   27
-/* M&D state (Phase 5 M4). Stored at offsets 31..320 in global R-mem slot. */
-#define GLOBAL_MD_ACTIVE_OFF     31
-#define GLOBAL_MD_NEXT_SLOT_OFF  32
-#define GLOBAL_MD_TAG_OFF        33   /* 32 B */
-#define GLOBAL_MD_CI_OFF         65   /* 256 B */
-#define GLOBAL_MD_END_OFF       (GLOBAL_MD_CI_OFF + SLOTS_MD_CI_LEN)  /* 321 */
-/* Force-UV flag (Phase 6 M2).  Placed past v2's M&D end so v2 firmware
- * cannot accidentally misinterpret this byte as part of the M&D ci[]
- * array — coupled with the magic bump below, downgrade attempts fail
- * loudly (factory_reset) rather than silently corrupting. */
-#define GLOBAL_FORCE_UV_OFF     321
+#define O1_SLOT_A       SLOTS_RMEM_GLOBAL_SLOT   /* 0 */
+#define O1_SLOT_B       40u
+#define O1_OBJ          1u
+#define O1_SCHEMA       1u
+#define O1_LEN          6u
 
 #define CRED_MAGIC_OFF            0
 #define CRED_MAGIC_LEN            4
@@ -64,56 +47,18 @@
 /* Phase 9 M3 — creation sequence, BE, right after the 64 B user_handle
  * area (57..120).  Older writers zeroed the whole slot: reads as 0. */
 #define CRED_CREATED_OFF        121
-
-/* Magic byte values.
- *
- * Phase 7 M1 bumps the global magic from "NX6K" → "NX7K".  Rationale
- * (docs/PHASE-7-PLAN.md §4.7 H4 reuse):
- *
- *   - Phase 6 firmware reading Phase 7 R-mem sees "NX7K", does NOT
- *     recognise it, falls into the first-boot path → factory_reset.
- *     Loud failure ("device was wiped") on accidental downgrade.
- *   - Phase 7 firmware reading Phase 6 R-mem sees "NX6K", recognises
- *     it as legacy v3, migrates in-RAM (preserves PIN + M&D state +
- *     credentials + force_uv across the Phase 7 upgrade).  Slot 0
- *     payload is unchanged from v3 — we just bump the magic + schema
- *     version byte as a marker.
- *   - Phase 7 firmware reading Phase 5 R-mem ("NX5K", v2) migrates
- *     v2 → v4 directly: preserves M&D state, defaults force_uv = 0
- *     (was the v2→v3 step), bumps magic.
- *
- * Per-credential magic is unchanged — cred slots (R-mem 1..32) had
- * no layout change in Phase 6 or Phase 7. */
-static const uint8_t GLOBAL_MAGIC[GLOBAL_MAGIC_LEN]           = { 'N', 'X', '7', 'K' };
-static const uint8_t GLOBAL_MAGIC_LEGACY_V3[GLOBAL_MAGIC_LEN] = { 'N', 'X', '6', 'K' };
-static const uint8_t GLOBAL_MAGIC_LEGACY_V2[GLOBAL_MAGIC_LEN] = { 'N', 'X', '5', 'K' };
-static const uint8_t CRED_MAGIC[CRED_MAGIC_LEN]               = { 'N', 'X', 'C', 'R' };
-
-/* schema_version 1 = M1/M3 (256 B layout, no M&D fields)
- * schema_version 2 = M4 (384 B layout, M&D state at offsets 31..320)
- * schema_version 3 = Phase 6 M2 (392 B layout, +1 B force_uv at 321)
- * schema_version 4 = Phase 7 M1 (392 B — identical to v3; bump is purely
- *                   a magic/version marker for downgrade detection) */
-#define SLOTS_SCHEMA_VERSION      4u
-#define SLOTS_SCHEMA_VERSION_V3   3u
-#define SLOTS_SCHEMA_VERSION_V2   2u
-/* Phase 6 M2 grew global payload from 384 → 392 (rounded to 8-byte
- * alignment past the new force_uv byte at offset 321).  Phase 7 M1
- * keeps the same payload size — slot 0 layout is unchanged, only
- * magic + schema_version bytes are bumped. */
-#define SLOTS_GLOBAL_PAYLOAD_LEN  392u
+#define CRED_SCHEMA_VERSION       4u   /* unchanged since Phase 7 */
 #define SLOTS_CRED_PAYLOAD_LEN    SLOTS_RMEM_PER_CRED_SIZE
 
-/* Cached state — populated in slots_init from R-mem slot 0. */
-static uint32_t s_bitmap;
+static const uint8_t CRED_MAGIC[CRED_MAGIC_LEN] = { 'N', 'X', 'C', 'R' };
+
+static rec_pair_t s_o1 = REC_PAIR(O1_SLOT_A, O1_SLOT_B, O1_OBJ, O1_SCHEMA);
+
+/* RAM copy of O1, valid while slots_usable(). */
 static int      s_initted;
-/* Phase 9 M3: this boot found slot 0 never written (see slots_fresh_store). */
-static int      s_fresh_store;
-/* Phase 9 M3 (Jan, M3 review 5): a failed bitmap write is not proof that
- * nothing was written (erase + write, lost response).  After one, the RAM
- * bitmap may disagree with the chip: allocation and erase are refused
- * until the next boot, when slots_init re-reads slot 0. */
-static int      s_store_uncertain;
+static uint32_t s_bitmap;
+static uint8_t  s_force_uv;
+static uint8_t  s_pin_bound;
 
 /* ----- Helpers ----- */
 
@@ -143,152 +88,25 @@ static int ct_memcmp(const uint8_t *a, const uint8_t *b, size_t n)
     return diff;
 }
 
-/* Cached PIN state — populated lazily from R-mem in slots_init / re-read
- * helpers. Mirrored to R-mem on every change. */
-static uint8_t  s_pin_set;
-static uint8_t  s_pin_hash[SLOTS_PIN_HASH_LEN];
-static uint32_t s_pin_retries;
-/* M4 M&D state. */
-static uint8_t  s_md_active;
-static uint8_t  s_md_next_slot;
-static uint8_t  s_md_tag[SLOTS_MD_TAG_LEN];
-static uint8_t  s_md_ci[SLOTS_MD_CI_LEN];
-/* M2 (Phase 6) Force-UV flag. */
-static uint8_t  s_force_uv;
-
-/* Write the global-state buffer back to R-mem slot 0.  Always writes
- * the full 392 B (Phase 6 M2 layout, bumped from 384 in v2 to add the
- * force_uv byte at offset 321).  The buffer mirrors the cached state
- * in s_pin_*, s_md_*, and s_force_uv. */
-static int write_global(uint32_t bitmap)
+static void o1_encode(uint8_t out[O1_LEN], uint32_t bitmap, uint8_t uv, uint8_t bound)
 {
-    /* Never persist a RAM copy that may disagree with the chip (Phase 9 M3,
-     * Jan round 2): PIN, M&D and Force-UV writes would carry the stale
-     * bitmap back.  slots_factory_reset clears the flag first. */
-    if (s_store_uncertain) {
-        return -1;
-    }
-    uint8_t buf[SLOTS_GLOBAL_PAYLOAD_LEN];
-    memset(buf, 0, sizeof buf);
-
-    memcpy(&buf[GLOBAL_MAGIC_OFF], GLOBAL_MAGIC, GLOBAL_MAGIC_LEN);
-    buf[GLOBAL_SCHEMA_OFF]     = 0;                              /* BE high */
-    buf[GLOBAL_SCHEMA_OFF + 1] = (uint8_t) SLOTS_SCHEMA_VERSION;
-    be32_store(&buf[GLOBAL_BITMAP_OFF], bitmap);
-
-    /* PIN state (M3+). Default zeros if no PIN set; safe because zero is
-     * "pin not set". */
-    buf[GLOBAL_PIN_SET_OFF] = s_pin_set;
-    memcpy(&buf[GLOBAL_PIN_HASH_OFF], s_pin_hash, SLOTS_PIN_HASH_LEN);
-    be32_store(&buf[GLOBAL_PIN_RETRIES_OFF], s_pin_retries);
-
-    /* M&D state (M4+). Default zeros if M&D not initialized. */
-    buf[GLOBAL_MD_ACTIVE_OFF]     = s_md_active;
-    buf[GLOBAL_MD_NEXT_SLOT_OFF]  = s_md_next_slot;
-    memcpy(&buf[GLOBAL_MD_TAG_OFF], s_md_tag, SLOTS_MD_TAG_LEN);
-    memcpy(&buf[GLOBAL_MD_CI_OFF],  s_md_ci,  SLOTS_MD_CI_LEN);
-
-    /* Force-UV flag (Phase 6 M2). */
-    buf[GLOBAL_FORCE_UV_OFF] = (s_force_uv != 0u) ? 1u : 0u;
-
-    /* Erase before write — R-mem slots are write-once until erased. */
-    if (tropic_rmem_erase(SLOTS_RMEM_GLOBAL_SLOT) != 0) {
-        return -1;
-    }
-    return tropic_rmem_write(SLOTS_RMEM_GLOBAL_SLOT, buf, sizeof buf);
+    be32_store(out, bitmap);
+    out[4] = uv;
+    out[5] = bound;
 }
 
-/* Read & validate the global-state slot.  Returns:
- *   0  = success, current schema v4 ("NX7K"), nothing to do.
- *   1  = success, legacy schema v2/v3 — caller MUST write_global() to
- *        migrate to v4 layout before returning to user code.  In-RAM
- *        state is already populated; v2 had no force_uv byte so the
- *        flag defaults to 0; v3 is a strict prefix of v4 (only the
- *        magic + version bytes change).
- *  -1  = magic mismatch (caller should treat as first boot).
- *  -2  = chip read error.
- *  -3  = recognised magic but unsupported schema (caller should
- *        factory_reset to migrate; e.g. very old v1 firmware state). */
-static int read_global(uint32_t *out_bitmap)
+/* Persist O1 in both copies, then (only then) take it into RAM.  A failure
+ * leaves the pair uncertain: slots_usable() is 0 until the next boot. */
+static int write_global(uint32_t bitmap, uint8_t uv, uint8_t bound)
 {
-    uint8_t  buf[SLOTS_GLOBAL_PAYLOAD_LEN];
-    size_t   got = 0;
-
-    int rc = tropic_rmem_read(SLOTS_RMEM_GLOBAL_SLOT, buf, sizeof buf, &got);
-    if (rc == TROPIC_ERR_RMEM_SLOT_EMPTY) {
-        return -5;      /* the chip says: never written (Phase 9 M3) */
-    }
-    if (rc != 0 || got < (GLOBAL_PIN_RETRIES_OFF + 4u)) {
-        return -2;
-    }
-
-    /* 0 = current v4 / 2 = legacy v2 / 3 = legacy v3 */
-    int legacy_version = 0;
-    if (memcmp(&buf[GLOBAL_MAGIC_OFF], GLOBAL_MAGIC, GLOBAL_MAGIC_LEN) == 0) {
-        /* Current v4 magic ("NX7K"). */
-    } else if (memcmp(&buf[GLOBAL_MAGIC_OFF], GLOBAL_MAGIC_LEGACY_V3,
-                      GLOBAL_MAGIC_LEN) == 0) {
-        /* Phase 6 v3 magic ("NX6K") — accept and migrate to v4.  Slot 0
-         * payload is identical between v3 and v4; only the magic +
-         * schema_version bytes change.  Preserves PIN + M&D + force_uv
-         * + credentials across the Phase 7 upgrade. */
-        legacy_version = 3;
-    } else if (memcmp(&buf[GLOBAL_MAGIC_OFF], GLOBAL_MAGIC_LEGACY_V2,
-                      GLOBAL_MAGIC_LEN) == 0) {
-        /* Phase 5 v2 magic ("NX5K") — accept and migrate v2 → v4.
-         * v2 had no force_uv byte (defaults to 0 here, same as
-         * the original v2→v3 step). */
-        legacy_version = 2;
-    } else {
-        return -1;
-    }
-
-    uint16_t schema = ((uint16_t) buf[GLOBAL_SCHEMA_OFF] << 8) |
-                       (uint16_t) buf[GLOBAL_SCHEMA_OFF + 1];
-    if (legacy_version == 2) {
-        if (schema != SLOTS_SCHEMA_VERSION_V2) {
-            return -3;  /* unknown schema under legacy v2 magic */
-        }
-    } else if (legacy_version == 3) {
-        if (schema != SLOTS_SCHEMA_VERSION_V3) {
-            return -3;  /* unknown schema under legacy v3 magic */
-        }
-    } else {
-        if (schema != SLOTS_SCHEMA_VERSION) {
-            return -3;  /* future schema we don't know how to read */
-        }
-    }
-
-    *out_bitmap = be32_load(&buf[GLOBAL_BITMAP_OFF]);
-
-    /* PIN state. */
-    s_pin_set     = buf[GLOBAL_PIN_SET_OFF] & 0x01u;
-    memcpy(s_pin_hash, &buf[GLOBAL_PIN_HASH_OFF], SLOTS_PIN_HASH_LEN);
-    s_pin_retries = be32_load(&buf[GLOBAL_PIN_RETRIES_OFF]);
-
-    /* M&D state (M4+). Only valid if we read enough bytes. */
-    if (got >= GLOBAL_MD_END_OFF) {
-        s_md_active    = buf[GLOBAL_MD_ACTIVE_OFF] & 0x01u;
-        s_md_next_slot = buf[GLOBAL_MD_NEXT_SLOT_OFF];
-        memcpy(s_md_tag, &buf[GLOBAL_MD_TAG_OFF], SLOTS_MD_TAG_LEN);
-        memcpy(s_md_ci,  &buf[GLOBAL_MD_CI_OFF],  SLOTS_MD_CI_LEN);
-    } else {
-        s_md_active = 0;
-        s_md_next_slot = 0;
-        memset(s_md_tag, 0, SLOTS_MD_TAG_LEN);
-        memset(s_md_ci,  0, SLOTS_MD_CI_LEN);
-    }
-
-    /* Force-UV (Phase 6 M2+).  v2 layout has no such byte; default 0.
-     * v3 + current both place it at GLOBAL_FORCE_UV_OFF. */
-    if (legacy_version == 2 || got <= GLOBAL_FORCE_UV_OFF) {
-        s_force_uv = 0u;
-    } else {
-        s_force_uv = (buf[GLOBAL_FORCE_UV_OFF] != 0u) ? 1u : 0u;
-    }
-
-    /* Return 1 if migration to current schema needed; 0 if already current. */
-    return (legacy_version != 0) ? 1 : 0;
+    uint8_t buf[O1_LEN];
+    if (!slots_usable()) return -1;
+    o1_encode(buf, bitmap, uv, bound);
+    if (rec_pair_write(&s_o1, buf, sizeof buf) != REC_OK) return -1;
+    s_bitmap = bitmap;
+    s_force_uv = uv;
+    s_pin_bound = bound;
+    return 0;
 }
 
 /* Write a fully-formed per-credential R-mem entry. */
@@ -304,7 +122,7 @@ static int write_cred(int slot_idx,
     memset(buf, 0, sizeof buf);
 
     memcpy(&buf[CRED_MAGIC_OFF], CRED_MAGIC, CRED_MAGIC_LEN);
-    buf[CRED_SCHEMA_OFF] = (uint8_t) SLOTS_SCHEMA_VERSION;
+    buf[CRED_SCHEMA_OFF] = CRED_SCHEMA_VERSION;
     buf[CRED_ALG_OFF]    = alg;
     buf[CRED_FLAGS_OFF]  = flags;
     memcpy(&buf[CRED_RP_HASH_OFF], rp_id_hash, SLOTS_RP_ID_HASH_LEN);
@@ -330,7 +148,8 @@ static int write_cred(int slot_idx,
     return tropic_rmem_write(rs, buf, sizeof buf);
 }
 
-/* Read & validate a per-credential R-mem entry. */
+/* Read & validate a per-credential R-mem entry: 0, -1 bad magic, -2 chip
+ * error or short read, -3 the slot reads empty. */
 static int read_cred(int slot_idx, slot_meta_t *out)
 {
     uint8_t buf[SLOTS_CRED_PAYLOAD_LEN];
@@ -338,6 +157,9 @@ static int read_cred(int slot_idx, slot_meta_t *out)
 
     int rc = tropic_rmem_read(SLOTS_RMEM_SLOT_FOR(slot_idx),
                               buf, sizeof buf, &got);
+    if (rc == TROPIC_ERR_RMEM_SLOT_EMPTY) {
+        return -3;
+    }
     if (rc != 0 || got < (CRED_NONCE_OFF + SLOTS_CRED_ID_NONCE_LEN)) {
         return -2;
     }
@@ -375,16 +197,15 @@ static int read_cred(int slot_idx, slot_meta_t *out)
     return 0;
 }
 
-/* Orphan-scrub: clear bitmap bits whose per-cred slot lacks valid magic. */
+/* Orphan-scrub (design §4): a bit goes only when its metadata slot reads
+ * empty.  A read error or bad content keeps it; such a credential then
+ * fails to resolve, and its key is erased before the slot is reused. */
 static void orphan_scrub(uint32_t *bitmap)
 {
     uint32_t bm = *bitmap;
-    for (int i = 0; i < (int) SLOTS_MAX; ++i) {
-        if ((bm & (1u << i)) == 0u) {
-            continue;
-        }
+    for (int i = 0; i < (int) FIDO_SLOTS_MAX; ++i) {
         slot_meta_t tmp;
-        if (read_cred(i, &tmp) != 0) {
+        if ((bm & (1u << i)) != 0u && read_cred(i, &tmp) == -3) {
             bm &= ~(1u << i);
         }
     }
@@ -395,78 +216,60 @@ static void orphan_scrub(uint32_t *bitmap)
 
 int slots_init(void)
 {
+    uint8_t buf[O1_LEN];
+    size_t n = 0;
     if (s_initted) {
-        return 0;
+        return s_o1.uncertain ? -1 : SLOTS_INIT_OK;
     }
-
-    /* L3 session must be open for R-mem ops. */
     if (tropic_l3_session_ensure() != 0) {
         return -1;
     }
-
-    uint32_t bitmap = 0;
-    int rc = read_global(&bitmap);
-    if (rc == -5) {
-        /* Genuine first boot: the chip reports slot 0 empty. */
-        if (write_global(0) != 0) {
-            return -2;
-        }
-        bitmap = 0;
-        s_fresh_store = 1;
-    } else if (rc == -1) {
-        /* First boot — magic mismatch (or never written). Write fresh. */
-        if (write_global(0) != 0) {
-            return -2;
-        }
-        bitmap = 0;
-    } else if (rc == -2) {
-        /* Chip read error — try fresh write once. If THAT fails, give up. */
-        if (write_global(0) != 0) {
-            return -3;
-        }
-        bitmap = 0;
-    } else if (rc == -3) {
-        /* Recognised magic but unsupported schema (e.g. very old M1/M3
-         * v1 state, or an unknown future v4).  Force factory_reset to
-         * the current layout.  Existing PIN is lost — acceptable. */
-        if (write_global(0) != 0) {
-            return -3;
-        }
-        bitmap = 0;
-        s_pin_set = 0;
-        memset(s_pin_hash, 0, sizeof s_pin_hash);
-        s_pin_retries = 0;
-        s_md_active = 0;
-        s_md_next_slot = 0;
-        memset(s_md_tag, 0, sizeof s_md_tag);
-        memset(s_md_ci,  0, sizeof s_md_ci);
-        s_force_uv = 0;
-    } else if (rc == 1) {
-        /* Phase 5 v2 layout — migrate IN PLACE to v3 (preserve PIN +
-         * M&D + creds + bitmap; force_uv defaults to 0 because v2 had
-         * no such concept).  Orphan-scrub before the migration write so
-         * stale bitmap bits don't survive into v3. */
-        uint32_t scrubbed = bitmap;
-        orphan_scrub(&scrubbed);
-        if (write_global(scrubbed) != 0) {
-            return -4;
-        }
-        bitmap = scrubbed;
-    } else {
-        /* Existing v3 state — orphan-scrub. */
-        uint32_t scrubbed = bitmap;
-        orphan_scrub(&scrubbed);
-        if (scrubbed != bitmap) {
-            /* Bitmap diverged from on-chip cred state; rewrite. */
-            if (write_global(scrubbed) != 0) {
-                return -4;
-            }
-            bitmap = scrubbed;
-        }
+    rec_status_t st = rec_pair_read(&s_o1, buf, sizeof buf, &n, NULL);
+    if (st == REC_ABSENT) {
+        return SLOTS_INIT_ABSENT;
     }
-
-    s_bitmap = bitmap;
+    if (st != REC_OK || n != O1_LEN || buf[4] > 1u || buf[5] > 1u
+        || (be32_load(buf) >> FIDO_SLOTS_MAX) != 0u) {
+        return -2;                       /* damaged / unreadable: refuse */
+    }
+    s_bitmap = be32_load(buf);
+    s_force_uv = buf[4];
+    s_pin_bound = buf[5];
     s_initted = 1;
+
+    uint32_t scrubbed = s_bitmap;
+    orphan_scrub(&scrubbed);
+    if (scrubbed != s_bitmap && write_global(scrubbed, s_force_uv, s_pin_bound) != 0) {
+        return -3;
+    }
+    return SLOTS_INIT_OK;
+}
+
+int slots_init_fresh(void)
+{
+    uint8_t buf[O1_LEN];
+    o1_encode(buf, 0u, 0u, 0u);
+    s_initted = 0;
+    if (rec_pair_init(&s_o1, buf, sizeof buf) != REC_OK) {
+        return -1;
+    }
+    s_bitmap = 0;
+    s_force_uv = 0;
+    s_pin_bound = 0;
+    s_initted = 1;
+    return 0;
+}
+
+int slots_wipe_meta(void)
+{
+    uint8_t probe[8];
+    for (int i = 0; i < (int) FIDO_SLOTS_MAX; ++i) {
+        uint16_t rs = SLOTS_RMEM_SLOT_FOR(i);
+        size_t got = 0;
+        if (tropic_rmem_erase(rs) != 0) return -1;
+        int rc = tropic_rmem_read(rs, probe, sizeof probe, &got);
+        if (rc != TROPIC_ERR_RMEM_SLOT_EMPTY && !(rc == 0 && got == 0u)) return -1;
+    }
     return 0;
 }
 
@@ -477,7 +280,7 @@ int slots_alloc(const uint8_t rp_id_hash[SLOTS_RP_ID_HASH_LEN],
                 uint8_t out_cred_id[SLOTS_CRED_ID_LEN],
                 int *out_slot_idx)
 {
-    if (s_store_uncertain) {
+    if (!slots_usable()) {
         return -2;
     }
     if (rp_id_hash == NULL || out_cred_id == NULL || out_slot_idx == NULL) {
@@ -486,11 +289,6 @@ int slots_alloc(const uint8_t rp_id_hash[SLOTS_RP_ID_HASH_LEN],
     if (user_handle_len > SLOTS_USER_HANDLE_MAX) {
         return -1;
     }
-    if (!s_initted) {
-        int rc = slots_init();
-        if (rc != 0) return -2;
-    }
-
     /* Find first free slot.  Phase 7 M1: cap at FIDO_SLOTS_MAX (29);
      * slots 29/30/31 are reserved for OpenPGP sig/dec/aut keys.  At
      * full FIDO load this returns -1 (full) even though chip slots
@@ -526,13 +324,11 @@ int slots_alloc(const uint8_t rp_id_hash[SLOTS_RP_ID_HASH_LEN],
      * replaces (only allocated FIDO slots can be replaced). */
     uint32_t fido_mask  = (1u << FIDO_SLOTS_MAX) - 1u;
     uint32_t new_bitmap = (s_bitmap | (1u << idx)) & ~(replace_mask & fido_mask);
-    if (write_global(new_bitmap) != 0) {
+    if (write_global(new_bitmap, s_force_uv, s_pin_bound) != 0) {
         /* Maybe published, maybe not: keep the metadata (and the caller
-         * keeps the key), stop further changes this boot. */
-        s_store_uncertain = 1;
+         * keeps the key); the O1 pair is uncertain until the next boot. */
         return -3;
     }
-    s_bitmap = new_bitmap;
 
     /* Emit cred ID. */
     out_cred_id[0] = 0x01;
@@ -545,7 +341,7 @@ int slots_alloc(const uint8_t rp_id_hash[SLOTS_RP_ID_HASH_LEN],
 int slots_lookup_by_credid(const uint8_t *cred_id, size_t cred_id_len,
                            int *out_slot_idx, slot_meta_t *out_meta)
 {
-    if (s_store_uncertain) {
+    if (!slots_usable()) {
         return -1;
     }
     if (cred_id == NULL || out_slot_idx == NULL) {
@@ -560,9 +356,6 @@ int slots_lookup_by_credid(const uint8_t *cred_id, size_t cred_id_len,
     uint8_t idx = cred_id[1];
     if (idx >= FIDO_SLOTS_MAX) {      /* 29..31 are OpenPGP key slots */
         return -1;
-    }
-    if (!s_initted) {
-        if (slots_init() != 0) return -1;
     }
     if ((s_bitmap & (1u << idx)) == 0u) {
         return -1;
@@ -585,25 +378,17 @@ int slots_lookup_by_credid(const uint8_t *cred_id, size_t cred_id_len,
 
 int slots_erase(int slot_idx)
 {
-    if (slot_idx < 0 || slot_idx >= (int) SLOTS_MAX) {
+    if (slot_idx < 0 || slot_idx >= (int) FIDO_SLOTS_MAX) {
         return -1;
     }
-    if (!s_initted) {
-        if (slots_init() != 0) return -2;
-    }
-
-    if (s_store_uncertain) {
+    if (!slots_usable()) {
         return -2;
     }
     /* Clear bit first, then erase R-mem. If power-loss between the two,
      * the next boot's orphan_scrub will reconcile. */
     uint32_t new_bitmap = s_bitmap & ~(1u << slot_idx);
-    if (new_bitmap != s_bitmap) {
-        if (write_global(new_bitmap) != 0) {
-            s_store_uncertain = 1;
-            return -2;
-        }
-        s_bitmap = new_bitmap;
+    if (new_bitmap != s_bitmap && write_global(new_bitmap, s_force_uv, s_pin_bound) != 0) {
+        return -2;
     }
     /* The bitmap commit above already deleted the credential.  An erase
      * failure here leaves its metadata in R-mem until the slot is reused
@@ -617,16 +402,12 @@ int slots_erase(int slot_idx)
 
 uint32_t slots_bitmap(void)
 {
-    if (s_store_uncertain) return 0;
-    if (!s_initted) {
-        if (slots_init() != 0) return 0;
-    }
-    return s_bitmap;
+    return slots_usable() ? s_bitmap : 0u;
 }
 
 int slots_usable(void)
 {
-    return !s_store_uncertain;
+    return s_initted && !s_o1.uncertain;
 }
 
 int slots_count_used(void)
@@ -642,196 +423,41 @@ int slots_count_used(void)
 
 int slots_read_meta(int slot_idx, slot_meta_t *out)
 {
-    if (s_store_uncertain) {
+    if (!slots_usable()) {
         return -2;
     }
-    if (slot_idx < 0 || slot_idx >= (int) SLOTS_MAX || out == NULL) {
+    if (slot_idx < 0 || slot_idx >= (int) FIDO_SLOTS_MAX || out == NULL) {
         return -1;
-    }
-    if (!s_initted) {
-        if (slots_init() != 0) return -2;
     }
     if ((s_bitmap & (1u << slot_idx)) == 0u) {
         return -1;
     }
-    return read_cred(slot_idx, out);
+    int rc = read_cred(slot_idx, out);
+    return rc == 0 ? 0 : (rc == -1 ? -1 : -2);
 }
 
-int slots_factory_reset(void)
+int slots_pin_bound(void)
 {
-    if (tropic_l3_session_ensure() != 0) {
-        return -1;
-    }
-    /* Erase all per-credential R-mem (1..32).  Keep going past a failure
-     * so as much as possible is wiped, then report it (Phase 9 M2). */
-    int erase_failed = 0;
-    for (uint16_t i = 1u; i <= SLOTS_MAX; ++i) {
-        if (tropic_rmem_erase(i) != 0) erase_failed = 1;
-    }
-    /* Reset cached PIN + M&D + Force-UV state to defaults BEFORE
-     * write_global so the persisted layout reflects "no PIN, no M&D,
-     * Force-UV off".  Force-UV-after-Reset = off is intentional: Reset
-     * wipes the device to a factory state; the user can re-enable
-     * Force-UV by setting a PIN again (auto-enable fires) or via the
-     * lt-rpc vendor command. */
-    s_pin_set = 0;
-    memset(s_pin_hash, 0, sizeof s_pin_hash);
-    s_pin_retries = 0;
-    s_md_active = 0;
-    s_md_next_slot = 0;
-    memset(s_md_tag, 0, sizeof s_md_tag);
-    memset(s_md_ci,  0, sizeof s_md_ci);
-    s_force_uv = 0;
-    s_store_uncertain = 0;      /* the explicit reset writes a known state */
-    if (write_global(0) != 0) {
-        s_store_uncertain = 1;
-        s_bitmap = 0;
-        s_initted = 0;
-        return -1;
-    }
-    s_bitmap = 0;
-    s_initted = 1;
-    return erase_failed ? -1 : 0;
+    return slots_usable() ? (int) s_pin_bound : -1;
 }
 
-/* ===== M&D accessors (Phase 5 M4) ===== */
-
-int slots_global_md_get(int *out_active,
-                        uint8_t *out_next_slot,
-                        uint8_t out_tag[SLOTS_MD_TAG_LEN],
-                        uint8_t out_ci[SLOTS_MD_CI_LEN])
+int slots_set_pin_bound(int bound, int force_uv_on)
 {
-    if (!s_initted) {
-        if (slots_init() != 0) return -1;
-    }
-    if (out_active)    *out_active    = (int) s_md_active;
-    if (out_next_slot) *out_next_slot = s_md_next_slot;
-    if (out_tag)       memcpy(out_tag, s_md_tag, SLOTS_MD_TAG_LEN);
-    if (out_ci)        memcpy(out_ci,  s_md_ci,  SLOTS_MD_CI_LEN);
-    return 0;
-}
-
-int slots_global_md_set(int active,
-                        uint8_t next_slot,
-                        const uint8_t tag[SLOTS_MD_TAG_LEN],
-                        const uint8_t ci[SLOTS_MD_CI_LEN])
-{
-    if (!s_initted) {
-        if (slots_init() != 0) return -1;
-    }
-    s_md_active = active ? 1u : 0u;
-    s_md_next_slot = next_slot;
-    if (tag) memcpy(s_md_tag, tag, SLOTS_MD_TAG_LEN);
-    else     memset(s_md_tag, 0,   SLOTS_MD_TAG_LEN);
-    if (ci)  memcpy(s_md_ci,  ci,  SLOTS_MD_CI_LEN);
-    else     memset(s_md_ci,  0,   SLOTS_MD_CI_LEN);
-    return write_global(s_bitmap);
-}
-
-int slots_global_md_advance(uint8_t *out_new)
-{
-    if (!s_initted) {
-        if (slots_init() != 0) return -1;
-    }
-    if (s_md_next_slot < SLOTS_MD_ROUNDS) {
-        s_md_next_slot++;
-    }
-    if (out_new) *out_new = s_md_next_slot;
-    return write_global(s_bitmap);
-}
-
-/* ===== PIN state accessors (Phase 5 M3) ===== */
-
-int slots_global_pin_get(int *out_pin_set,
-                         uint32_t *out_retries,
-                         uint8_t out_pin_hash[SLOTS_PIN_HASH_LEN])
-{
-    if (!s_initted) {
-        if (slots_init() != 0) return -1;
-    }
-    if (out_pin_set) *out_pin_set = (int) s_pin_set;
-    if (out_retries) *out_retries = s_pin_retries;
-    if (out_pin_hash) memcpy(out_pin_hash, s_pin_hash, SLOTS_PIN_HASH_LEN);
-    return 0;
-}
-
-int slots_global_pin_set(const uint8_t pin_hash[SLOTS_PIN_HASH_LEN])
-{
-    if (!pin_hash) return -1;
-    if (!s_initted) {
-        if (slots_init() != 0) return -1;
-    }
-    s_pin_set = 1;
-    memcpy(s_pin_hash, pin_hash, SLOTS_PIN_HASH_LEN);
-    s_pin_retries = SLOTS_PIN_RETRIES_INITIAL;
-    return write_global(s_bitmap);
-}
-
-int slots_global_pin_dec_retries(uint32_t *out_new)
-{
-    if (!s_initted) {
-        if (slots_init() != 0) return -1;
-    }
-    if (s_pin_retries > 0u) {
-        s_pin_retries--;
-    }
-    if (out_new) *out_new = s_pin_retries;
-    return write_global(s_bitmap);
-}
-
-int slots_global_pin_reset_retries(void)
-{
-    if (!s_initted) {
-        if (slots_init() != 0) return -1;
-    }
-    s_pin_retries = SLOTS_PIN_RETRIES_INITIAL;
-    return write_global(s_bitmap);
+    uint8_t uv = force_uv_on ? 1u : s_force_uv;
+    return write_global(s_bitmap, uv, bound ? 1u : 0u);
 }
 
 /* ===== Force-UV accessors (Phase 6 M2) ===== */
 
 int slots_force_uv_get(void)
 {
-    if (!s_initted) {
-        /* Unknown state reads as "on": the stricter policy (Phase 9 M3). */
-        if (slots_init() != 0) return 1;
-    }
-    return (s_force_uv != 0u) ? 1 : 0;
+    /* Unknown state reads as "on": the stricter policy (Phase 9 M3). */
+    return slots_usable() ? (int) s_force_uv : 1;
 }
 
 int slots_force_uv_set(int value)
 {
-    if (!s_initted) {
-        if (slots_init() != 0) return -1;
-    }
-    /* write_global serialises the RAM copy: set it, write, and put the old
-     * value back if the write failed, so RAM never runs a policy the chip
-     * does not hold (Phase 9 M3). */
-    uint8_t old = s_force_uv;
-    s_force_uv = (value != 0) ? 1u : 0u;
-    if (write_global(s_bitmap) != 0) {
-        s_force_uv = old;
-        return -1;
-    }
-    return 0;
-}
-
-int slots_take_fresh_store(void)
-{
-    /* One use per boot: a later COUNTER_INVALID (corruption) must not
-     * re-arm it.  Any per-credential metadata left in R-mem means slot 0
-     * was lost, not never written (power cut inside write_global): not a
-     * fresh store.  Read errors count as "not fresh" (fail closed). */
-    int fresh = s_fresh_store;
-    s_fresh_store = 0;
-    if (!fresh) return 0;
-    for (int i = 0; i < (int) FIDO_SLOTS_MAX; ++i) {
-        uint8_t probe[8];
-        size_t got = 0;
-        int rc = tropic_rmem_read(SLOTS_RMEM_SLOT_FOR(i), probe, sizeof probe, &got);
-        if (rc != TROPIC_ERR_RMEM_SLOT_EMPTY) return 0;
-    }
-    return 1;
+    return write_global(s_bitmap, value ? 1u : 0u, s_pin_bound);
 }
 
 void slots_make_cred_id(int slot_idx, const slot_meta_t *meta,
@@ -841,3 +467,11 @@ void slots_make_cred_id(int slot_idx, const slot_meta_t *meta,
     out_cred_id[1] = (uint8_t) slot_idx;
     memcpy(&out_cred_id[2], meta->cred_id_nonce, SLOTS_CRED_ID_NONCE_LEN);
 }
+
+#ifdef NIXTROPIC_HOST_TEST
+void slots_test_reboot(void)
+{
+    s_initted = 0;
+    s_o1.uncertain = false;
+}
+#endif

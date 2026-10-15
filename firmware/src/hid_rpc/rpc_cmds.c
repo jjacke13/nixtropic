@@ -29,6 +29,7 @@
 #include "platform/rng.h"
 #include "tropic/tropic.h"
 #include "fido_hid/slots.h"
+#include "fido_hid/credstore.h"
 #include "fido_hid/pin.h"
 #include "openpgp/openpgp_state.h"   /* Phase 8 M4.0 — PGP_FORCE_VERIFY + PGP_TOUCH RPCs */
 
@@ -203,7 +204,7 @@ static int handle_slots_reset(const uint8_t *req, size_t req_len,
                               uint8_t *resp, size_t resp_max)
 {
     (void) req; (void) req_len; (void) resp; (void) resp_max;
-    if (slots_factory_reset() != 0) return -1;
+    if (credstore_factory_reset() != 0) return -1;   /* keys first (design §4) */
     return 0;
 }
 

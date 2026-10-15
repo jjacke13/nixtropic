@@ -1,74 +1,58 @@
 /*
- * Phase 5 M4 — MAC-and-Destroy-backed PIN retry counter.
+ * FIDO PIN state on the M&D kernel v2 (Phase 9 M4, docs/PHASE-9-M4-DESIGN.md
+ * §4).  The PIN is object O2: a kernel binding (8 rounds, M&D ranges A 0..7
+ * and B 8..15) whose record lives in R-mem 41 / 42.  The binding IS the PIN
+ * state: no stored hash, no software counter (D5, D6).  O1's `pin_bound`
+ * guard (slots.h) says whether a binding was committed, so an O2 that reads
+ * absent while the guard is set is an ERROR, never "no PIN" (§2.5).
  *
- * Wraps TROPIC01's MAC-and-Destroy primitive into a PIN verification
- * scheme where wrong attempts physically consume hardware slots. After
- * SLOTS_MD_ROUNDS (8) wrong attempts, the slots are destroyed at the
- * silicon level and PIN entry is permanently locked until factory_reset.
- *
- * The scheme is the canonical Tropic Square recipe — see
- * `docs/PHASE-5-M4-DESIGN.md` for the full algorithm + security analysis.
- *
- * Operates on top of slots.h's M&D state (`slots_global_md_*`).
+ * PIN material = LEFT(SHA-256(PIN), 16): what the platform sends encrypted
+ * as pinHashEnc.
  */
-
 #ifndef NIXTROPIC_FIDO_HID_PIN_MD_H
 #define NIXTROPIC_FIDO_HID_PIN_MD_H
 
 #include <stdint.h>
-#include <stddef.h>
 
-#define PIN_MD_MASTER_SECRET_LEN  32u
-#define PIN_MD_INTERNAL_KEY_LEN   32u
-
-/* PIN material used by the M&D scheme. We use SHA-256(raw_PIN)[:16] —
- * matching what M3 stores in R-mem (slots_global_pin_set hash) and what
- * the platform sends in pinHashEnc for getPinToken. This way the scheme
- * works identically from setPin (raw PIN available) and from getPinToken
- * (only hash available). */
 #define PIN_MD_MATERIAL_LEN  16u
+#define FIDO_PIN_ROUNDS       8u   /* = maxRetries reported by getRetries */
 
-/**
- * @brief Initialize the M&D PIN scheme.
- *
- * Generates a random master_secret from TROPIC01 TRNG, derives per-slot
- * encryption keys via M&D probes (3 chip calls each: init/consume/
- * re-init), encrypts master_secret with each derived key, stores
- * ciphertexts + verification tag in R-mem slot 0, and zeros all
- * intermediate values.
- *
- * @param pin_material  16 B PIN material (typically SHA-256(PIN)[:16])
- * @return 0 on success; negative on chip/setup error
- */
-int pin_md_setup(const uint8_t pin_material[PIN_MD_MATERIAL_LEN]);
+typedef enum {
+    FPIN_NOT_SET,   /* no binding, guard 0 */
+    FPIN_SET,       /* binding with attempts left */
+    FPIN_BLOCKED,   /* binding, no attempts left: authenticatorReset only */
+    FPIN_ERROR,     /* unreadable / damaged / guard contradicts: refuse */
+} fido_pin_state_t;
 
-/**
- * @brief Verify submitted PIN material against the M&D state.
- *
- * Advances the next-slot pointer FIRST (committed to R-mem before
- * crypto — power-loss-safe). Probes the slot via M&D, derives the
- * encryption key, attempts to recover the master_secret. If the
- * recovered tag matches the stored tag, PIN was correct → re-initialize
- * all slots + reset pointer. If mismatch, slot is gone (forever); next
- * attempt uses next slot.
- *
- * @param pin_material   16 B PIN material to verify
- * @param out_correct    1 if PIN matched, 0 if wrong
- * @return 0 on success (verify ran, *out_correct is valid); -1 on chip
- *         error; -2 if no attempts remain (HW-enforced lockout)
- */
-int pin_md_verify(const uint8_t pin_material[PIN_MD_MATERIAL_LEN],
-                  int *out_correct);
+/* Current state; *attempts (nullable) = attempts left (0 unless SET). */
+fido_pin_state_t fido_pin_state(uint8_t *attempts);
 
-/**
- * @brief Has setPin been completed (M&D state active)?
- */
-int pin_md_is_active(void);
+/* First PIN (only from NOT_SET): kernel setup, then one O1 write that sets
+ * the guard and auto-enables Force-UV (Phase 6).  A failure after the
+ * kernel commit leaves the PIN set with the guard 0; boot repairs that.
+ * Returns 0, or -1 (not NOT_SET, or a chip error). */
+int fido_pin_set(const uint8_t mat[PIN_MD_MATERIAL_LEN], uint8_t pin_len);
 
-/**
- * @brief How many wrong PIN attempts remain before HW-lockout.
- *        Returns SLOTS_MD_ROUNDS - next_slot.
- */
-int pin_md_attempts_remaining(void);
+/* Kernel verify.  0 with *correct 1/0; -2 blocked; -1 any error. */
+int fido_pin_verify(const uint8_t mat[PIN_MD_MATERIAL_LEN], int *correct);
+
+/* Kernel change (s kept).  0 with *correct 1 (changed) / 0 (wrong old PIN);
+ * -2 blocked; -1 any error — which after the commit can mean the NEW PIN is
+ * live (pin_md_kernel.h). */
+int fido_pin_change(const uint8_t old_mat[PIN_MD_MATERIAL_LEN],
+                    const uint8_t new_mat[PIN_MD_MATERIAL_LEN], uint8_t new_pin_len,
+                    int *correct);
+
+/* Reset path: retire both ranges and clear O2 (no readable record needed).
+ * The guard is cleared by the fresh O1 written afterwards (fido_state.c). */
+int fido_pin_clear(void);
+
+/* Boot: a committed binding whose guard is 0 (cut between setPin's commit
+ * and its O1 write) gets the guard.  0, or -1 on error. */
+int fido_pin_boot(void);
+
+#ifdef NIXTROPIC_HOST_TEST
+void fido_pin_test_reboot(void);   /* host tests only: as a reboot does */
+#endif
 
 #endif /* NIXTROPIC_FIDO_HID_PIN_MD_H */
