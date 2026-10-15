@@ -1,6 +1,6 @@
 # Phase 9 M4 — Design: PIN + persistent-state integrity
 
-Status: **draft r3 for review** (2026-10-15). r1 (09fe256) and r2 (ffb1471) were reviewed by Jan:
+Status: **APPROVED** by Jan at r3 (8f3a743, 2026-10-15). r1 (09fe256) and r2 (ffb1471):
 CHANGES REQUIRED both times; §11 maps every finding to its change. Contract:
 `PHASE-9-PLAN.md` §6 (items 1–7) plus the M4 inputs from the M3 reviews (§5 end).
 Chip facts marked **[J1a]…[J4]** come from Jan (§9), from the documents, not
@@ -313,9 +313,12 @@ fault is either a slot that was then consumed (any verify through it fails) or o
 that was never used (that attempt never happened).
 
 **Last slot.** With `next = rounds − 1`, step 2 commits `next = rounds`. A cut or a
-lost reply after the M&D call of a *correct* PIN and before the restore leaves every
-slot consumed: s existed only in RAM, so no copy of any record can bring it back (PIN
-§3.5 steps 3–12). The PIN reads BLOCKED and recovers the documented way: FIDO
+lost reply anywhere between that commit and the `next 0` record leaves the PIN
+BLOCKED: before the M&D call the slot is intact but the record is spent; after a
+correct PIN's M&D call and before the re-key every slot is consumed and s existed
+only in RAM, so no copy of any record can bring it back (PIN §3.5 steps 3–12); after
+the re-key the slots are fine but the record still says blocked. Conservative in
+every case. The PIN recovers the documented way: FIDO
 authenticatorReset, OpenPGP RESET RETRY COUNTER (RC or PW3) for PW1, TERMINATE without
 PW3 for PW3 (§7.2.16). Fail-closed, no extra guess, and inherent to M&D; the same holds
 for the verify inside a change. With more than one slot left, the same fault only
@@ -593,3 +596,6 @@ unverified.
 | 1 MED | A fault inside a correct verification on the last slot leaves neither PIN usable | inherent to M&D (s only in RAM, every slot consumed): stated as the one exception in §1.1, "Last slot" in §3.3, I1 qualified, §6 row, host tests at every restore boundary |
 | 2 MED | Overlapping old/new M&D ranges need a global migration barrier | §2.6: one device-wide migration; while either old marker exists both applications refuse and the routine reruns from step 1; §4/§5/§6 point to it; migration fault tests |
 | ES256 | J3 facts vs 8b43157 | no contradiction (Jan) |
+
+r3: **APPROVE** (Jan). Nonblocking wording fix folded in: the last-slot lockout also
+follows a fault before the M&D call or after the re-key (§3.3).
