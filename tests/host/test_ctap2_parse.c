@@ -88,7 +88,9 @@ static int mc(ctap2_mc_req_t *req)
 static int ga(ctap2_ga_req_t *req)
 {
     CHECK(cbor_writer_error(&w) == 0);
-    return ctap2_parse_get_assertion(buf, cbor_writer_len(&w), req);
+    size_t n = cbor_writer_len(&w);
+    CHECK(cbor_validate(buf, n) == 0);
+    return ctap2_parse_get_assertion(buf, n, req);
 }
 
 static void test_mc_valid(void)

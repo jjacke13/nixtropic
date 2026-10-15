@@ -300,6 +300,25 @@ int fido_hid_cbor_dispatch(const uint8_t *req, size_t req_len,
 
 /* ===== Request dispatch ===== */
 
+static void dispatch_request(uint32_t cid);
+
+/* A request is complete: leave the assembly state BEFORE the handler
+ * runs, so nothing that arrives during its touch wait (a stray CONT, an
+ * INIT-sync or CANCEL on this channel) can dispatch it again or clear
+ * s_req_buf under it; then wipe it.  A request completed during somebody
+ * else's touch wait is refused (Phase 9 M3, cpp-reviewer + Jan M3). */
+static void complete_request(uint32_t cid)
+{
+    s_state   = FH_STATE_IDLE;
+    s_cur_cid = 0;
+    if (user_presence_is_awaiting()) {
+        queue_error(cid, FIDO_HID_ERR_CHANNEL_BUSY);
+    } else {
+        dispatch_request(cid);
+    }
+    reset_assembly();
+}
+
 static void dispatch_request(uint32_t cid)
 {
     uint8_t  cmd = s_req_cmd;
@@ -413,8 +432,7 @@ static void handle_init_packet(uint32_t cid, const uint8_t *pkt)
     }
 
     if (s_req_received >= s_req_total) {
-        dispatch_request(cid);
-        reset_assembly();
+        complete_request(cid);
     } else {
         s_state = FH_STATE_ASSEMBLING;
     }
@@ -446,8 +464,7 @@ static void handle_cont_packet(uint32_t cid, const uint8_t *pkt)
     }
 
     if (s_req_received >= s_req_total) {
-        dispatch_request(cid);
-        reset_assembly();
+        complete_request(cid);
     }
 }
 

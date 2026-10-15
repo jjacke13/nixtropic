@@ -828,14 +828,18 @@ void pin_reset_ram(void)
 
 int pin_is_set(void)
 {
+    /* An unreadable PIN state counts as "PIN set": every check that asks
+     * then demands the stricter path (Phase 9 M3). */
     int pin_set = 0;
-    (void) slots_global_pin_get(&pin_set, NULL, NULL);
+    if (slots_global_pin_get(&pin_set, NULL, NULL) != 0) return 1;
     return pin_set;
 }
 
 int pin_token_is_valid(void)
 {
-    return puat_token() != NULL;
+    /* Timers applied; the lt-rpc setters also need a token not yet spent
+     * (cpp-reviewer M3). */
+    return puat_in_use(HAL_GetTick()) && puat_user_verified();
 }
 
 int pin_handle_cbor(const uint8_t *req, size_t req_len,

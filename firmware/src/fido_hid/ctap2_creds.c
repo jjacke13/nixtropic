@@ -190,8 +190,9 @@ static int mc_uv_policy(const ctap2_mc_req_t *q, int rk,
 }
 
 /* Step 12: a listed credential of this RP already lives here.  The user
- * is asked to touch first, whatever they do, then the answer is
- * CREDENTIAL_EXCLUDED (CTAP2 behaves like U2F here). */
+ * is asked to touch first; touch or timeout, the answer is then
+ * CREDENTIAL_EXCLUDED (CTAP2 behaves like U2F here).  A CANCEL answers
+ * KEEPALIVE_CANCEL.  Returns 0 when nothing is excluded, else the status. */
 static int mc_excluded(const ctap2_mc_req_t *q, const uint8_t rp_hash[32])
 {
     ctap2_cred_iter_t it;
@@ -201,8 +202,9 @@ static int mc_excluded(const ctap2_mc_req_t *q, const uint8_t rp_hash[32])
     while (ctap2_cred_iter_next(&it, &id, &id_len)) {
         credstore_handle_t h;
         if (credstore_find(id, id_len, rp_hash, &h, NULL) == 0) {
-            (void) user_presence_check(UP_TIMEOUT_MS);
-            return 1;
+            return (user_presence_check(UP_TIMEOUT_MS) == UP_CANCEL)
+                       ? (int) CTAP2_ERR_KEEPALIVE_CANCEL
+                       : (int) CTAP2_ERR_CREDENTIAL_EXCLUDED;
         }
     }
     return 0;
@@ -210,17 +212,20 @@ static int mc_excluded(const ctap2_mc_req_t *q, const uint8_t rp_hash[32])
 
 /* One pass over the stored credentials: the next creation sequence, and
  * for rk the discoverable credentials of the same RP and user, which the
- * new one replaces (step 17.2).  Unreadable metadata counts as sequence
- * 0 and is never replaced. */
-static void mc_scan(const ctap2_mc_req_t *q, const uint8_t rp_hash[32], int rk,
-                    uint32_t *next_created, uint32_t *replace_mask)
+ * new one replaces (step 17.2).  Fails (-1) if any allocated credential
+ * cannot be read — skipping it could leave two live credentials for one
+ * account or break the newest-first order (Jan, M3 review 4) — or if the
+ * sequence is exhausted. */
+static int mc_scan(const ctap2_mc_req_t *q, const uint8_t rp_hash[32], int rk,
+                   uint32_t *next_created, uint32_t *replace_mask)
 {
     uint32_t bitmap = slots_bitmap();
     uint32_t max = 0;
     *replace_mask = 0;
     for (int i = 0; i < (int) FIDO_SLOTS_MAX; ++i) {
         slot_meta_t m;
-        if ((bitmap & (1u << i)) == 0u || slots_read_meta(i, &m) != 0) continue;
+        if ((bitmap & (1u << i)) == 0u) continue;
+        if (slots_read_meta(i, &m) != 0) return -1;
         if (m.created > max) max = m.created;
         if (rk && (m.flags & SLOTS_FLAG_RESIDENT)
             && memcmp(m.rp_id_hash, rp_hash, SLOTS_RP_ID_HASH_LEN) == 0
@@ -229,7 +234,9 @@ static void mc_scan(const ctap2_mc_req_t *q, const uint8_t rp_hash[32], int rk,
             *replace_mask |= 1u << i;
         }
     }
-    *next_created = (max == UINT32_MAX) ? max : max + 1u;
+    if (max == UINT32_MAX) return -1;
+    *next_created = max + 1u;
+    return 0;
 }
 
 /* Attestation object, "none" format (Phase 6: strict RPs reject Ed25519
@@ -293,16 +300,20 @@ int ctap2_make_credential(const uint8_t *req, size_t req_len,
 
     /* H2 (Phase 6 M3): no MakeCredential while the store is mid-change. */
     if (credstore_is_mutating()) return status(resp, CTAP2_ERR_NOT_ALLOWED);
-    if (mc_excluded(&q, rp_hash)) return status(resp, CTAP2_ERR_CREDENTIAL_EXCLUDED);
+    if ((rc = mc_excluded(&q, rp_hash)) != 0) return status(resp, rc);
+
+    /* Read what the new credential needs before asking for the touch, so
+     * a store error does not waste it.  Nothing else runs during the
+     * wait (dispatch policy), so this stays valid. */
+    uint32_t sc, created, replace_mask;
+    if (credstore_signcount_peek(&sc) != 0
+        || mc_scan(&q, rp_hash, rk, &created, &replace_mask) != 0) {
+        return status(resp, CTAP2_ERR_OTHER);
+    }
 
     /* Step 14: touch before a slot is used; then the token is spent. */
     if ((rc = wait_touch()) != 0) return status(resp, rc);
     puat_consume();
-
-    uint32_t sc;
-    if (credstore_signcount_peek(&sc) != 0) return status(resp, CTAP2_ERR_OTHER);
-    uint32_t created, replace_mask;
-    mc_scan(&q, rp_hash, rk, &created, &replace_mask);
 
     uint8_t pubkey[CREDSTORE_PUBKEY_LEN];
     uint8_t cred_id[CREDSTORE_CRED_ID_LEN];
@@ -409,9 +420,13 @@ static int ga_sign_respond(int slot, const uint8_t rp_hash[32], uint8_t flags,
 {
     slot_meta_t meta;
     uint32_t sc;
-    if (slots_read_meta(slot, &meta) != 0 || credstore_signcount_next(&sc) != 0) {
-        return status(resp, CTAP2_ERR_OTHER);
+    if (slots_read_meta(slot, &meta) != 0) return status(resp, CTAP2_ERR_OTHER);
+    /* Second line behind the lookup: never sign for an RP the credential
+     * was not made for, whatever state led here (cpp-reviewer M3). */
+    if (memcmp(meta.rp_id_hash, rp_hash, SLOTS_RP_ID_HASH_LEN) != 0) {
+        return status(resp, CTAP2_ERR_NO_CREDENTIALS);
     }
+    if (credstore_signcount_next(&sc) != 0) return status(resp, CTAP2_ERR_OTHER);
     uint8_t sig_input[37 + 32];
     int ad_len = build_authdata(rp_hash, flags, sc, NULL, 0, NULL, 0,
                                 sig_input, sizeof sig_input);

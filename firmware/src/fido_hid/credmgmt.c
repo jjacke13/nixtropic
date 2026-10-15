@@ -65,6 +65,10 @@ typedef enum {
 } iter_kind_t;
 
 static iter_kind_t s_iter_kind;
+/* Token generation at the authenticated Begin (Phase 9 M3): GetNext*
+ * carries no pinUvAuthParam, so it continues only while that same token
+ * is still in use and still holds cm (cpp-reviewer M3). */
+static uint32_t s_iter_gen;
 
 /* RP iterator: snapshot of slot indices that are the FIRST occurrence
  * of each unique rpIdHash. */
@@ -101,6 +105,8 @@ void credmgmt_reset_iterator(void)
  * of unique RPs. */
 static int build_rp_list(int8_t out_slots[SLOTS_MAX])
 {
+    /* One metadata read per credential; earlier RP hashes kept here. */
+    uint8_t seen[FIDO_SLOTS_MAX][SLOTS_RP_ID_HASH_LEN];
     int count = 0;
     uint32_t bitmap = slots_bitmap();
     for (int i = 0; i < (int) FIDO_SLOTS_MAX; ++i) {
@@ -111,18 +117,12 @@ static int build_rp_list(int8_t out_slots[SLOTS_MAX])
         if (slots_read_meta(i, &meta) != 0) {
             continue;
         }
-        /* Is this rp_id_hash already in out_slots[]? */
         int dup = 0;
-        for (int j = 0; j < count; ++j) {
-            slot_meta_t prev;
-            if (slots_read_meta(out_slots[j], &prev) != 0) continue;
-            if (memcmp(meta.rp_id_hash, prev.rp_id_hash,
-                       SLOTS_RP_ID_HASH_LEN) == 0) {
-                dup = 1;
-                break;
-            }
+        for (int j = 0; j < count && !dup; ++j) {
+            dup = memcmp(meta.rp_id_hash, seen[j], SLOTS_RP_ID_HASH_LEN) == 0;
         }
         if (!dup) {
+            memcpy(seen[count], meta.rp_id_hash, SLOTS_RP_ID_HASH_LEN);
             out_slots[count++] = (int8_t) i;
         }
     }
@@ -622,6 +622,13 @@ int credmgmt_handle_cbor(const uint8_t *req, size_t req_len,
             resp[0] = (uint8_t) rc;
             return 1;
         }
+        s_iter_gen = puat_generation();
+    } else if (!puat_in_use(HAL_GetTick()) || s_iter_gen != puat_generation()
+               || !puat_has_perm(PUAT_PERM_CM)) {
+        /* The token behind the Begin expired, was replaced or spent. */
+        credmgmt_reset_iterator();
+        resp[0] = CTAP2_ERR_NOT_ALLOWED;
+        return 1;
     }
 
     /* Iterator-reset semantics: any sub-command other than the matching

@@ -50,6 +50,14 @@ void puat_begin(const uint8_t token[PUAT_TOKEN_LEN], uint8_t perms,
 int puat_verify(const uint8_t *param, size_t param_len,
                 const uint8_t *msg, size_t msg_len, uint32_t now_ms);
 
+/* Is a token in use right now (timers applied)? */
+int puat_in_use(uint32_t now_ms);
+
+/* Changes with every new token and every reset.  A stateful command keeps
+ * the value from its authenticated start and continues only while it is
+ * unchanged and the token is still in use. */
+uint32_t puat_generation(void);
+
 /* Encrypt-side helper for ClientPIN: the raw token while one is in use. */
 const uint8_t *puat_token(void);
 

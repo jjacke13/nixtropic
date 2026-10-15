@@ -98,6 +98,11 @@ static uint8_t  s_rhport;
  * (0 = none).  RX is re-armed only after it is answered, so s_rx_buf
  * stays stable meanwhile. */
 static volatile uint32_t s_rx_pending;
+/* Set while usb_ccid_task() runs an APDU (it may wait for touch and pump
+ * USB).  A bus reset meanwhile must not wipe or re-arm the buffers the
+ * APDU still uses; s_epoch tells the task its answer is stale (Jan, M3). */
+static bool     s_processing;
+static uint32_t s_epoch;
 
 /* ----- Little-endian helpers (CCID uses LE; ISO 7816 uses BE — keep
  *       distinct to avoid mixing) ----- */
@@ -255,8 +260,11 @@ static void process_message(const uint8_t *msg, size_t len)
 
 static void ccid_init(void)
 {
-    memset(s_rx_buf, 0, sizeof s_rx_buf);
-    memset(s_tx_buf, 0, sizeof s_tx_buf);
+    s_epoch++;
+    if (!s_processing) {
+        memset(s_rx_buf, 0, sizeof s_rx_buf);
+        memset(s_tx_buf, 0, sizeof s_tx_buf);
+    }
     s_tx_len = 0;
     s_rx_pending = 0;
     s_itf_num = 0xFFu;
@@ -311,8 +319,10 @@ static uint16_t ccid_open(uint8_t rhport,
         ep_count--;
     }
 
-    /* Arm the first receive — host can now send commands. */
-    if (!usbd_edpt_xfer(rhport, USB_CCID_EP_OUT, s_rx_buf, sizeof s_rx_buf)) {
+    /* Arm the first receive — host can now send commands.  Not while an
+     * APDU still uses s_rx_buf: usb_ccid_task() arms it when done. */
+    if (!s_processing
+        && !usbd_edpt_xfer(rhport, USB_CCID_EP_OUT, s_rx_buf, sizeof s_rx_buf)) {
         return 0;
     }
 
@@ -370,9 +380,16 @@ void usb_ccid_task(void)
         return;
     }
     s_rx_pending = 0;
+    uint32_t epoch = s_epoch;
+    s_processing = true;
     process_message(s_rx_buf, (size_t) len);
-    if (s_tx_len > 0u
-        && usbd_edpt_xfer(s_rhport, USB_CCID_EP_IN, s_tx_buf, s_tx_len)) {
+    s_processing = false;
+    if (epoch != s_epoch) {
+        /* The bus was reset during the APDU: drop the stale answer. */
+        s_tx_len = 0;
+        if (s_itf_num == 0xFFu) return;        /* not configured again */
+    } else if (s_tx_len > 0u
+               && usbd_edpt_xfer(s_rhport, USB_CCID_EP_IN, s_tx_buf, s_tx_len)) {
         return;                     /* RX re-armed when the IN completes */
     }
     /* Nothing to send (malformed) or TX refused: listen again. */

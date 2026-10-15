@@ -122,7 +122,10 @@ int slots_init(void);
  *                          step.  The caller erases their keys afterwards.
  * @param  out_cred_id      Caller buffer; 18 B written on success.
  * @param  out_slot_idx     Caller's slot index out (0..28).
- * @return 0 on success; -1 if full or invalid params; -2 on TROPIC01 error.
+ * @return 0 on success; -1 if full or invalid params; -2 on TROPIC01 error
+ *         (nothing published); -3 if the bitmap write failed: the
+ *         outcome is unknown, nothing is cleaned up, and allocation and
+ *         erase are refused until the next boot (Phase 9 M3).
  */
 int slots_alloc(const uint8_t rp_id_hash[SLOTS_RP_ID_HASH_LEN],
                 uint8_t alg, uint8_t flags,
@@ -146,13 +149,14 @@ int slots_lookup_by_credid(const uint8_t *cred_id, size_t cred_id_len,
                            int *out_slot_idx, slot_meta_t *out_meta);
 
 /**
- * @brief 1 if this boot's slots_init found global R-mem slot 0 reported
- *        empty by the chip (SLOT_EMPTY, never written) and wrote fresh
- *        state — a genuine first boot.  Read errors never count (Phase 9
- *        M3: the only case besides authenticatorReset in which the FIDO
- *        signature counter may be initialised).
+ * @brief 1 (once per boot) if this boot's slots_init found global R-mem
+ *        slot 0 reported empty by the chip (SLOT_EMPTY, never written),
+ *        wrote fresh state, AND every per-credential R-mem slot reads
+ *        empty too — a genuine first boot.  Read errors never count.
+ *        Phase 9 M3: the only case besides authenticatorReset in which
+ *        the FIDO signature counter may be initialised.
  */
-int slots_fresh_store(void);
+int slots_take_fresh_store(void);
 
 /**
  * @brief The 18 B credential ID of a slot: [0x01, slot_idx, nonce(16)].

@@ -194,19 +194,14 @@ int fido_hid_cbor_dispatch(const uint8_t *req, size_t req_len,
         /* CTAP2.1 §6.8 + Phase 6 M2 tightening (docs/PHASE-6-PLAN.md
          * §4.7, H1 defense).
          *
-         * Three gates depending on device state:
+         * Two gates (CTAP 2.1 §6.6):
          *
-         *   1. 10-second post-boot window (always — primary host-software
-         *      protection per spec).
-         *   2. If any state exists (PIN set OR ≥1 credential registered),
-         *      additionally require a fresh SW1 press within 10 s.  This
-         *      is the anti-passive-physical gate: an attacker who briefly
-         *      gets your unplugged dongle can no longer Reset it just by
-         *      replugging within the 10 s window — they'd need to also
-         *      hold it long enough to press the button.
-         *   3. Virgin device (no PIN, no creds) skips the SW1 requirement
-         *      because there's nothing to defend.  This avoids forcing
-         *      first-time users to press SW1 just to bootstrap.
+         *   1. 10-second post-boot window.
+         *   2. A fresh SW1 press within 10 s, always.  Phase 9 M3 dropped
+         *      the "virgin device needs no touch" shortcut: it decided
+         *      "virgin" from state reads that report empty after a read
+         *      error, so a chip fault could skip the touch (Jan, M3
+         *      review).  The spec asks for user interaction anyway.
          *
          * Reset wipes ALL credentials, PIN state, M&D state, AND the
          * Force-UV flag.  Recovery from RP side: user re-registers
@@ -215,14 +210,11 @@ int fido_hid_cbor_dispatch(const uint8_t *req, size_t req_len,
             resp[0] = CTAP2_ERR_NOT_ALLOWED;
             return 1;
         }
-        int state_exists = pin_is_set() || (slots_count_used() > 0);
-        if (state_exists) {
-            up_result_t up = user_presence_check(10000u);
-            if (up != UP_OK) {
-                resp[0] = (up == UP_CANCEL) ? CTAP2_ERR_KEEPALIVE_CANCEL
-                                            : CTAP2_ERR_OPERATION_DENIED;
-                return 1;
-            }
+        up_result_t up = user_presence_check(10000u);
+        if (up != UP_OK) {
+            resp[0] = (up == UP_CANCEL) ? CTAP2_ERR_KEEPALIVE_CANCEL
+                                        : CTAP2_ERR_OPERATION_DENIED;
+            return 1;
         }
         /* Tokens and PIN failure state die with the PIN (Phase 9 M3),
          * also when the wipe stopped part-way. */

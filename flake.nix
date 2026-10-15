@@ -208,12 +208,17 @@
           nativeBuildInputs = [ pkgs.gcc-arm-embedded ];
         } ''
           syms='hid_rpc_|handle_force_uv_set|handle_pgp_touch_set|handle_pgp_force_verify_set'
-          if arm-none-eabi-nm ${open-firmware}/firmware.elf | grep -E "$syms"; then
+          # Symbol lists go to files first: an nm failure stops the build
+          # instead of feeding grep nothing; no pipe for SIGPIPE to break.
+          arm-none-eabi-nm ${open-firmware}/firmware.elf > release.syms
+          arm-none-eabi-nm ${open-firmware-debug}/firmware.elf > debug.syms
+          test -s release.syms     # separate lines: set -e ignores a failing
+          test -s debug.syms       # left side of &&
+          if grep -E "$syms" release.syms; then
             echo "release firmware contains lt-rpc symbols" >&2
             exit 1
           fi
-          # no grep -q: an early exit SIGPIPEs nm and pipefail fails at random
-          arm-none-eabi-nm ${open-firmware-debug}/firmware.elf | grep -E "$syms" >/dev/null \
+          grep -E "$syms" debug.syms > /dev/null \
             || { echo "check is blind: debug firmware lacks lt-rpc symbols" >&2; exit 1; }
           echo "release surface ok" > $out
         '';

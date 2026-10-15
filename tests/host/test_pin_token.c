@@ -107,6 +107,39 @@ static void test_timers(void)
     CHECK(puat_verify(p, sizeof p, MSG, sizeof MSG, PUAT_INITIAL_USE_MS + 1) == -1);
 }
 
+/* check_token() in ctap2_creds.c relies on this combination: a spent
+ * token still verifies, but carries no permission and no userVerified. */
+static void test_verify_after_consume(void)
+{
+    uint8_t p[PUAT_PARAM_LEN];
+    param_for(TOKEN, p);
+    puat_begin(TOKEN, PUAT_PERM_GA, NULL, 0);
+    puat_consume();
+    CHECK(puat_verify(p, sizeof p, MSG, sizeof MSG, 1) == 0);
+    CHECK(!puat_has_perm(PUAT_PERM_GA) && !puat_user_verified());
+}
+
+/* credMgmt GetNext continues only under the token of its Begin. */
+static void test_generation_and_in_use(void)
+{
+    uint8_t p[PUAT_PARAM_LEN];
+    param_for(TOKEN, p);
+    puat_begin(TOKEN, PUAT_PERM_CM, NULL, 0);
+    uint32_t g = puat_generation();
+    CHECK(puat_in_use(1));
+    CHECK(puat_verify(p, sizeof p, MSG, sizeof MSG, 2) == 0);
+    puat_consume();
+    CHECK(puat_generation() == g);               /* use and consume: same token */
+    puat_begin(TOKEN, PUAT_PERM_CM, NULL, 3);
+    CHECK(puat_generation() != g);               /* a new token */
+    g = puat_generation();
+    CHECK(!puat_in_use(3 + PUAT_INITIAL_USE_MS + 1));  /* expired on asking */
+    CHECK(puat_generation() != g);
+    g = puat_generation();
+    puat_reset();
+    CHECK(puat_generation() != g);
+}
+
 static void test_reset(void)
 {
     uint8_t p[PUAT_PARAM_LEN];
@@ -130,5 +163,7 @@ int main(void)
     test_rp_binding();
     test_timers();
     test_reset();
+    test_verify_after_consume();
+    test_generation_and_in_use();
     return check_done("pin_token");
 }

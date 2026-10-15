@@ -109,6 +109,11 @@ static uint32_t s_bitmap;
 static int      s_initted;
 /* Phase 9 M3: this boot found slot 0 never written (see slots_fresh_store). */
 static int      s_fresh_store;
+/* Phase 9 M3 (Jan, M3 review 5): a failed bitmap write is not proof that
+ * nothing was written (erase + write, lost response).  After one, the RAM
+ * bitmap may disagree with the chip: allocation and erase are refused
+ * until the next boot, when slots_init re-reads slot 0. */
+static int      s_store_uncertain;
 
 /* ----- Helpers ----- */
 
@@ -466,6 +471,9 @@ int slots_alloc(const uint8_t rp_id_hash[SLOTS_RP_ID_HASH_LEN],
                 uint8_t out_cred_id[SLOTS_CRED_ID_LEN],
                 int *out_slot_idx)
 {
+    if (s_store_uncertain) {
+        return -2;
+    }
     if (rp_id_hash == NULL || out_cred_id == NULL || out_slot_idx == NULL) {
         return -1;
     }
@@ -513,11 +521,10 @@ int slots_alloc(const uint8_t rp_id_hash[SLOTS_RP_ID_HASH_LEN],
     uint32_t fido_mask  = (1u << FIDO_SLOTS_MAX) - 1u;
     uint32_t new_bitmap = (s_bitmap | (1u << idx)) & ~(replace_mask & fido_mask);
     if (write_global(new_bitmap) != 0) {
-        /* R-mem cred written but bitmap not committed — leave it; the
-         * orphan_scrub on next boot would NOT remove it because magic
-         * is valid. Defensive: erase the orphan now. */
-        (void) tropic_rmem_erase(SLOTS_RMEM_SLOT_FOR(idx));
-        return -2;
+        /* Maybe published, maybe not: keep the metadata (and the caller
+         * keeps the key), stop further changes this boot. */
+        s_store_uncertain = 1;
+        return -3;
     }
     s_bitmap = new_bitmap;
 
@@ -576,11 +583,15 @@ int slots_erase(int slot_idx)
         if (slots_init() != 0) return -2;
     }
 
+    if (s_store_uncertain) {
+        return -2;
+    }
     /* Clear bit first, then erase R-mem. If power-loss between the two,
      * the next boot's orphan_scrub will reconcile. */
     uint32_t new_bitmap = s_bitmap & ~(1u << slot_idx);
     if (new_bitmap != s_bitmap) {
         if (write_global(new_bitmap) != 0) {
+            s_store_uncertain = 1;
             return -2;
         }
         s_bitmap = new_bitmap;
@@ -762,7 +773,8 @@ int slots_global_pin_reset_retries(void)
 int slots_force_uv_get(void)
 {
     if (!s_initted) {
-        if (slots_init() != 0) return 0;
+        /* Unknown state reads as "on": the stricter policy (Phase 9 M3). */
+        if (slots_init() != 0) return 1;
     }
     return (s_force_uv != 0u) ? 1 : 0;
 }
@@ -772,13 +784,34 @@ int slots_force_uv_set(int value)
     if (!s_initted) {
         if (slots_init() != 0) return -1;
     }
+    /* write_global serialises the RAM copy: set it, write, and put the old
+     * value back if the write failed, so RAM never runs a policy the chip
+     * does not hold (Phase 9 M3). */
+    uint8_t old = s_force_uv;
     s_force_uv = (value != 0) ? 1u : 0u;
-    return write_global(s_bitmap);
+    if (write_global(s_bitmap) != 0) {
+        s_force_uv = old;
+        return -1;
+    }
+    return 0;
 }
 
-int slots_fresh_store(void)
+int slots_take_fresh_store(void)
 {
-    return s_fresh_store;
+    /* One use per boot: a later COUNTER_INVALID (corruption) must not
+     * re-arm it.  Any per-credential metadata left in R-mem means slot 0
+     * was lost, not never written (power cut inside write_global): not a
+     * fresh store.  Read errors count as "not fresh" (fail closed). */
+    int fresh = s_fresh_store;
+    s_fresh_store = 0;
+    if (!fresh) return 0;
+    for (int i = 0; i < (int) FIDO_SLOTS_MAX; ++i) {
+        uint8_t probe[8];
+        size_t got = 0;
+        int rc = tropic_rmem_read(SLOTS_RMEM_SLOT_FOR(i), probe, sizeof probe, &got);
+        if (rc != TROPIC_ERR_RMEM_SLOT_EMPTY) return 0;
+    }
+    return 1;
 }
 
 void slots_make_cred_id(int slot_idx, const slot_meta_t *meta,

@@ -63,7 +63,10 @@ int credstore_init(void)
 
     uint32_t v;
     int rc = tropic_mcounter_get(CREDSTORE_SIGNCOUNT_MCOUNTER, &v);
-    if (rc == TROPIC_ERR_COUNTER_INVALID && slots_fresh_store()) {
+    /* Taken (and so consumed) whatever the counter says: the bootstrap
+     * right exists once, at the first init of a genuine first boot. */
+    int fresh = slots_take_fresh_store();
+    if (rc == TROPIC_ERR_COUNTER_INVALID && fresh) {
         if (tropic_mcounter_init(CREDSTORE_SIGNCOUNT_MCOUNTER,
                                  CREDSTORE_MCOUNTER_MAX) != 0) {
             printf("[credstore] mcounter init FAILED\n");
@@ -138,6 +141,12 @@ int credstore_make(const uint8_t rp_id_hash[SLOTS_RP_ID_HASH_LEN],
     int got_idx = -1;
     int rc = slots_alloc(rp_id_hash, alg, flags, user_handle, user_handle_len,
                          created, replace_mask, cred_id, &got_idx);
+    if (rc == -3) {
+        /* Bitmap write failed: maybe published.  Keep the key; a free
+         * slot holding it is erased again before reuse (Jan, M3 review). */
+        s_credstore_mutating = 0;
+        return -2;
+    }
     if (rc != 0 || got_idx != slot_idx) {
         /* Not published (or, impossibly, a different slot): the key must
          * not outlive the failed registration. */

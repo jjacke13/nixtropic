@@ -17,6 +17,9 @@ static uint8_t  s_perms;
 static int      s_has_rp;
 static uint8_t  s_rp_hash[PUAT_RP_HASH_LEN];
 static uint32_t s_issued_ms;
+/* Bumped on every new token and every reset: lets stateful users (credMgmt
+ * iterators) tell whether the token that authorised them still lives. */
+static uint32_t s_generation;
 
 static int ct_equal(const uint8_t *a, const uint8_t *b, size_t n)
 {
@@ -29,6 +32,7 @@ static int ct_equal(const uint8_t *a, const uint8_t *b, size_t n)
 
 void puat_reset(void)
 {
+    s_generation++;
     memzero(s_token, sizeof s_token);
     memset(s_rp_hash, 0, sizeof s_rp_hash);
     s_in_use = 0;
@@ -52,6 +56,7 @@ void puat_begin(const uint8_t token[PUAT_TOKEN_LEN], uint8_t perms,
     s_uv = 1;
     s_issued_ms = now_ms;
     s_in_use = 1;
+    s_generation++;
 }
 
 /* Timer observer, run lazily before every use. */
@@ -78,6 +83,17 @@ int puat_verify(const uint8_t *param, size_t param_len,
     if (!ok) return -1;
     s_used = 1;
     return 0;
+}
+
+int puat_in_use(uint32_t now_ms)
+{
+    expire(now_ms);
+    return s_in_use;
+}
+
+uint32_t puat_generation(void)
+{
+    return s_generation;
 }
 
 const uint8_t *puat_token(void)
