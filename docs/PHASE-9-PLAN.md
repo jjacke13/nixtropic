@@ -77,16 +77,20 @@ the PIN-derived key Phase 10 builds on, so nothing here is in its way.
 
 | M | What | Dates | Depends on |
 |---|---|---|---|
-| M0 | Test harness + fixture + host mock + baseline | Thu 15 Oct | — |
-| M1 | Release / debug build split | Fri 16 Oct | M0 |
-| M2 | Chip-wrapper foundation (errors, sessions, entropy) | Sat 17 Oct | M1 |
-| M3 | FIDO2 fixes + CTAP2.1 permission tokens + `authenticatorConfig` | Sat 17 – Sun 18 Oct | M2 |
-| M4 | PIN + persistent-state integrity (design doc first) | Mon 19 – Wed 21 Oct | M2 |
-| M5 | No secrets in readable R-memory (design doc first) | Thu 22 – Fri 23 Oct | M4 green by **Wed 21 Oct evening**, else Phase 10 |
-| M6 | Docs + CARD-SETUP + v0.3.0 | Fri 23 Oct, or Sat 24 if M5 ran | M1–M5 |
-| — | Buffer | Sat 24 Oct | — |
-| — | FOSSCOMM material (slides, demo, rehearsal) | Sun 25 – Wed 28 Oct | v0.3.0 |
+| M0 | Test harness + fixture + host mock + baseline | ✅ Wed 14 Oct (planned Thu 15) | — |
+| M1 | Release / debug build split | ✅ Wed 14 Oct (planned Fri 16) | M0 |
+| M2 | Chip-wrapper foundation (errors, sessions, entropy) | ✅ Thu 15 Oct (planned Sat 17) | M1 |
+| M3 | FIDO2 fixes + CTAP2.1 permission tokens + `authenticatorConfig` | ✅ Thu 15 Oct (planned Sat 17 – Sun 18) | M2 |
+| M3b | ES256 (P-256) credentials (added 15 Oct) | Thu 15 Oct evening | M3 |
+| M4 | PIN + persistent-state integrity (design doc first: Thu 15 evening) | Fri 16 Oct | M2 |
+| M5 | No secrets in readable R-memory (design doc first) | Sat 17 – Sun 18 Oct | M4 green by **Fri 16 Oct evening**, else Phase 10 |
+| M6 | Docs + CARD-SETUP | Sun 18 Oct | M1–M5 |
+| — | Tag v0.3.0 (Vaios decides the push) + buffer | Mon 19 Oct | — |
+| — | FOSSCOMM material (slides, demo, refresher, rehearsal) | Tue 20 – Wed 28 Oct | v0.3.0 |
 | — | **Everything ready** | **Thu 29 Oct** | — |
+
+Re-planned 2026-10-15 (Vaios): M0–M3 took 1.5 days instead of 4, so M4–M6 move up and
+the FOSSCOMM material gets 9 days instead of 4.  The 29 Oct deadline is unchanged.
 
 The M4 and M5 design docs are written ahead (M4: Sun 18, M5: Tue 20) so review never
 waits on code. Refresher sessions run in the evenings and finish by Sat 24 Oct.
