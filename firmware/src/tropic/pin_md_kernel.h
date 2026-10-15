@@ -58,8 +58,10 @@ pmd_state_t pin_md_kernel_status(const pin_md_layout_t *L, uint8_t *attempts,
 /* New binding with a fresh s, over no binding or over an existing one
  * (reset paths; refused for a one-range layout that is not ABSENT).
  * PMD_ERR does not always mean "nothing changed": a failure after the
- * commit (retiring the old range) leaves the NEW PIN live, retirement
- * pending (setup and change alike). */
+ * commit (retiring the old range) leaves the NEW PIN live, with the
+ * retirement pending — or, after a lost reply on the last record write,
+ * possibly already recorded while the pair is uncertain until reboot
+ * (setup and change alike). */
 int pin_md_kernel_setup(const pin_md_layout_t *L, const uint8_t *mat,
                         uint8_t pin_len, uint8_t out_k[PIN_MD_KERNEL_K_LEN]);
 

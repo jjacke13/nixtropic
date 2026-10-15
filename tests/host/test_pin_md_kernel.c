@@ -298,6 +298,16 @@ static void test_bad_layout(void)
         CHECK(pin_md_kernel_clear(&bad) == PMD_ERR);
         CHECK(mock_mutations() == 0 && mock_calls(MOCK_OP_RMEM_READ) == 0);
     }
+    /* Exactly adjacent (like FIDO 0-7 / 8-15) and ending at slot 127: accepted. */
+    static const uint8_t good[][2] = { { 0, 3 }, { 3, 0 }, { 125, 0 } };
+    for (size_t i = 0; i < sizeof good / sizeof good[0]; ++i) {
+        pin_md_layout_t ok_layout = L;
+        ok_layout.base[0] = good[i][0];
+        ok_layout.base[1] = good[i][1];
+        fresh();
+        CHECK(pin_md_kernel_setup(&ok_layout, PIN, 4, NULL) == PMD_OK);
+        CHECK(all_slots_open(&ok_layout, PIN));
+    }
 }
 
 /* Read error / damaged record: ERROR, nothing written, no M&D; clear recovers. */
@@ -506,7 +516,11 @@ static bool check_clear(enum action a, int acted, pmd_state_t st)
 {
     uint8_t k[32];
     if (acted == PMD_OK && st != PMD_ABSENT) return false;
-    if (st != PMD_ABSENT) return true;                /* interrupted: fails closed */
+    if (st != PMD_ABSENT) {                           /* interrupted: a second clear recovers */
+        const pin_md_layout_t *Lx = a == A_RC_CLEAR ? &RC : &L;
+        return pin_md_kernel_clear(Lx) == PMD_OK
+            && pin_md_kernel_status(Lx, NULL, NULL) == PMD_ABSENT;
+    }
     if (a == A_RC_CLEAR) {                            /* absent = every range retired */
         int ok = -1;
         replay(&RC_R, s_old, s_old_n);
@@ -534,14 +548,16 @@ static void check_after(enum action a, enum fault f, mock_op_t op, unsigned n,
     switch (a) {
     case A_SETUP:
         if (st == PMD_ACTIVE) {
-            good = who_works(k) == 1u && (acted != PMD_OK || memcmp(k, k_out, 32) == 0);
+            good = who_works(k) == 1u && (acted != PMD_OK || memcmp(k, k_out, 32) == 0)
+                && all_slots_open(&L, PIN);
         } else {
             good = acted != PMD_OK && (st == PMD_ABSENT || (tear && st == PMD_ERROR));
         }
         break;
     case A_RC_SETUP:
         if (st == PMD_ACTIVE) {
-            good = try_on(&RC, PIN, k) == 1 && (acted != PMD_OK || memcmp(k, k_out, 32) == 0);
+            good = try_on(&RC, PIN, k) == 1 && (acted != PMD_OK || memcmp(k, k_out, 32) == 0)
+                && all_slots_open(&RC, PIN);
         } else {
             good = acted != PMD_OK && (st == PMD_ABSENT || (tear && st == PMD_ERROR));
         }
@@ -554,7 +570,8 @@ static void check_after(enum action a, enum fault f, mock_op_t op, unsigned n,
         break;
     case A_CHANGE: {                                /* I1 + I4 */
         unsigned w = st == PMD_ACTIVE ? who_works(k) : 0u;
-        good = (w == 1u || w == 2u) && memcmp(k, s_k1, 32) == 0;
+        good = (w == 1u || w == 2u) && memcmp(k, s_k1, 32) == 0
+            && all_slots_open(&L, w == 1u ? PIN : NEW);
         if (acted == PMD_OK && ok == 1) good = good && w == 2u;
         if (w == 2u) good = good && old_replay_refused();
         break;
@@ -564,6 +581,7 @@ static void check_after(enum action a, enum fault f, mock_op_t op, unsigned n,
         good = w == 1u ? memcmp(k, s_k1, 32) == 0 && acted != PMD_OK
              : w == 2u ? acted != PMD_OK || memcmp(k, k_out, 32) == 0
              : false;
+        if (w != 0u) good = good && all_slots_open(&L, w == 1u ? PIN : NEW);
         if (w == 2u) good = good && old_replay_refused();
         break;
     }

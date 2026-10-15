@@ -632,7 +632,9 @@ follows a fault before the M&D call or after the re-key (§3.3).
   replayed old record + old PIN recover the same k). A failure after the commit returns
   an error although the **new** PIN is live and `retire_pending` is set; never rolled
   back; the next call's settle finishes the retirement. Callers must not read an error
-  from setup/change as "nothing changed".
+  from setup/change as "nothing changed" (Jan r2: after a lost reply on the last record
+  write the chip may already hold `retire_pending = 0` while the pair is uncertain —
+  honour the reboot gate, then settle). Jan r2: APPROVE (4cc7228).
 - `valid_layout` refuses overlapping A/B ranges (a retirement would destroy the live
   range); `status` zeroes its outputs on ABSENT / ERROR; `change` refuses a one-range
   layout up front.
