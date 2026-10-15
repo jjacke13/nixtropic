@@ -669,3 +669,15 @@ follows a fault before the M&D call or after the re-key (§3.3).
   checked (spec steps 6–10), via a plain verify.
 - Transition gate (Jan): until step 4, legacy OpenPGP issues no M&D call (its ranges
   8–16 overlap FIDO B) and fails closed; OpenPGP PINs do not work in between.
+- Review r1 (cpp-reviewer + Jan, both CHANGES REQUIRED) → fixed:
+  - the CTAP dispatcher serves only GetInfo and authenticatorReset unless the FIDO state
+    was validated at boot or freshly wiped by a completed reset (`credstore_ready`; no
+    re-initialisation at runtime) — Jan MED;
+  - every PIN token dies **before** setPin/changePin touch the binding, so none outlives
+    a change that failed after its commit — Jan HIGH;
+  - boot finishes an interrupted first setPin completely (guard **and** Force-UV);
+  - the reset path may clear an uncertain O1/O2 (checked erase + rewrite), so one
+    authenticatorReset works in the same boot as a failed write;
+  - pin.c on one parser: the shared key is derived after parsing and wiped on one path;
+    a mismatch on an unreadable binding answers OTHER, not PIN_BLOCKED.
+  - ECC key erase stays checked by its result code (Jan: enough per API Table 31).

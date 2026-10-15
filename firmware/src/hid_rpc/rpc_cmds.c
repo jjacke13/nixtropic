@@ -204,7 +204,9 @@ static int handle_slots_reset(const uint8_t *req, size_t req_len,
                               uint8_t *resp, size_t resp_max)
 {
     (void) req; (void) req_len; (void) resp; (void) resp_max;
-    if (credstore_factory_reset() != 0) return -1;   /* keys first (design §4) */
+    int rc = credstore_factory_reset();   /* keys first (design §4) */
+    pin_reset_ram();                      /* tokens die with the PIN, as in ctap2.c */
+    if (rc != 0) return -1;
     return 0;
 }
 

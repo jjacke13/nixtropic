@@ -281,6 +281,13 @@ int credstore_signcount_next(uint32_t *out)
  * step checked, any failure stops it (fido_state_wipe). */
 int credstore_factory_reset(void)
 {
-    s_initted = 0;              /* re-check everything on next use */
-    return fido_state_wipe() == 0 ? 0 : -1;
+    s_initted = 0;
+    if (fido_state_wipe() != 0) return -1;
+    s_initted = 1;              /* a completed wipe = a known fresh state */
+    return 0;
+}
+
+int credstore_ready(void)
+{
+    return s_initted && slots_usable();
 }

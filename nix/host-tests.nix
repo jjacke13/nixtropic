@@ -32,6 +32,14 @@ stdenv.mkDerivation {
     for f in hmac sha2 memzero; do
       $CC -std=gnu11 $SAN -w $INC -c ${trezor}/$f.c -o $f.o
     done
+    # P-256 ECDH + AES-CBC for the ClientPIN handler test (as the firmware links them).
+    P256=""
+    for f in ecdsa nist256p1 secp256k1 bignum rfc6979 hmac_drbg rand \
+             aes/aescrypt aes/aeskey aes/aestab aes/aes_modes; do
+      o=$(echo $f | tr / _).o
+      $CC -std=gnu11 $SAN -w $INC -ffunction-sections -fdata-sections -c ${trezor}/$f.c -o $o
+      P256="$P256 $o"
+    done
 
     $CC $STRICT $SAN $INC tests/host/test_cbor.c firmware/src/fido_hid/cbor.c -o test_cbor
     $CC $STRICT $SAN $INC tests/host/test_ctap2_parse.c firmware/src/fido_hid/ctap2_parse.c \
@@ -51,6 +59,12 @@ stdenv.mkDerivation {
       firmware/src/fido_hid/fido_state.c firmware/src/fido_hid/pin_md.c firmware/src/fido_hid/slots.c \
       firmware/src/tropic/pin_md_kernel.c firmware/src/tropic/rec_pair.c \
       hmac.o sha2.o memzero.o -o test_fido_state
+    $CC $STRICT $SAN $INC -DNIXTROPIC_HOST_TEST -ffunction-sections -Wl,--gc-sections \
+      tests/host/test_fido_pin_cmd.c tests/host/mock_tropic.c \
+      firmware/src/fido_hid/pin.c firmware/src/fido_hid/pin_token.c firmware/src/fido_hid/cbor.c \
+      firmware/src/fido_hid/fido_state.c firmware/src/fido_hid/pin_md.c firmware/src/fido_hid/slots.c \
+      firmware/src/tropic/pin_md_kernel.c firmware/src/tropic/rec_pair.c \
+      $P256 hmac.o sha2.o memzero.o -o test_fido_pin_cmd
     $CC $STRICT $SAN $INC tests/host/test_rec_pair.c tests/host/mock_tropic.c \
       firmware/src/tropic/rec_pair.c hmac.o sha2.o memzero.o -o test_rec_pair
     runHook postBuild
@@ -68,6 +82,7 @@ stdenv.mkDerivation {
     ./test_pin_md_legacy
     ./test_pin_md_kernel
     ./test_fido_state
+    ./test_fido_pin_cmd
     ./test_rec_pair
     bash tests/host/test-dfu-flash.sh
     bash tests/host/test-lib-fixture.sh

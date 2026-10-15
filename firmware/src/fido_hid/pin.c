@@ -295,291 +295,29 @@ static int handle_get_key_agreement(uint8_t *resp, size_t resp_max)
     return (int)(1u + cbor_writer_len(&w));
 }
 
-/* Common decoder for keyAgreement field; computes shared_key. */
-static int parse_and_compute_shared_key(cbor_reader_t *r, uint8_t shared_key[32])
-{
-    uint8_t peer_xy[64];
-    if (parse_cose_p256_pubkey(r, peer_xy) != 0) return -1;
-    if (!s_initted) {
-        if (pin_init() != 0) return -1;
-    }
-    return compute_shared_key(peer_xy, shared_key);
-}
-
-/* setPin sub-command (0x03). Spec §5.5.4.4.
- * Request fields:
- *   3: keyAgreement (platform pubkey)
- *   4: pinAuth = LEFT(HMAC(shared_key, newPinEnc), 16)
- *   5: newPinEnc (64 B = 4 AES blocks)
- * If a PIN is already set, returns CTAP2_ERR_PIN_AUTH_INVALID per spec
- * §5.5.4 step 6. (Platform must use changePin instead.) */
-static int handle_set_pin(cbor_reader_t *r, size_t n_keys, uint8_t *resp, size_t resp_max)
-{
-    /* Refuse if a PIN already exists (or its state cannot be read). */
-    fido_pin_state_t st = fido_pin_state(NULL);
-    if (st == FPIN_ERROR) {
-        resp[0] = CTAP2_ERR_OTHER;
-        return 1;
-    }
-    if (st != FPIN_NOT_SET) {
-        resp[0] = CTAP2_ERR_PIN_AUTH_INVALID;
-        return 1;
-    }
-
-    uint8_t shared_key[32]   = {0};
-    uint8_t pin_auth_in[16]  = {0};
-    uint8_t new_pin_enc[PIN_ENC_BUF_LEN] = {0};
-    int got_ka = 0, got_pa = 0, got_npe = 0;
-
-    /* We already consumed protocol(1) + subCommand(2). Parse the rest. */
-    for (size_t i = 0; i < n_keys; ++i) {
-        uint8_t mt; uint64_t key;
-        if (cbor_reader_read_head(r, &mt, &key) < 0 || mt != 0u) {
-            resp[0] = CTAP2_ERR_INVALID_CBOR; return 1;
-        }
-        if (key == CP_KEY_KEY_AGREEMENT) {
-            if (parse_and_compute_shared_key(r, shared_key) != 0) {
-                resp[0] = CTAP2_ERR_OTHER; return 1;
-            }
-            got_ka = 1;
-        } else if (key == CP_KEY_PIN_AUTH) {
-            const uint8_t *p; size_t L;
-            if (cbor_reader_read_bytes(r, &p, &L) < 0 || L != 16u) {
-                resp[0] = CTAP2_ERR_INVALID_CBOR; return 1;
-            }
-            memcpy(pin_auth_in, p, 16);
-            got_pa = 1;
-        } else if (key == CP_KEY_NEW_PIN_ENC) {
-            const uint8_t *p; size_t L;
-            if (cbor_reader_read_bytes(r, &p, &L) < 0 || L != PIN_ENC_BUF_LEN) {
-                resp[0] = CTAP2_ERR_INVALID_CBOR; return 1;
-            }
-            memcpy(new_pin_enc, p, PIN_ENC_BUF_LEN);
-            got_npe = 1;
-        } else {
-            if (cbor_reader_skip(r) < 0) { resp[0] = CTAP2_ERR_INVALID_CBOR; return 1; }
-        }
-    }
-    if (!got_ka || !got_pa || !got_npe) {
-        memzero(shared_key, sizeof shared_key);
-        resp[0] = CTAP2_ERR_MISSING_PARAMETER; return 1;
-    }
-
-    /* Verify pinAuth = LEFT(HMAC(shared_key, newPinEnc), 16). */
-    uint8_t expected[16];
-    pin_auth_compute(shared_key, new_pin_enc, PIN_ENC_BUF_LEN, expected);
-    if (ct_memcmp(expected, pin_auth_in, 16) != 0) {
-        memzero(shared_key, sizeof shared_key);
-        memzero(expected,   sizeof expected);
-        resp[0] = CTAP2_ERR_PIN_AUTH_INVALID;
-        return 1;
-    }
-    memzero(expected, sizeof expected);
-
-    /* Decrypt newPinEnc → 64 B padded PIN. */
-    uint8_t pin_padded[PIN_ENC_BUF_LEN];
-    if (aes_cbc_dec_iv0(shared_key, new_pin_enc, PIN_ENC_BUF_LEN, pin_padded) != 0) {
-        memzero(shared_key, sizeof shared_key);
-        resp[0] = CTAP2_ERR_OTHER; return 1;
-    }
-    memzero(shared_key, sizeof shared_key);
-    memzero(new_pin_enc, sizeof new_pin_enc);
-
-    /* Determine real PIN length: trim trailing zero padding. */
-    size_t pin_len = PIN_ENC_BUF_LEN;
-    while (pin_len > 0 && pin_padded[pin_len - 1] == 0u) pin_len--;
-    if (pin_len < PIN_MIN_BYTES || pin_len > PIN_MAX_BYTES) {
-        memzero(pin_padded, sizeof pin_padded);
-        resp[0] = CTAP2_ERR_PIN_POLICY_VIOLATION;
-        return 1;
-    }
-
-    /* The M&D binding over LEFT(SHA-256(PIN), 16) — what the platform sends
-     * as pinHashEnc later.  fido_pin_set also sets the O1 guard and
-     * auto-enables Force-UV on this first PIN (Phase 6 M2, PHASE-6-PLAN
-     * §4.4; the user can turn it off with toggleAlwaysUv). */
-    uint8_t pin_hash[32];
-    sha256_Raw(pin_padded, (uint32_t) pin_len, pin_hash);
-    memzero(pin_padded, sizeof pin_padded);
-    int rc = fido_pin_set(pin_hash, (uint8_t) pin_len);
-    memzero(pin_hash, sizeof pin_hash);
-    if (rc != 0) {
-        resp[0] = CTAP2_ERR_OTHER;
-        return 1;
-    }
-
-    /* Forward secrecy: rotate ephemeral keypair. */
-    (void) regen_eph();
-    /* New PIN means any previous pinUvAuthToken is no longer valid. */
-    puat_reset();
-    s_consec_fails = 0;
-    s_auth_blocked = 0;
-
-    resp[0] = CTAP2_OK;
-    return 1;  /* empty response body for setPin */
-}
-
-/* Attempts left on the binding now (0 when blocked or unreadable). */
-static uint8_t attempts_left(void)
-{
-    uint8_t att = 0;
-    (void) fido_pin_state(&att);
-    return att;
-}
-
-/* Wrong-PIN bookkeeping shared by the failure paths. */
-static uint8_t pin_mismatch_status(uint8_t new_retries)
-{
-    s_consec_fails++;
-    if (s_consec_fails >= PIN_AUTH_BLOCKED_CONSEC) s_auth_blocked = 1;
-    (void) regen_eph();
-    if (new_retries == 0u) return CTAP2_ERR_PIN_BLOCKED;
-    if (s_auth_blocked)    return CTAP2_ERR_PIN_AUTH_BLOCKED;
-    return CTAP2_ERR_PIN_INVALID;
-}
-
-/* changePin sub-command (0x04). Spec §5.5.4.5.
- * Request fields (in addition to protocol + subCommand):
- *   3: keyAgreement
- *   4: pinAuth = LEFT(HMAC(shared_key, newPinEnc || pinHashEnc), 16)
- *   5: newPinEnc (64 B)
- *   6: pinHashEnc (16 B, encrypts SHA-256(oldPin)[:16])
- */
-static int handle_change_pin(cbor_reader_t *r, size_t n_keys, uint8_t *resp, size_t resp_max)
-{
-    (void) resp_max;
-    switch (fido_pin_state(NULL)) {
-    case FPIN_SET:     break;
-    case FPIN_NOT_SET: resp[0] = CTAP2_ERR_PIN_NOT_SET; return 1;
-    case FPIN_BLOCKED: resp[0] = CTAP2_ERR_PIN_BLOCKED; return 1;
-    default:           resp[0] = CTAP2_ERR_OTHER;       return 1;
-    }
-    if (s_auth_blocked) {
-        resp[0] = CTAP2_ERR_PIN_AUTH_BLOCKED; return 1;
-    }
-
-    uint8_t shared_key[32]      = {0};
-    uint8_t pin_auth_in[16]     = {0};
-    uint8_t new_pin_enc[PIN_ENC_BUF_LEN] = {0};
-    uint8_t pin_hash_enc[16]    = {0};
-    int got_ka = 0, got_pa = 0, got_npe = 0, got_phe = 0;
-
-    for (size_t i = 0; i < n_keys; ++i) {
-        uint8_t mt; uint64_t key;
-        if (cbor_reader_read_head(r, &mt, &key) < 0 || mt != 0u) {
-            resp[0] = CTAP2_ERR_INVALID_CBOR; return 1;
-        }
-        if (key == CP_KEY_KEY_AGREEMENT) {
-            if (parse_and_compute_shared_key(r, shared_key) != 0) {
-                resp[0] = CTAP2_ERR_OTHER; return 1;
-            }
-            got_ka = 1;
-        } else if (key == CP_KEY_PIN_AUTH) {
-            const uint8_t *p; size_t L;
-            if (cbor_reader_read_bytes(r, &p, &L) < 0 || L != 16u) {
-                resp[0] = CTAP2_ERR_INVALID_CBOR; return 1;
-            }
-            memcpy(pin_auth_in, p, 16); got_pa = 1;
-        } else if (key == CP_KEY_NEW_PIN_ENC) {
-            const uint8_t *p; size_t L;
-            if (cbor_reader_read_bytes(r, &p, &L) < 0 || L != PIN_ENC_BUF_LEN) {
-                resp[0] = CTAP2_ERR_INVALID_CBOR; return 1;
-            }
-            memcpy(new_pin_enc, p, PIN_ENC_BUF_LEN); got_npe = 1;
-        } else if (key == CP_KEY_PIN_HASH_ENC) {
-            const uint8_t *p; size_t L;
-            if (cbor_reader_read_bytes(r, &p, &L) < 0 || L != 16u) {
-                resp[0] = CTAP2_ERR_INVALID_CBOR; return 1;
-            }
-            memcpy(pin_hash_enc, p, 16); got_phe = 1;
-        } else {
-            if (cbor_reader_skip(r) < 0) {
-                resp[0] = CTAP2_ERR_INVALID_CBOR; return 1;
-            }
-        }
-    }
-    if (!got_ka || !got_pa || !got_npe || !got_phe) {
-        memzero(shared_key, sizeof shared_key);
-        resp[0] = CTAP2_ERR_MISSING_PARAMETER; return 1;
-    }
-
-    /* CTAP 2.1 §6.5.5.6 (design D10): a wrong pinUvAuthParam is answered
-     * before any attempt is spent; the MAC check reveals nothing about the
-     * PIN, so it is no probe oracle. */
-    uint8_t auth_input[PIN_ENC_BUF_LEN + 16];
-    memcpy(auth_input,                   new_pin_enc,  PIN_ENC_BUF_LEN);
-    memcpy(&auth_input[PIN_ENC_BUF_LEN], pin_hash_enc, 16);
-    uint8_t expected_auth[16];
-    pin_auth_compute(shared_key, auth_input, sizeof auth_input, expected_auth);
-    int auth_ok = (ct_memcmp(expected_auth, pin_auth_in, 16) == 0);
-    memzero(expected_auth, sizeof expected_auth);
-    if (!auth_ok) {
-        memzero(shared_key, sizeof shared_key);
-        resp[0] = CTAP2_ERR_PIN_AUTH_INVALID; return 1;
-    }
-
-    uint8_t old_hash[PIN_HASH_LEN];
-    uint8_t pin_padded[PIN_ENC_BUF_LEN];
-    int dec_failed = aes_cbc_dec_iv0(shared_key, pin_hash_enc, 16, old_hash) != 0
-                  || aes_cbc_dec_iv0(shared_key, new_pin_enc, PIN_ENC_BUF_LEN, pin_padded) != 0;
-    memzero(shared_key, sizeof shared_key);
-    if (dec_failed) {
-        memzero(old_hash, sizeof old_hash);
-        memzero(pin_padded, sizeof pin_padded);
-        resp[0] = CTAP2_ERR_OTHER; return 1;
-    }
-    size_t pin_len = PIN_ENC_BUF_LEN;
-    while (pin_len > 0 && pin_padded[pin_len - 1] == 0u) pin_len--;
-    int policy_ok = pin_len >= PIN_MIN_BYTES && pin_len <= PIN_MAX_BYTES;
-    uint8_t new_hash[32];
-    sha256_Raw(pin_padded, (uint32_t) pin_len, new_hash);
-    memzero(pin_padded, sizeof pin_padded);
-
-    /* Old PIN first (the attempt is spent either way, spec step 6), then the
-     * new one: a bad new PIN only after the old one was checked (step 10). */
-    int correct = 0;
-    int rc = policy_ok ? fido_pin_change(old_hash, new_hash, (uint8_t) pin_len, &correct)
-                       : fido_pin_verify(old_hash, &correct);
-    memzero(old_hash, sizeof old_hash);
-    memzero(new_hash, sizeof new_hash);
-    if (rc == -2) {
-        (void) regen_eph();
-        resp[0] = CTAP2_ERR_PIN_BLOCKED; return 1;
-    }
-    if (rc != 0) {
-        /* After the commit an error can mean the NEW PIN is live
-         * (pin_md_kernel.h): the host must not assume nothing changed. */
-        resp[0] = CTAP2_ERR_OTHER; return 1;
-    }
-    if (!correct) {
-        resp[0] = pin_mismatch_status(attempts_left());
-        return 1;
-    }
-    s_consec_fails = 0;
-    if (!policy_ok) {
-        resp[0] = CTAP2_ERR_PIN_POLICY_VIOLATION; return 1;
-    }
-
-    /* Success: rotate ephemeral, invalidate old tokens. */
-    (void) regen_eph();
-    puat_reset();
-    resp[0] = CTAP2_OK;
-    return 1;
-}
-
-/* Parameters of getPinToken (0x05) / getPinUvAuthTokenUsingPinWithPermissions
- * (0x09).  The platform key is kept and the shared key derived only after
- * the cheap checks, so no early return has a secret to wipe. */
+/* Parameters of the ClientPIN sub-commands that carry a PIN.  The platform
+ * key is kept and the shared key derived only after parsing, so no early
+ * return has a secret to wipe. */
 typedef struct {
     uint8_t        peer_xy[64];
+    uint8_t        pin_auth[16];
+    uint8_t        new_pin_enc[PIN_ENC_BUF_LEN];
     uint8_t        pin_hash_enc[16];
-    int            got_ka, got_phe, got_perms, got_rp;
+    int            got_ka, got_pa, got_npe, got_phe, got_perms, got_rp;
     uint64_t       perms;
     const uint8_t *rp_id;
     size_t         rp_id_len;
-} token_req_t;
+} pin_req_t;
 
-static int parse_token_req(cbor_reader_t *r, size_t n_keys, token_req_t *t)
+static int read_fixed(cbor_reader_t *r, uint8_t *out, size_t len)
+{
+    const uint8_t *p; size_t L;
+    if (cbor_reader_read_bytes(r, &p, &L) < 0 || L != len) return -1;
+    memcpy(out, p, len);
+    return 0;
+}
+
+static int parse_pin_req(cbor_reader_t *r, size_t n_keys, pin_req_t *t)
 {
     memset(t, 0, sizeof *t);
     for (size_t i = 0; i < n_keys; ++i) {
@@ -593,12 +331,14 @@ static int parse_token_req(cbor_reader_t *r, size_t n_keys, token_req_t *t)
                 return CTAP1_ERR_INVALID_PARAMETER;
             }
             t->got_ka = 1;
+        } else if (key == CP_KEY_PIN_AUTH) {
+            if (read_fixed(r, t->pin_auth, sizeof t->pin_auth) != 0) return CTAP2_ERR_INVALID_CBOR;
+            t->got_pa = 1;
+        } else if (key == CP_KEY_NEW_PIN_ENC) {
+            if (read_fixed(r, t->new_pin_enc, sizeof t->new_pin_enc) != 0) return CTAP2_ERR_INVALID_CBOR;
+            t->got_npe = 1;
         } else if (key == CP_KEY_PIN_HASH_ENC) {
-            const uint8_t *p; size_t L;
-            if (cbor_reader_read_bytes(r, &p, &L) < 0 || L != 16u) {
-                return CTAP2_ERR_INVALID_CBOR;
-            }
-            memcpy(t->pin_hash_enc, p, 16);
+            if (read_fixed(r, t->pin_hash_enc, sizeof t->pin_hash_enc) != 0) return CTAP2_ERR_INVALID_CBOR;
             t->got_phe = 1;
         } else if (key == CP_KEY_PERMISSIONS) {
             if (cbor_reader_read_uint(r, &t->perms) < 0) {
@@ -617,8 +357,174 @@ static int parse_token_req(cbor_reader_t *r, size_t n_keys, token_req_t *t)
     return 0;
 }
 
+/* shared_key = SHA-256(ECDH(eph, platform key).x).  0, or the CTAP status. */
+static int shared_key_for(const pin_req_t *q, uint8_t key[32])
+{
+    if (!s_initted && pin_init() != 0) return CTAP2_ERR_OTHER;
+    return compute_shared_key(q->peer_xy, key) == 0 ? 0 : CTAP1_ERR_INVALID_PARAMETER;
+}
+
+/* Decrypt newPinEnc and hash the PIN: 0, the policy status, or OTHER. */
+static int new_pin_hash(const uint8_t key[32], const pin_req_t *q,
+                        uint8_t hash[32], size_t *pin_len)
+{
+    uint8_t pin_padded[PIN_ENC_BUF_LEN];
+    int rc = 0;
+    if (aes_cbc_dec_iv0(key, q->new_pin_enc, PIN_ENC_BUF_LEN, pin_padded) != 0) {
+        rc = CTAP2_ERR_OTHER;
+    } else {
+        size_t len = PIN_ENC_BUF_LEN;
+        while (len > 0 && pin_padded[len - 1] == 0u) len--;
+        sha256_Raw(pin_padded, (uint32_t) len, hash);
+        *pin_len = len;
+        if (len < PIN_MIN_BYTES || len > PIN_MAX_BYTES) rc = CTAP2_ERR_PIN_POLICY_VIOLATION;
+    }
+    memzero(pin_padded, sizeof pin_padded);
+    return rc;
+}
+
+/* Wrong-PIN bookkeeping shared by the failure paths: the status follows
+ * the binding as it is now (an unreadable one is OTHER, not BLOCKED). */
+static uint8_t pin_mismatch_status(void)
+{
+    uint8_t att = 0;
+    fido_pin_state_t st = fido_pin_state(&att);
+    s_consec_fails++;
+    if (s_consec_fails >= PIN_AUTH_BLOCKED_CONSEC) s_auth_blocked = 1;
+    (void) regen_eph();
+    if (st == FPIN_BLOCKED) return CTAP2_ERR_PIN_BLOCKED;
+    if (st != FPIN_SET)     return CTAP2_ERR_OTHER;
+    if (s_auth_blocked)     return CTAP2_ERR_PIN_AUTH_BLOCKED;
+    return CTAP2_ERR_PIN_INVALID;
+}
+
+/* setPin (0x03), CTAP 2.1 §6.5.5.5: pinUvAuthParam = LEFT(HMAC(key,
+ * newPinEnc), 16).  Only without a PIN (or an unreadable one: OTHER). */
+static int set_pin_with_key(const uint8_t key[32], const pin_req_t *q)
+{
+    uint8_t expected[16], hash[32];
+    size_t pin_len = 0;
+    int rc;
+    pin_auth_compute(key, q->new_pin_enc, PIN_ENC_BUF_LEN, expected);
+    if (ct_memcmp(expected, q->pin_auth, 16) != 0) {
+        rc = CTAP2_ERR_PIN_AUTH_INVALID;
+    } else {
+        rc = new_pin_hash(key, q, hash, &pin_len);
+        /* The binding also sets the O1 guard and auto-enables Force-UV on
+         * this first PIN (Phase 6 M2; toggleAlwaysUv turns it off).  Every
+         * token dies before the binding is touched (Jan, step 3 HIGH). */
+        if (rc == 0) {
+            puat_reset();
+            if (fido_pin_set(hash, (uint8_t) pin_len) != 0) rc = CTAP2_ERR_OTHER;
+        }
+    }
+    if (rc == 0) {
+        (void) regen_eph();          /* forward secrecy */
+        puat_reset();
+        s_consec_fails = 0;
+        s_auth_blocked = 0;
+    }
+    memzero(expected, sizeof expected);
+    memzero(hash, sizeof hash);
+    return rc;
+}
+
+static int handle_set_pin(cbor_reader_t *r, size_t n_keys, uint8_t *resp)
+{
+    fido_pin_state_t st = fido_pin_state(NULL);
+    if (st != FPIN_NOT_SET) {
+        resp[0] = st == FPIN_ERROR ? CTAP2_ERR_OTHER : CTAP2_ERR_PIN_AUTH_INVALID;
+        return 1;
+    }
+    pin_req_t q;
+    uint8_t key[32];
+    int rc = parse_pin_req(r, n_keys, &q);
+    if (rc == 0 && (!q.got_ka || !q.got_pa || !q.got_npe)) rc = CTAP2_ERR_MISSING_PARAMETER;
+    if (rc == 0) rc = shared_key_for(&q, key);
+    if (rc == 0) {
+        rc = set_pin_with_key(key, &q);
+        memzero(key, sizeof key);
+    }
+    memzero(&q, sizeof q);
+    resp[0] = (uint8_t) rc;          /* CTAP2_OK = 0: empty body */
+    return 1;
+}
+
+/* changePin (0x04), CTAP 2.1 §6.5.5.6 (design D10): a wrong pinUvAuthParam
+ * is answered before any attempt is spent — the MAC reveals nothing about
+ * the PIN.  Then the old PIN (the attempt is spent either way, step 6) and
+ * only then the new one: a new PIN that breaks the policy is reported after
+ * a correct old PIN (step 10), via a plain verify. */
+static int change_pin_with_key(const uint8_t key[32], const pin_req_t *q)
+{
+    uint8_t auth_input[PIN_ENC_BUF_LEN + 16], expected[16];
+    uint8_t old_hash[PIN_HASH_LEN], new_hash[32];
+    size_t pin_len = 0;
+    int correct = 0, rc;
+    memcpy(auth_input, q->new_pin_enc, PIN_ENC_BUF_LEN);
+    memcpy(&auth_input[PIN_ENC_BUF_LEN], q->pin_hash_enc, 16);
+    pin_auth_compute(key, auth_input, sizeof auth_input, expected);
+    memset(new_hash, 0, sizeof new_hash);
+    if (ct_memcmp(expected, q->pin_auth, 16) != 0) {
+        rc = CTAP2_ERR_PIN_AUTH_INVALID;
+    } else if (aes_cbc_dec_iv0(key, q->pin_hash_enc, 16, old_hash) != 0) {
+        rc = CTAP2_ERR_OTHER;
+    } else {
+        int policy = new_pin_hash(key, q, new_hash, &pin_len);
+        if (policy == CTAP2_ERR_OTHER) {
+            rc = CTAP2_ERR_OTHER;
+        } else {
+            /* Every token dies before the binding is touched: an error
+             * after the kernel's commit can mean the NEW PIN is live
+             * (pin_md_kernel.h), so no old token may outlive the call
+             * (Jan, step 3 HIGH; CTAP 2.1 §6.5.5.6 kills them on success). */
+            puat_reset();
+            int krc = policy == 0
+                    ? fido_pin_change(old_hash, new_hash, (uint8_t) pin_len, &correct)
+                    : fido_pin_verify(old_hash, &correct);
+            if (krc == -2)        { (void) regen_eph(); rc = CTAP2_ERR_PIN_BLOCKED; }
+            else if (krc != 0)    rc = CTAP2_ERR_OTHER;
+            else if (!correct)    rc = pin_mismatch_status();
+            else                  { s_consec_fails = 0; rc = policy; }
+            if (rc == 0) (void) regen_eph();     /* forward secrecy */
+        }
+    }
+    memzero(auth_input, sizeof auth_input);
+    memzero(expected, sizeof expected);
+    memzero(old_hash, sizeof old_hash);
+    memzero(new_hash, sizeof new_hash);
+    return rc;
+}
+
+static int handle_change_pin(cbor_reader_t *r, size_t n_keys, uint8_t *resp)
+{
+    switch (fido_pin_state(NULL)) {
+    case FPIN_SET:     break;
+    case FPIN_NOT_SET: resp[0] = CTAP2_ERR_PIN_NOT_SET; return 1;
+    case FPIN_BLOCKED: resp[0] = CTAP2_ERR_PIN_BLOCKED; return 1;
+    default:           resp[0] = CTAP2_ERR_OTHER;       return 1;
+    }
+    if (s_auth_blocked) {
+        resp[0] = CTAP2_ERR_PIN_AUTH_BLOCKED; return 1;
+    }
+    pin_req_t q;
+    uint8_t key[32];
+    int rc = parse_pin_req(r, n_keys, &q);
+    if (rc == 0 && (!q.got_ka || !q.got_pa || !q.got_npe || !q.got_phe)) {
+        rc = CTAP2_ERR_MISSING_PARAMETER;
+    }
+    if (rc == 0) rc = shared_key_for(&q, key);
+    if (rc == 0) {
+        rc = change_pin_with_key(key, &q);
+        memzero(key, sizeof key);
+    }
+    memzero(&q, sizeof q);
+    resp[0] = (uint8_t) rc;
+    return 1;
+}
+
 /* CTAP §6.5.5.7.1 / .2 parameter checks, in the spec's order. */
-static int check_token_req(const token_req_t *t, int with_perms, uint8_t *perms)
+static int check_token_req(const pin_req_t *t, int with_perms, uint8_t *perms)
 {
     if (!t->got_ka || !t->got_phe || (with_perms && !t->got_perms)) {
         return CTAP2_ERR_MISSING_PARAMETER;
@@ -655,7 +561,7 @@ static int verify_pin_hash_enc(const uint8_t shared_key[32],
         return CTAP2_ERR_PIN_BLOCKED;
     }
     if (rc != 0) return CTAP2_ERR_OTHER;
-    if (!correct) return pin_mismatch_status(attempts_left());
+    if (!correct) return pin_mismatch_status();
     s_consec_fails = 0;
     return 0;
 }
@@ -663,7 +569,7 @@ static int verify_pin_hash_enc(const uint8_t shared_key[32],
 /* Issue a new token: every older token dies first (resetPinUvAuthToken),
  * then the encrypted token goes into resp. */
 static int issue_token(const uint8_t shared_key[32], uint8_t perms,
-                       const token_req_t *t, uint8_t *resp, size_t resp_max)
+                       const pin_req_t *t, uint8_t *resp, size_t resp_max)
 {
     puat_reset();
     uint8_t token[PUAT_TOKEN_LEN];
@@ -706,9 +612,9 @@ static int issue_token(const uint8_t shared_key[32], uint8_t perms,
 static int handle_get_pin_token(cbor_reader_t *r, size_t n_keys,
                                 uint8_t *resp, size_t resp_max, int with_perms)
 {
-    token_req_t t;
+    pin_req_t t;
     uint8_t perms = 0;
-    int rc = parse_token_req(r, n_keys, &t);
+    int rc = parse_pin_req(r, n_keys, &t);
     if (rc == 0) rc = check_token_req(&t, with_perms, &perms);
     if (rc != 0) { resp[0] = (uint8_t) rc; return 1; }
 
@@ -842,9 +748,9 @@ int pin_handle_cbor(const uint8_t *req, size_t req_len,
         }
         return handle_get_key_agreement(resp, resp_max);
     case CP_SUB_SET_PIN:
-        return handle_set_pin(&r, rest, resp, resp_max);
+        return handle_set_pin(&r, rest, resp);
     case CP_SUB_CHANGE_PIN:
-        return handle_change_pin(&r, rest, resp, resp_max);
+        return handle_change_pin(&r, rest, resp);
     case CP_SUB_GET_PIN_TOKEN:
         return handle_get_pin_token(&r, rest, resp, resp_max, 0);
     case CP_SUB_GET_PIN_UV_TOKEN_PERMS:

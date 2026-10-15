@@ -48,7 +48,8 @@ int fido_pin_change(const uint8_t old_mat[PIN_MD_MATERIAL_LEN],
 int fido_pin_clear(void);
 
 /* Boot: a committed binding whose guard is 0 (cut between setPin's commit
- * and its O1 write) gets the guard.  0, or -1 on error. */
+ * and its O1 write) gets the guard and Force-UV, as setPin would have
+ * done.  0, or -1 on error. */
 int fido_pin_boot(void);
 
 #ifdef NIXTROPIC_HOST_TEST

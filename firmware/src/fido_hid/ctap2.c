@@ -177,6 +177,13 @@ int fido_hid_cbor_dispatch(const uint8_t *req, size_t req_len,
         return 1;
     }
 
+    /* Design §4/§6 (Jan, step 3): unless the FIDO state was validated, only
+     * GetInfo and authenticatorReset (the documented way out) are served. */
+    if (sub != CTAP2_CMD_GET_INFO && sub != CTAP2_CMD_RESET && !credstore_ready()) {
+        resp[0] = CTAP2_ERR_NOT_ALLOWED;
+        return 1;
+    }
+
     switch (sub) {
     case CTAP2_CMD_GET_INFO: {
         int n = build_get_info(&resp[1], resp_max - 1u);

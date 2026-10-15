@@ -157,8 +157,8 @@ static int read_cred(int slot_idx, slot_meta_t *out)
 
     int rc = tropic_rmem_read(SLOTS_RMEM_SLOT_FOR(slot_idx),
                               buf, sizeof buf, &got);
-    if (rc == TROPIC_ERR_RMEM_SLOT_EMPTY) {
-        return -3;
+    if (rc == TROPIC_ERR_RMEM_SLOT_EMPTY || (rc == 0 && got == 0u)) {
+        return -3;                       /* reads empty (as slots_wipe_meta counts it) */
     }
     if (rc != 0 || got < (CRED_NONCE_OFF + SLOTS_CRED_ID_NONCE_LEN)) {
         return -2;
@@ -240,6 +240,7 @@ int slots_init(void)
     uint32_t scrubbed = s_bitmap;
     orphan_scrub(&scrubbed);
     if (scrubbed != s_bitmap && write_global(scrubbed, s_force_uv, s_pin_bound) != 0) {
+        s_initted = 0;
         return -3;
     }
     return SLOTS_INIT_OK;
@@ -250,6 +251,7 @@ int slots_init_fresh(void)
     uint8_t buf[O1_LEN];
     o1_encode(buf, 0u, 0u, 0u);
     s_initted = 0;
+    s_o1.uncertain = false;   /* reset = the way out (design §6): checked erase + rewrite */
     if (rec_pair_init(&s_o1, buf, sizeof buf) != REC_OK) {
         return -1;
     }

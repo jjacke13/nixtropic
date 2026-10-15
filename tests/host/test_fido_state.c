@@ -19,6 +19,7 @@
 #include "fido_hid/fido_state.h"
 #include "fido_hid/pin_md.h"
 #include "fido_hid/slots.h"
+#include "tropic/rec_pair.h"
 #include "tropic/tropic.h"
 
 static void reboot(void)
@@ -157,14 +158,12 @@ static void test_guard_repair(void)
 {
     fresh_chip();
     CHECK(fido_state_boot() == 0);
-    unsigned w = mock_calls(MOCK_OP_RMEM_WRITE);
-    (void) w;
     /* setPin = kernel setup (O2 init: 2 record writes), then O1 (2 writes). */
     mock_fail_nth(MOCK_OP_RMEM_WRITE, 3, -1, false);
     CHECK(set_pin("1234") == -1);
     reboot();
     CHECK(fido_state_boot() == 0);
-    CHECK(slots_pin_bound() == 1 && slots_force_uv_get() == 0);   /* guard set, alwaysUv off */
+    CHECK(slots_pin_bound() == 1 && slots_force_uv_get() == 1);   /* finished as setPin would */
     CHECK(fido_pin_state(NULL) == FPIN_SET && verify("1234") == 1);
 }
 
@@ -285,6 +284,65 @@ static void test_other_app_untouched(void)
     }
 }
 
+/* O1 with out-of-range fields, and a counter beyond its start value: refuse. */
+static void test_o1_fields_and_counter(void)
+{
+    static const uint8_t bad[][7] = {
+        { 5, 0, 0, 0, 0, 0, 0 },          /* [0] = length 5 (one byte short) */
+        { 6, 0, 0, 0, 0, 2, 0 },          /* force_uv 2 */
+        { 6, 0, 0, 0, 0, 0, 2 },          /* pin_bound 2 */
+        { 6, 0x20, 0, 0, 0, 0, 0 },       /* bitmap bit 29 (an OpenPGP key slot) */
+    };
+    for (size_t i = 0; i < sizeof bad / sizeof bad[0]; ++i) {
+        rec_pair_t o1 = REC_PAIR(0, 40, 1, 1);
+        fresh_chip();
+        CHECK(rec_pair_init(&o1, &bad[i][1], bad[i][0]) == REC_OK);
+        CHECK(fido_state_boot() != 0 && !slots_usable());
+    }
+    fresh_chip();
+    CHECK(fido_state_boot() == 0);
+    CHECK(tropic_mcounter_init(FIDO_SIGNCOUNT_MCOUNTER, 0xFFFFFFFFu) == 0);
+    reboot();
+    CHECK(fido_state_boot() != 0);
+}
+
+static void test_slot_ops(void)
+{
+    uint8_t rp[32] = { 1 }, id[SLOTS_CRED_ID_LEN], id2[SLOTS_CRED_ID_LEN];
+    slot_meta_t m;
+    int idx = -1, found = -1;
+    fresh_chip();
+    CHECK(fido_state_boot() == 0);
+    for (unsigned i = 0; i < FIDO_SLOTS_MAX; ++i) CHECK(add_cred() == (int) i);
+    CHECK(slots_alloc(rp, SLOTS_ALG_ED25519, 0, NULL, 0, 1, 0, id, &idx) == -1);  /* full */
+    CHECK(slots_erase((int) FIDO_SLOTS_MAX) == -1 && slots_erase(-1) == -1);
+    CHECK(slots_erase(3) == 0 && (slots_bitmap() & (1u << 3)) == 0u);
+    /* Re-allocating slot 3 while replacing slot 5: one bitmap write does both. */
+    CHECK(slots_alloc(rp, SLOTS_ALG_ED25519, 0, NULL, 0, 2, 1u << 5, id, &idx) == 0 && idx == 3);
+    CHECK((slots_bitmap() & (1u << 5)) == 0u && (slots_bitmap() & (1u << 3)) != 0u);
+    CHECK(slots_lookup_by_credid(id, sizeof id, &found, &m) == 0 && found == 3 && m.created == 2u);
+    memcpy(id2, id, sizeof id2);
+    id2[17] ^= 0x01;                                    /* wrong nonce */
+    CHECK(slots_lookup_by_credid(id2, sizeof id2, &found, NULL) == -1);
+    CHECK(slots_read_meta(5, &m) == -1);                /* replaced: unallocated */
+}
+
+/* M2 (cpp-reviewer): a failed O1 write leaves the pair uncertain; the
+ * documented way out, authenticatorReset, still works in the same boot. */
+static void test_reset_after_failed_write(void)
+{
+    fresh_chip();
+    CHECK(fido_state_boot() == 0);
+    CHECK(set_pin("1234") == 0);
+    CHECK(add_cred() == 0);
+    mock_fail_nth(MOCK_OP_RMEM_WRITE, 2, -1, true);     /* O1 copy B of the next alloc */
+    CHECK(add_cred() == -1 && !slots_usable());
+    CHECK(fido_state_wipe() == 0);                      /* no reboot in between */
+    CHECK(!creds_left() && slots_usable() && fido_pin_state(NULL) == FPIN_NOT_SET);
+    reboot();
+    CHECK(fido_state_boot() == 0 && fido_pin_state(NULL) == FPIN_NOT_SET);
+}
+
 /* ---- reset wipe, single-fault sweep ---- */
 
 enum fault { F_ERR, F_LOST, F_GARBLE, F_MASK, F_SILENT, F_COUNT };
@@ -368,6 +426,9 @@ int main(void)
     test_read_error_refuses();
     test_orphan_scrub();
     test_other_app_untouched();
+    test_o1_fields_and_counter();
+    test_slot_ops();
+    test_reset_after_failed_write();
     test_wipe_sweep();
     return check_done("fido_state");
 }

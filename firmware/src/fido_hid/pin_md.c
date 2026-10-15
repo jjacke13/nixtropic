@@ -65,6 +65,9 @@ int fido_pin_change(const uint8_t old_mat[PIN_MD_MATERIAL_LEN],
 
 int fido_pin_clear(void)
 {
+    /* Reset is the way out of an uncertain pair (design §6): the clear is a
+     * checked retire + erase that needs no record, so it may run now. */
+    s_o2.uncertain = false;
     return pin_md_kernel_clear(&FIDO_LAYOUT) == PMD_OK ? 0 : -1;
 }
 
@@ -75,7 +78,9 @@ int fido_pin_boot(void)
     pmd_state_t st = pin_md_kernel_status(&FIDO_LAYOUT, NULL, NULL);
     if (st == PMD_ERROR) return -1;
     if (st == PMD_ABSENT) return bound ? -1 : 0;     /* guard set, binding gone */
-    return bound ? 0 : slots_set_pin_bound(1, 0);    /* committed, guard missing */
+    /* Committed, guard missing: only an interrupted first setPin does that;
+     * finish it as setPin would (guard + the first-PIN Force-UV). */
+    return bound ? 0 : slots_set_pin_bound(1, 1);
 }
 
 #ifdef NIXTROPIC_HOST_TEST

@@ -182,4 +182,12 @@ int credstore_is_mutating(void);
  */
 int credstore_factory_reset(void);
 
+/**
+ * @brief 1 if FIDO state was validated at boot (or freshly wiped by a
+ *        completed reset) and no state write has failed since.  The CTAP
+ *        dispatcher serves only GetInfo and authenticatorReset otherwise
+ *        (design §4/§6; no re-initialisation at runtime).
+ */
+int credstore_ready(void);
+
 #endif /* NIXTROPIC_FIDO_HID_CREDSTORE_H */
