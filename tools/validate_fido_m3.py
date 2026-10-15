@@ -83,7 +83,15 @@ def fixture_pin() -> bytes:
 class Dev:
     def __init__(self, hid_dev):
         self.h = hid_dev
-        self.cid, _ = ft.cmd_init(hid_dev)
+        # A request in the first second after enumeration can be lost
+        # (firmware still booting): retry INIT, inside the 10 s reset window.
+        for attempt in range(6):
+            try:
+                self.cid, _ = ft.cmd_init(hid_dev)
+                return
+            except TimeoutError:
+                if attempt == 5:
+                    raise
 
     def cbor(self, cmd: int, params=None, timeout_ms: int = 5000):
         raw = ft.cbor_encode(params) if params is not None else b""
@@ -504,7 +512,7 @@ def wait_for_replug() -> str:
         time.sleep(0.2)
     while not present():
         time.sleep(0.2)
-    time.sleep(0.8)                     # enumeration + chip boot
+    time.sleep(1.0)                     # enumeration + chip boot
     return ft.find_fido_path()
 
 
