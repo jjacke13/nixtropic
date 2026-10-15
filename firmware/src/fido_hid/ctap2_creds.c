@@ -309,6 +309,9 @@ int ctap2_make_credential(const uint8_t *req, size_t req_len,
     uint8_t cred_id[CREDSTORE_CRED_ID_LEN];
     credstore_handle_t handle;
     /* Stored alg = minus the COSE id the parser chose (-8 or -7). */
+    _Static_assert(CTAP2_COSE_ALG_EDDSA == -(int) SLOTS_ALG_ED25519
+                   && CTAP2_COSE_ALG_ES256 == -(int) SLOTS_ALG_ES256,
+                   "slot alg byte = minus the COSE id");
     rc = credstore_make(rp_hash, (uint8_t)(-q.alg), rk ? SLOTS_FLAG_RESIDENT : 0u,
                         q.user_id, q.user_id_len, created, replace_mask,
                         pubkey, cred_id, &handle);
@@ -416,6 +419,10 @@ static int ga_sign_respond(int slot, const uint8_t rp_hash[32], uint8_t flags,
      * was not made for, whatever state led here (cpp-reviewer M3). */
     if (memcmp(meta.rp_id_hash, rp_hash, SLOTS_RP_ID_HASH_LEN) != 0) {
         return status(resp, CTAP2_ERR_NO_CREDENTIALS);
+    }
+    /* An algorithm we cannot sign with fails before a signCount is spent. */
+    if (meta.alg != SLOTS_ALG_ED25519 && meta.alg != SLOTS_ALG_ES256) {
+        return status(resp, CTAP2_ERR_OTHER);
     }
     if (credstore_signcount_next(&sc) != 0) return status(resp, CTAP2_ERR_OTHER);
     uint8_t sig_input[37 + 32];

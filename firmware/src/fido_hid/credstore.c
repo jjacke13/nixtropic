@@ -269,7 +269,6 @@ int credstore_sign(credstore_handle_t h, uint8_t alg,
         uint8_t rs[64];
         int got = tropic_ecc_ecdsa_sign((uint8_t) h, msg, msg_len, rs, sizeof rs);
         int n = (got == 64) ? cose_es256_der(rs, out_sig, CREDSTORE_SIG_MAX) : -1;
-        memset(rs, 0, sizeof rs);
         return (n > 0) ? n : -2;
     }
     return -1;
