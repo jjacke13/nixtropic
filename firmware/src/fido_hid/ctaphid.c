@@ -63,8 +63,12 @@ static uint8_t  s_resp_buf[FIDO_HID_MAX_PAYLOAD];
 /* CID allocator */
 static uint32_t s_next_cid;
 
-/* CID whose CTAPHID_CBOR request is being processed (0 = none).  While
- * it is set the shared response buffer belongs to that request, so other
+/* CID of the complete request that fido_hid_task() is about to run or is
+ * running (0 = none).  Requests run from the main loop, not from the USB
+ * callback: TinyUSB re-arms the HID OUT endpoint only after the callback
+ * returns (hid_device.c hidd_xfer_cb), so a request handled inside it
+ * blocked every packet, CANCEL included, for its whole touch wait.  While
+ * this is set, s_req_buf and s_resp_buf belong to that request; other
  * answers go out at once as single packets (Phase 9 M3). */
 static uint32_t s_busy_cid;
 
@@ -129,12 +133,6 @@ static void send_now(uint32_t cid, uint8_t cmd_with_flag,
 static void queue_response(uint32_t cid, uint8_t cmd_with_flag,
                            const uint8_t *payload, size_t len)
 {
-    if (s_busy_cid != 0u) {
-        /* A CBOR request is waiting for touch and owns s_resp_buf: the
-         * INIT and CHANNEL_BUSY answers allowed meanwhile fit one packet. */
-        send_now(cid, cmd_with_flag, payload, len);
-        return;
-    }
     if (len > FIDO_HID_MAX_PAYLOAD) len = FIDO_HID_MAX_PAYLOAD;
     if (len > 0u) memcpy(s_resp_buf, payload, len);
     s_resp_cid     = cid;
@@ -145,10 +143,22 @@ static void queue_response(uint32_t cid, uint8_t cmd_with_flag,
     s_resp_pending = true;
 }
 
+/* One-packet answers (errors, INIT): straight out while a request owns
+ * the buffers, else queued like any response. */
+static void reply_short(uint32_t cid, uint8_t cmd_with_flag,
+                        const uint8_t *payload, size_t len)
+{
+    if (s_busy_cid != 0u) {
+        send_now(cid, cmd_with_flag, payload, len);
+    } else {
+        queue_response(cid, cmd_with_flag, payload, len);
+    }
+}
+
 static void queue_error(uint32_t cid, uint8_t err)
 {
     uint8_t payload = err;
-    queue_response(cid, FIDO_HID_CMD_INIT_FLAG | FIDO_HID_CMD_ERROR, &payload, 1);
+    reply_short(cid, FIDO_HID_CMD_INIT_FLAG | FIDO_HID_CMD_ERROR, &payload, 1);
 }
 
 static bool emit_response_packet(void)
@@ -243,8 +253,8 @@ static void handle_init(uint32_t req_cid, const uint8_t *payload, size_t len)
     resp[15] = (uint8_t) FIDO_HID_DEVICE_VER_BUILD;
     resp[16] = (uint8_t) FIDO_HID_CAPABILITIES;
 
-    queue_response(req_cid, FIDO_HID_CMD_INIT_FLAG | FIDO_HID_CMD_INIT,
-                   resp, sizeof resp);
+    reply_short(req_cid, FIDO_HID_CMD_INIT_FLAG | FIDO_HID_CMD_INIT,
+                resp, sizeof resp);
 }
 
 static void handle_ping(uint32_t cid, const uint8_t *payload, size_t len)
@@ -268,9 +278,7 @@ static void handle_cbor(uint32_t cid, const uint8_t *payload, size_t len)
     /* Borrow s_resp_buf as scratch — same pattern as lt-rpc. The
      * fido_hid_cbor_dispatch() prototype lives here in M2 as a weak stub
      * returning INVALID_COMMAND for everything; M3 wires real GetInfo. */
-    s_busy_cid = cid;
     int n = fido_hid_cbor_dispatch(payload, len, s_resp_buf, FIDO_HID_MAX_PAYLOAD);
-    s_busy_cid = 0u;
     if (n < 0) {
         queue_error(cid, FIDO_HID_ERR_OTHER);
         return;
@@ -302,21 +310,27 @@ int fido_hid_cbor_dispatch(const uint8_t *req, size_t req_len,
 
 static void dispatch_request(uint32_t cid);
 
-/* A request is complete: leave the assembly state BEFORE the handler
- * runs, so nothing that arrives during its touch wait (a stray CONT, an
- * INIT-sync or CANCEL on this channel) can dispatch it again or clear
- * s_req_buf under it; then wipe it.  A request completed during somebody
- * else's touch wait is refused (Phase 9 M3, cpp-reviewer + Jan M3). */
+/* A request is complete: leave the assembly state, so nothing that
+ * arrives later (a stray CONT, an INIT-sync or CANCEL on this channel) can
+ * dispatch it again or clear s_req_buf under it, and hand it to
+ * fido_hid_task(), which runs it from the main loop.  A request completed
+ * during somebody else's touch wait is refused (Phase 9 M3). */
 static void complete_request(uint32_t cid)
 {
     s_state   = FH_STATE_IDLE;
     s_cur_cid = 0;
-    if (user_presence_is_awaiting()) {
+    if (s_busy_cid != 0u) {
+        /* Cannot happen (no assembly starts while busy); the buffers
+         * belong to the busy request, so do not touch them. */
         queue_error(cid, FIDO_HID_ERR_CHANNEL_BUSY);
-    } else {
-        dispatch_request(cid);
+        return;
     }
-    reset_assembly();
+    if (user_presence_is_awaiting()) {     /* an OpenPGP touch wait */
+        queue_error(cid, FIDO_HID_ERR_CHANNEL_BUSY);
+        reset_assembly();
+        return;
+    }
+    s_busy_cid = cid;
 }
 
 static void dispatch_request(uint32_t cid)
@@ -395,8 +409,9 @@ static void handle_init_packet(uint32_t cid, const uint8_t *pkt)
      * state (token, s_eph_priv) is not reentrant; ECC keypair gen on
      * TROPIC01 must run to completion before any new sign request.
      * Refuse with CHANNEL_BUSY regardless of CID — INIT was already
-     * fast-pathed above so stuck channels can still be reset. */
-    if (user_presence_is_awaiting()) {
+     * fast-pathed above so stuck channels can still be reset.  Phase 9 M3:
+     * also while a complete request waits for fido_hid_task(). */
+    if (user_presence_is_awaiting() || s_busy_cid != 0u) {
         queue_error(cid, FIDO_HID_ERR_CHANNEL_BUSY);
         return;
     }
@@ -485,6 +500,15 @@ void fido_hid_init(void)
 
 void fido_hid_task(void)
 {
+    /* Run a complete request here, outside the USB callback, once the
+     * previous response is out (it shares s_resp_buf).  Its touch wait
+     * pumps tud_task(), and the callbacks then still get INIT, CANCEL and
+     * BUSY-refused requests (Phase 9 M3). */
+    if (s_busy_cid != 0u && !s_resp_pending) {
+        dispatch_request(s_busy_cid);
+        reset_assembly();
+        s_busy_cid = 0u;
+    }
     while (emit_response_packet()) {
         /* drain until backpressure or done */
     }
