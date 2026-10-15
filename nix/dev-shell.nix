@@ -33,6 +33,7 @@ pkgs.mkShell {
     minicom               # Backup serial console
     usbutils              # lsusb to verify dongle enumeration
     libfido2              # fido2-token for tools/validate-fido.sh
+    opensc                # opensc-tool: CCID APDU during a FIDO wait (validate_fido_m3.py)
     gdb                   # Host gdb (use arm-none-eabi-gdb for the dongle)
 
     # Scripting / automation

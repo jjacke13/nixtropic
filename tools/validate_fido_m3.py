@@ -329,9 +329,12 @@ def run(d: Dev, pin: bytes) -> None:
     st, _ = make_cred(d, RP_C, b"alg-rs", rk=False, algs=(-257,))
     expect("RS256 only → UNSUPPORTED_ALGORITHM (no touch)", st == UNSUPPORTED_ALGORITHM,
            f"0x{st:02x}")
+    alg_creds = []
     for algs, want in (((-8, -7), -8), ((-257, -7, -8), -7)):
         touch(f"MakeCredential, site lists {list(algs)}")
         st, c = make_cred(d, RP_C, f"alg{want}".encode(), rk=False, algs=algs)
+        if st == OK:
+            alg_creds.append(c)
         got = cose_alg(c["pk"]) if st == OK else None
         expect(f"{list(algs)} → credential alg {want}", got == want, f"0x{st:02x} {got}")
         if got != want:
@@ -518,11 +521,11 @@ def run(d: Dev, pin: bytes) -> None:
 
     print("\n== 10. clean up: delete the test credentials")
     st, t_cm = token(d, pin, PERM_CM)
-    gone = [cm(d, 0x06, t_cm, {2: {"id": c["id"], "type": "public-key"}})[0]
-            for c in (a1b, a2, a3)]
+    mine = [a1b, a2, a3, *alg_creds]
+    gone = [cm(d, 0x06, t_cm, {2: {"id": c["id"], "type": "public-key"}})[0] for c in mine]
     st, m = cm(d, 0x01, t_cm)
     expect("test credentials deleted, store empty",
-           gone == [OK, OK, OK] and m.get(1) == 0 and m.get(2) == 29, f"{gone} {m}")
+           gone == [OK] * len(mine) and m.get(1) == 0 and m.get(2) == 29, f"{gone} {m}")
 
 
 class _CcidThread(threading.Thread):
