@@ -409,6 +409,7 @@ def run(d: Dev, pin: bytes) -> None:
            cm(d, 0x06, t_cmb, {2: {"id": b1["id"], "type": "public-key"}})[0] == OK)
 
     print("\n== 7. touch-wait dispatch (CANCEL, INIT, CCID during a wait)")
+    ccid_warm_up()
     print("  >>> do NOT press SW1 during this part")
     send_packets(d.h, d.cid, 0x10, ga_request(RP_A, [a2["id"]]))
     time.sleep(1.0)
@@ -483,8 +484,19 @@ class _CcidThread(threading.Thread):
 
     def run(self):
         p = subprocess.run(self.cmd, capture_output=True, text=True)
-        self.result = (p.returncode == 0 and "90 00" in p.stdout.upper().replace(":", " "),
+        self.result = (p.returncode == 0 and "SW1=0x90, SW2=0x00" in p.stdout,
                        time.time())
+
+
+def ccid_warm_up() -> None:
+    """First PC/SC contact after a replug takes seconds (pcscd powers the
+    card): do it before the wait, so the timed SELECT measures the dispatch."""
+    tool = shutil.which("opensc-tool")
+    if tool:
+        if shutil.which("gpgconf"):
+            subprocess.run(["gpgconf", "--kill", "scdaemon"], capture_output=True)
+        subprocess.run([tool, "--reader", "0", "-s", "00:A4:04:00:06:D2:76:00:01:24:01"],
+                       capture_output=True)
 
 
 def ccid_select_during(d: Dev):

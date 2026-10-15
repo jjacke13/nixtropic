@@ -71,6 +71,10 @@ static uint32_t s_next_cid;
  * this is set, s_req_buf and s_resp_buf belong to that request; other
  * answers go out at once as single packets (Phase 9 M3). */
 static uint32_t s_busy_cid;
+/* True only while fido_hid_task() executes that request.  A queued request
+ * does not own the touch wait (an OpenPGP request may hold it), so CANCEL
+ * acts only on a running one (Jan, M3 round 4). */
+static bool     s_running;
 
 /* ===== Helpers ===== */
 
@@ -148,7 +152,9 @@ static void queue_response(uint32_t cid, uint8_t cmd_with_flag,
 static void reply_short(uint32_t cid, uint8_t cmd_with_flag,
                         const uint8_t *payload, size_t len)
 {
-    if (s_busy_cid != 0u) {
+    /* Also while an earlier response is still going out: it lives in
+     * s_resp_buf until its last packet is sent (Jan, M3 round 4). */
+    if (s_busy_cid != 0u || s_resp_pending) {
         send_now(cid, cmd_with_flag, payload, len);
     } else {
         queue_response(cid, cmd_with_flag, payload, len);
@@ -394,7 +400,7 @@ static void handle_init_packet(uint32_t cid, const uint8_t *pkt)
      * request of its channel.  Otherwise it is ignored.  Phase 9 M3:
      * before, CANCEL got an echo and could not stop a wait. */
     if (cmd == FIDO_HID_CMD_CANCEL) {
-        if (cid == s_busy_cid) {
+        if (cid == s_busy_cid && s_running) {
             user_presence_cancel();
         }
         if (s_state == FH_STATE_ASSEMBLING && cid == s_cur_cid) {
@@ -505,7 +511,9 @@ void fido_hid_task(void)
      * pumps tud_task(), and the callbacks then still get INIT, CANCEL and
      * BUSY-refused requests (Phase 9 M3). */
     if (s_busy_cid != 0u && !s_resp_pending) {
+        s_running = true;
         dispatch_request(s_busy_cid);
+        s_running = false;
         reset_assembly();
         s_busy_cid = 0u;
     }
