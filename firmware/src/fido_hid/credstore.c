@@ -8,6 +8,7 @@
 
 #include "credstore.h"
 #include "slots.h"
+#include "cose.h"
 
 #include <stdint.h>
 #include <stddef.h>
@@ -15,11 +16,6 @@
 #include <string.h>
 
 #include "tropic/tropic.h"
-
-/* COSE alg id 8 (which our slot layer stores in R-mem) corresponds to
- * the WebAuthn / FIDO `alg = -8` (EdDSA). credstore_make takes COSE 8
- * as the only supported value for M2; future ES256 support would add 7. */
-#define CREDSTORE_ALG_ED25519   SLOTS_ALG_ED25519
 
 /* TROPIC01 hw monotonic counter index used as the shared signCount source.
  * 0..15 available; we own counter 0 for Phase 5 FIDO2. Phase 7 (OpenPGP
@@ -32,9 +28,21 @@
  * is refused by the chip). */
 #define CREDSTORE_MCOUNTER_MAX  0xFFFFFFFEu
 
-/* libtropic ECC curve index for Ed25519, matching tropic_ecc_generate
- * 's curve parameter (0 = Ed25519, 1 = P-256). */
+/* tropic_ecc_generate's curve parameter. */
 #define CREDSTORE_CURVE_ED25519   0u
+#define CREDSTORE_CURVE_P256      1u
+
+/* Public key length for a stored alg (slots.h SLOTS_ALG_*), 0 if unknown.
+ * The length is also how tropic_ecc_pubkey_read reports the slot's curve,
+ * so a key of the wrong curve never passes as the stored alg. */
+static size_t pubkey_len(uint8_t alg)
+{
+    switch (alg) {
+    case SLOTS_ALG_ED25519: return 32u;
+    case SLOTS_ALG_ES256:   return 64u;
+    default:                return 0u;
+    }
+}
 
 static int s_initted;
 
@@ -94,17 +102,19 @@ int credstore_make(const uint8_t rp_id_hash[SLOTS_RP_ID_HASH_LEN],
                    uint8_t alg, uint8_t flags,
                    const uint8_t *user_handle, size_t user_handle_len,
                    uint32_t created, uint32_t replace_mask,
-                   uint8_t out_pubkey[CREDSTORE_PUBKEY_LEN],
+                   uint8_t out_pubkey[CREDSTORE_PUBKEY_MAX],
                    uint8_t out_cred_id[CREDSTORE_CRED_ID_LEN],
                    credstore_handle_t *out_handle)
 {
     if (!rp_id_hash || !out_pubkey || !out_cred_id || !out_handle) {
         return -1;
     }
-    if (alg != CREDSTORE_ALG_ED25519) {
-        /* M2 only supports Ed25519. P-256 deferred to later phase. */
-        return -1;
+    size_t want = pubkey_len(alg);
+    if (want == 0u) {
+        return -2;              /* the caller only passes supported algs */
     }
+    uint8_t curve = (alg == SLOTS_ALG_ES256) ? CREDSTORE_CURVE_P256
+                                             : CREDSTORE_CURVE_ED25519;
     /* No key operation while the slot bitmap may disagree with the chip:
      * a "free" slot could hold a possibly-published key (Jan, M3 round 2). */
     if (!slots_usable()) {
@@ -134,9 +144,9 @@ int credstore_make(const uint8_t rp_id_hash[SLOTS_RP_ID_HASH_LEN],
         return -1;              /* full: 29 FIDO credentials */
     }
     if (tropic_ecc_erase((uint8_t) slot_idx) != 0
-        || tropic_ecc_generate((uint8_t) slot_idx, CREDSTORE_CURVE_ED25519) != 0
+        || tropic_ecc_generate((uint8_t) slot_idx, curve) != 0
         || tropic_ecc_pubkey_read((uint8_t) slot_idx, out_pubkey,
-                                  CREDSTORE_PUBKEY_LEN) != (int) CREDSTORE_PUBKEY_LEN) {
+                                  CREDSTORE_PUBKEY_MAX) != (int) want) {
         (void) tropic_ecc_erase((uint8_t) slot_idx);
         s_credstore_mutating = 0;
         return -2;
@@ -167,14 +177,16 @@ int credstore_make(const uint8_t rp_id_hash[SLOTS_RP_ID_HASH_LEN],
     return 0;
 }
 
-int credstore_get_pubkey(int slot_idx, uint8_t out_pubkey[CREDSTORE_PUBKEY_LEN])
+int credstore_get_pubkey(int slot_idx, uint8_t alg,
+                         uint8_t out_pubkey[CREDSTORE_PUBKEY_MAX])
 {
-    if (!out_pubkey || slot_idx < 0 || slot_idx >= (int) FIDO_SLOTS_MAX) {
+    size_t want = pubkey_len(alg);
+    if (!out_pubkey || want == 0u || slot_idx < 0 || slot_idx >= (int) FIDO_SLOTS_MAX) {
         return -1;
     }
     int got = tropic_ecc_pubkey_read((uint8_t) slot_idx,
-                                     out_pubkey, CREDSTORE_PUBKEY_LEN);
-    return (got == (int) CREDSTORE_PUBKEY_LEN) ? 0 : -1;
+                                     out_pubkey, CREDSTORE_PUBKEY_MAX);
+    return (got == (int) want) ? (int) want : -1;
 }
 
 int credstore_erase_slot(int slot_idx)
@@ -243,15 +255,24 @@ int credstore_find(const uint8_t *cred_id, size_t cred_id_len,
     return 0;
 }
 
-int credstore_sign(credstore_handle_t h,
+int credstore_sign(credstore_handle_t h, uint8_t alg,
                    const uint8_t *msg, size_t msg_len,
-                   uint8_t out_sig[CREDSTORE_SIG_LEN])
+                   uint8_t out_sig[CREDSTORE_SIG_MAX])
 {
     if (!msg || !out_sig) return -1;
     if (h < 0 || h >= (int) FIDO_SLOTS_MAX) return -1;
-    int got = tropic_ecc_eddsa_sign((uint8_t) h, msg, msg_len,
-                                    out_sig, CREDSTORE_SIG_LEN);
-    return (got == (int) CREDSTORE_SIG_LEN) ? 0 : -2;
+    if (alg == SLOTS_ALG_ED25519) {
+        int got = tropic_ecc_eddsa_sign((uint8_t) h, msg, msg_len, out_sig, 64u);
+        return (got == 64) ? 64 : -2;
+    }
+    if (alg == SLOTS_ALG_ES256) {
+        uint8_t rs[64];
+        int got = tropic_ecc_ecdsa_sign((uint8_t) h, msg, msg_len, rs, sizeof rs);
+        int n = (got == 64) ? cose_es256_der(rs, out_sig, CREDSTORE_SIG_MAX) : -1;
+        memset(rs, 0, sizeof rs);
+        return (n > 0) ? n : -2;
+    }
+    return -1;
 }
 
 /* ----- signCount (Phase 9 M3, Jan M3 Q1-Q4) ----- */

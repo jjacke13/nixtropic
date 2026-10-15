@@ -30,6 +30,7 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import fido2_test as ft  # noqa: E402  (transport + CBOR helpers)
 
+from cryptography.hazmat.primitives import hashes  # noqa: E402
 from cryptography.hazmat.primitives.asymmetric import ec  # noqa: E402
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey  # noqa: E402
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes  # noqa: E402
@@ -48,6 +49,8 @@ UNAUTHORIZED_PERMISSION = 0x40
 PERM_MC, PERM_GA, PERM_CM, PERM_BE, PERM_ACFG = 0x01, 0x02, 0x04, 0x08, 0x20
 
 RP_A, RP_B = "a.m3.nixtropic.test", "b.m3.nixtropic.test"
+RP_C = "alg.m3.nixtropic.test"          # algorithm checks (M3b)
+UNSUPPORTED_ALGORITHM = 0x26
 UP_MS = 35000
 
 results: list[tuple[str, bool, str]] = []
@@ -153,8 +156,19 @@ def token(d: Dev, pin: bytes, perms: int | None = None, rp: str | None = None,
 
 # ---------------- WebAuthn operations ----------------
 
+def cose_alg(cose: dict) -> int | None:
+    """-8 for a well-formed Ed25519 OKP key, -7 for a P-256 EC2 key, else None."""
+    if cose.get(1) == 1 and cose.get(3) == -8 and cose.get(-1) == 6 \
+            and isinstance(cose.get(-2), bytes) and len(cose[-2]) == 32:
+        return -8
+    if cose.get(1) == 2 and cose.get(3) == -7 and cose.get(-1) == 1 \
+            and all(isinstance(cose.get(k), bytes) and len(cose[k]) == 32 for k in (-2, -3)):
+        return -7
+    return None
+
+
 def parse_ad(ad: bytes):
-    """(flags, signCount, credId or None, Ed25519 pubkey or None, extensions)."""
+    """(flags, signCount, credId or None, COSE key dict or None, extensions)."""
     flags, sc = ad[32], struct.unpack(">I", ad[33:37])[0]
     if not flags & 0x40:
         return flags, sc, None, None, None
@@ -162,14 +176,15 @@ def parse_ad(ad: bytes):
     cred_id = ad[55:55 + n]
     cose, off = ft.cbor_decode_one(ad, 55 + n)
     ext = ft.cbor_decode_one(ad, off)[0] if flags & 0x80 else None
-    return flags, sc, cred_id, ft.cose_ed25519_pubkey(cose), ext
+    return flags, sc, cred_id, cose, ext
 
 
 def make_cred(d: Dev, rp: str, user: bytes, *, rk: bool, tok: bytes | None = None,
-              exclude: list[bytes] | None = None, cred_props: bool = False):
+              exclude: list[bytes] | None = None, cred_props: bool = False,
+              algs: tuple[int, ...] = (-7, -8)):
     cdh = os.urandom(32)
     req = {1: cdh, 2: {"id": rp, "name": rp}, 3: {"id": user, "name": "m3"},
-           4: [{"alg": -7, "type": "public-key"}, {"alg": -8, "type": "public-key"}]}
+           4: [{"alg": a, "type": "public-key"} for a in algs]}
     if rk:
         req[7] = {"rk": True}
     if tok is not None:
@@ -199,10 +214,20 @@ def get_assertion(d: Dev, rp: str, allow: list[bytes] | None = None, *,
     return st, r, cdh
 
 
-def sig_ok(pk: bytes, r: dict, cdh: bytes) -> bool:
+def sig_ok(pk: dict, r: dict, cdh: bytes) -> bool:
+    """Verify an assertion against the credential's COSE key: Ed25519 over
+    the raw 64-byte signature, ES256 over a DER signature (≤ 72 bytes)."""
     try:
-        Ed25519PublicKey.from_public_bytes(pk).verify(r[3], r[2] + cdh)
-        return True
+        if cose_alg(pk) == -8:
+            Ed25519PublicKey.from_public_bytes(pk[-2]).verify(r[3], r[2] + cdh)
+            return True
+        if cose_alg(pk) == -7 and r[3][:1] == b"\x30" and len(r[3]) <= 72:
+            ec.EllipticCurvePublicNumbers(int.from_bytes(pk[-2], "big"),
+                                          int.from_bytes(pk[-3], "big"),
+                                          ec.SECP256R1()).public_key() \
+                .verify(r[3], r[2] + cdh, ec.ECDSA(hashes.SHA256()))
+            return True
+        return False
     except Exception:
         return False
 
@@ -287,8 +312,9 @@ def run(d: Dev, pin: bytes) -> None:
             "authnrCfg": True, "clientPin": False, "pinUvAuthToken": True,
             "makeCredUvNotRqd": True}
     expect("options exactly as implemented", opt == want, repr(opt))
-    expect("algorithms == EdDSA only",
-           info.get(10) == [{"alg": -8, "type": "public-key"}], repr(info.get(10)))
+    expect("algorithms == EdDSA, ES256",
+           info.get(10) == [{"alg": -8, "type": "public-key"},
+                            {"alg": -7, "type": "public-key"}], repr(info.get(10)))
 
     print("\n== 3. alwaysUv without a PIN")
     expect("toggleAlwaysUv without PIN needs no auth", toggle_uv(d) == OK)
@@ -298,6 +324,22 @@ def run(d: Dev, pin: bytes) -> None:
     st, _, _ = get_assertion(d, RP_A)
     expect("alwaysUv + no PIN: GetAssertion → PUAT_REQUIRED", st == PUAT_REQUIRED, f"0x{st:02x}")
     expect("toggle back off", toggle_uv(d) == OK and d.info()[4]["alwaysUv"] is False)
+
+    print("\n== 3b. algorithms (M3b): the site's order picks EdDSA or ES256")
+    st, _ = make_cred(d, RP_C, b"alg-rs", rk=False, algs=(-257,))
+    expect("RS256 only → UNSUPPORTED_ALGORITHM (no touch)", st == UNSUPPORTED_ALGORITHM,
+           f"0x{st:02x}")
+    for algs, want in (((-8, -7), -8), ((-257, -7, -8), -7)):
+        touch(f"MakeCredential, site lists {list(algs)}")
+        st, c = make_cred(d, RP_C, f"alg{want}".encode(), rk=False, algs=algs)
+        got = cose_alg(c["pk"]) if st == OK else None
+        expect(f"{list(algs)} → credential alg {want}", got == want, f"0x{st:02x} {got}")
+        if got != want:
+            continue
+        touch(f"GetAssertion with the alg {want} credential")
+        st, r, cdh = get_assertion(d, RP_C, [c["id"]])
+        expect(f"alg {want} assertion verifies", st == OK and sig_ok(c["pk"], r, cdh),
+               f"0x{st:02x}")
 
     print("\n== 4. PIN and permission tokens")
     expect("setPIN from fixture", set_pin(d, pin) == OK)
@@ -388,17 +430,23 @@ def run(d: Dev, pin: bytes) -> None:
            st == OK and cm(d, 0x01, legacy)[0] == PIN_AUTH_INVALID)
     st, t_cm = token(d, pin, PERM_CM)
     st, m = cm(d, 0x01, t_cm)
-    expect("metadata: 4 existing, 25 remaining (29 slots)",
-           st == OK and m.get(1) == 4 and m.get(2) == 25, f"0x{st:02x} {m}")
+    expect("metadata: 6 existing, 23 remaining (29 slots)",
+           st == OK and m.get(1) == 6 and m.get(2) == 23, f"0x{st:02x} {m}")
     st, r = cm(d, 0x02, t_cm)
     st2, _ = cm(d, 0x03, None)
-    expect("enumerate RPs: 2, GetNextRP without pinUvAuthParam",
-           st == OK and r.get(5) == 2 and st2 == OK, f"0x{st:02x} 0x{st2:02x}")
+    expect("enumerate RPs: 3, GetNextRP without pinUvAuthParam",
+           st == OK and r.get(5) == 3 and st2 == OK, f"0x{st:02x} 0x{st2:02x}")
     rp_a_hash = hashlib.sha256(RP_A.encode()).digest()
     st, r = cm(d, 0x04, t_cm, {1: rp_a_hash})
-    nexts = [cm(d, 0x05, None)[0] for _ in range(2)]
+    site_a = [a2["pk"], a3["pk"], a1b["pk"]]
+    listed = [r.get(8)] if st == OK else []
+    for _ in range(2):
+        st_n, rn = cm(d, 0x05, None)
+        listed.append(rn.get(8) if st_n == OK else None)
     expect("enumerate site A: 3 credentials, GetNext without auth",
-           st == OK and r.get(9) == 3 and nexts == [OK, OK], f"0x{st:02x} {nexts}")
+           st == OK and r.get(9) == 3 and None not in listed, f"0x{st:02x} {len(listed)}")
+    expect("credMgmt public keys = the ES256 keys MakeCredential returned",
+           len(listed) == 3 and all(k in site_a and cose_alg(k) == -7 for k in listed))
     st, t_cmb = token(d, pin, PERM_CM, RP_B)
     expect("cm token bound to B: RP enumeration refused", cm(d, 0x02, t_cmb)[0] == PIN_AUTH_INVALID)
     expect("cm token bound to B: site A list refused",

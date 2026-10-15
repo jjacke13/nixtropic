@@ -38,6 +38,8 @@ stdenv.mkDerivation {
       firmware/src/fido_hid/cbor.c -o test_ctap2_parse
     $CC $STRICT $SAN $INC tests/host/test_pin_token.c firmware/src/fido_hid/pin_token.c \
       hmac.o sha2.o memzero.o -o test_pin_token
+    $CC $STRICT $SAN $INC tests/host/test_cose.c firmware/src/fido_hid/cose.c \
+      firmware/src/fido_hid/cbor.c -o test_cose
     $CC $STRICT $SAN $INC tests/host/test_l3_result.c -o test_l3_result
     $CC $STRICT $SAN $INC tests/host/test_trezor_rng.c firmware/src/platform/trezor_rng.c -o test_trezor_rng
     $CC $STRICT $SAN $INC tests/host/test_pin_md_kernel.c tests/host/mock_tropic.c \
@@ -51,6 +53,7 @@ stdenv.mkDerivation {
     ./test_cbor
     ./test_ctap2_parse
     ./test_pin_token
+    ./test_cose
     ./test_l3_result
     ./test_trezor_rng
     ./test_pin_md_kernel

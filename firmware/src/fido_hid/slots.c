@@ -12,7 +12,7 @@
  * Slot N+1 (per-credential, 256 B):
  *   [0..3]   magic   "NXCR" (0x4E 0x58 0x43 0x52)
  *   [4]      schema_version = 1
- *   [5]      alg (SLOTS_ALG_ED25519 = 8)
+ *   [5]      alg (SLOTS_ALG_ED25519 = 8, SLOTS_ALG_ES256 = 7)
  *   [6]      flags
  *   [7]      reserved
  *   [8..39]  rp_id_hash (32 B)

@@ -39,8 +39,9 @@
 
 #include "slots.h"  /* SLOTS_CRED_ID_LEN, SLOTS_RP_ID_HASH_LEN */
 
-#define CREDSTORE_PUBKEY_LEN    32u
-#define CREDSTORE_SIG_LEN       64u
+/* Largest public key (P-256 x || y) and signature (ES256 DER), Phase 9 M3b. */
+#define CREDSTORE_PUBKEY_MAX    64u
+#define CREDSTORE_SIG_MAX       72u
 #define CREDSTORE_CRED_ID_LEN   SLOTS_CRED_ID_LEN   /* 18 B */
 
 /* Opaque handle returned by credstore_make / credstore_lookup. Internally
@@ -72,12 +73,12 @@ int credstore_init(void);
  * the new key again.
  *
  * @param  rp_id_hash    SHA-256(rpId) — 32 bytes
- * @param  alg           Currently must be 8 (Ed25519 / COSE -8); other
- *                       values rejected with CTAP2_ERR_UNSUPPORTED_ALGORITHM
+ * @param  alg           SLOTS_ALG_ED25519 (Ed25519 key) or SLOTS_ALG_ES256
+ *                       (P-256 key); anything else is an error (-2)
  * @param  flags         SLOTS_FLAG_RESIDENT for a discoverable credential
  * @param  created       creation sequence (see slot_meta_t)
  * @param  replace_mask  slots this credential replaces (same RP + user)
- * @param  out_pubkey    32-byte Ed25519 public key
+ * @param  out_pubkey    public key: 32 B Ed25519, or 64 B P-256 x || y
  * @param  out_cred_id   18-byte credentialId for the relying party
  * @param  out_handle    Handle for the immediate MakeCred self-attestation
  *                       sign — pass to credstore_sign.
@@ -87,7 +88,7 @@ int credstore_make(const uint8_t rp_id_hash[SLOTS_RP_ID_HASH_LEN],
                    uint8_t alg, uint8_t flags,
                    const uint8_t *user_handle, size_t user_handle_len,
                    uint32_t created, uint32_t replace_mask,
-                   uint8_t out_pubkey[CREDSTORE_PUBKEY_LEN],
+                   uint8_t out_pubkey[CREDSTORE_PUBKEY_MAX],
                    uint8_t out_cred_id[CREDSTORE_CRED_ID_LEN],
                    credstore_handle_t *out_handle);
 
@@ -104,19 +105,20 @@ int credstore_lookup(const uint8_t *cred_id, size_t cred_id_len,
                      credstore_handle_t *out_handle);
 
 /**
- * @brief Sign a message with the Ed25519 key in the slot identified by
- *        the handle. The chip performs the EdDSA computation — private
- *        key never leaves TROPIC01.
+ * @brief Sign a message with the key in the slot identified by the
+ *        handle. The chip performs the EdDSA / ECDSA computation — the
+ *        private key never leaves TROPIC01.
  *
  * @param  h           Handle from credstore_make / credstore_lookup
+ * @param  alg         The credential's stored SLOTS_ALG_*
  * @param  msg         Bytes to sign (typically authData || clientDataHash)
- * @param  msg_len     Length of msg (max 4096 per TROPIC01 spec)
- * @param  out_sig     64-byte signature buffer
- * @return 0 on success; -1 on parameter error; -2 on chip error
+ * @param  msg_len     Length of msg (EdDSA: max 4096 per TROPIC01 spec)
+ * @param  out_sig     EdDSA: 64 raw bytes; ES256: DER, up to 72 bytes
+ * @return signature length; -1 on parameter error; -2 on chip error
  */
-int credstore_sign(credstore_handle_t h,
+int credstore_sign(credstore_handle_t h, uint8_t alg,
                    const uint8_t *msg, size_t msg_len,
-                   uint8_t out_sig[CREDSTORE_SIG_LEN]);
+                   uint8_t out_sig[CREDSTORE_SIG_MAX]);
 
 /**
  * @brief Find a credential by ID, bound to the given RP (Phase 9 M3):
@@ -145,11 +147,12 @@ int credstore_signcount_next(uint32_t *out);
 /* ===== Phase 6 M3: read + delete helpers for credentialManagement ===== */
 
 /**
- * @brief Read public key for the credential in the given slot.
- * @return 0 on success; -1 on chip error.
+ * @brief Read public key for the credential in the given slot; its
+ *        length must match the stored `alg` (SLOTS_ALG_*).
+ * @return the key length (32 or 64); -1 on chip error or a mismatch.
  */
-int credstore_get_pubkey(int slot_idx,
-                         uint8_t out_pubkey[CREDSTORE_PUBKEY_LEN]);
+int credstore_get_pubkey(int slot_idx, uint8_t alg,
+                         uint8_t out_pubkey[CREDSTORE_PUBKEY_MAX]);
 
 /**
  * @brief Erase a single credential — ECC slot + R-mem slot, clear bitmap.

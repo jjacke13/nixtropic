@@ -88,6 +88,15 @@ int tropic_ecc_eddsa_sign(uint8_t slot, const uint8_t *msg, size_t msg_len,
                           uint8_t *sig, size_t sig_size);
 
 /**
+ * @brief Sign a message with the P-256 key in `slot` (ECDSA, Phase 9 M3b).
+ *        The SDK hashes `msg` with SHA-256 on the host and the chip signs
+ *        the 32-byte digest (API Table 32), so pass the message itself.
+ *        Always returns 64 B raw r || s (DER is the caller's job).
+ */
+int tropic_ecc_ecdsa_sign(uint8_t slot, const uint8_t *msg, size_t msg_len,
+                          uint8_t *sig, size_t sig_size);
+
+/**
  * @brief Erase the key in the given ECC slot.  The chip answers OK for an
  *        empty slot too, so a non-zero return is a real failure.
  */

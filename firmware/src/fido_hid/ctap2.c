@@ -68,14 +68,14 @@ const uint8_t NIXTROPIC_AAGUID[16] = {
  *   5: maxMsgSize          1024
  *   6: pinUvAuthProtocols  [1]
  *   9: transports          ["usb"]
- *  10: algorithms          [{alg: -8 (EdDSA), type: "public-key"}]
+ *  10: algorithms          [{alg: -8 (EdDSA)}, {alg: -7 (ES256)}], type "public-key"
  *
  * Phase 9 M3: only what is implemented.  Not "FIDO_2_1": that version
  * requires hmac-secret, credProtect and PIN/UV protocol 2 (CTAP §9).
  * The CTAP 2.1 features we have are announced by their own option IDs,
- * which clients read independently (libfido2 dev.c).  ES256 is not
- * offered (MakeCredential signs Ed25519 only), and credentialMgmtPreview
- * is gone (it announces command 0x41, which does not exist here).
+ * which clients read independently (libfido2 dev.c).  credentialMgmtPreview
+ * is gone (it announces command 0x41, which does not exist here).  ES256
+ * (P-256 ECDSA on the chip) since M3b; the RP's order picks the algorithm.
  *
  * Options, canonical order (length, then bytes):
  *   rk                discoverable credentials (GetAssertion without allowList)
@@ -130,12 +130,15 @@ static int build_get_info(uint8_t *resp, size_t resp_max)
     cbor_write_text(&w, "usb");
 
     cbor_write_uint(&w, 10);
-    cbor_write_array_header(&w, 1);
-    cbor_write_map_header(&w, 2);
-    cbor_write_text(&w, "alg");
-    cbor_write_negint(&w, -8);
-    cbor_write_text(&w, "type");
-    cbor_write_text(&w, "public-key");
+    static const int64_t ALGS[] = { -8, -7 };
+    cbor_write_array_header(&w, 2);
+    for (size_t i = 0; i < 2u; ++i) {
+        cbor_write_map_header(&w, 2);
+        cbor_write_text(&w, "alg");
+        cbor_write_negint(&w, ALGS[i]);
+        cbor_write_text(&w, "type");
+        cbor_write_text(&w, "public-key");
+    }
 
     if (cbor_writer_error(&w)) return -1;
     return (int) cbor_writer_len(&w);

@@ -35,6 +35,7 @@
 #include "ctap2.h"
 #include "ctap2_parse.h"
 #include "credstore.h"
+#include "cose.h"
 #include "slots.h"
 #include "cbor.h"
 #include "pin.h"
@@ -49,7 +50,7 @@
 #include "sha2.h"
 #include "stm32u5xx_hal.h"   /* HAL_GetTick: token and GetNextAssertion timers */
 
-/* Worst-case COSE_Key size for the keys we encode (Ed25519 OKP = 46 B). */
+/* Worst-case COSE_Key size for the keys we encode (P-256 EC2 = 77 B). */
 #define COSE_KEY_MAX  96u
 
 #define FLAG_UP  0x01u
@@ -76,21 +77,6 @@ static void be32_store(uint8_t *p, uint32_t v)
     p[1] = (uint8_t)(v >> 16);
     p[2] = (uint8_t)(v >>  8);
     p[3] = (uint8_t) v;
-}
-
-/* COSE_Key for an Ed25519 public key: { 1: 1 (OKP), 3: -8 (EdDSA),
- * -1: 6 (Ed25519), -2: x }.  Keys already in canonical order. */
-static int build_cose_ed25519(const uint8_t *pubkey, uint8_t *out, size_t out_max)
-{
-    cbor_writer_t w;
-    cbor_writer_init(&w, out, out_max);
-    cbor_write_map_header(&w, 4);
-    cbor_write_uint(&w, 1);   cbor_write_uint(&w, 1);
-    cbor_write_uint(&w, 3);   cbor_write_negint(&w, -8);
-    cbor_write_negint(&w, -1); cbor_write_uint(&w, 6);
-    cbor_write_negint(&w, -2); cbor_write_byte_string(&w, pubkey, CREDSTORE_PUBKEY_LEN);
-    if (cbor_writer_error(&w)) return -1;
-    return (int) cbor_writer_len(&w);
 }
 
 static int build_authdata(const uint8_t *rp_id_hash, uint8_t flags,
@@ -243,18 +229,22 @@ static int mc_scan(const ctap2_mc_req_t *q, const uint8_t rp_hash[32], int rk,
  * self-attestation in "packed").  authData carries credProps if asked. */
 static int mc_respond(const ctap2_mc_req_t *q, const uint8_t rp_hash[32],
                       uint8_t flags, int rk, uint32_t sc,
-                      const uint8_t pubkey[CREDSTORE_PUBKEY_LEN],
+                      const uint8_t pubkey[CREDSTORE_PUBKEY_MAX],
                       const uint8_t cred_id[CREDSTORE_CRED_ID_LEN],
                       uint8_t *resp, size_t resp_max)
 {
     uint8_t cose_pub[COSE_KEY_MAX];
-    int cose_len = build_cose_ed25519(pubkey, cose_pub, sizeof cose_pub);
-    if (cose_len < 0) return status(resp, CTAP2_ERR_OTHER);
+    cbor_writer_t kw;
+    cbor_writer_init(&kw, cose_pub, sizeof cose_pub);
+    if (cose_write_pubkey(&kw, q->alg, pubkey, cose_pub_len(q->alg)) != 0) {
+        return status(resp, CTAP2_ERR_OTHER);
+    }
+    size_t cose_len = cbor_writer_len(&kw);
 
     uint8_t auth_data[256];
     if (q->want_cred_props) flags |= FLAG_ED;
     int ad_len = build_authdata(rp_hash, flags, sc, cred_id, CREDSTORE_CRED_ID_LEN,
-                                cose_pub, (size_t) cose_len, auth_data, sizeof auth_data);
+                                cose_pub, cose_len, auth_data, sizeof auth_data);
     if (ad_len < 0) return status(resp, CTAP2_ERR_OTHER);
     if (q->want_cred_props) {
         /* { "credProps": { "rk": <stored discoverability> } } */
@@ -315,10 +305,11 @@ int ctap2_make_credential(const uint8_t *req, size_t req_len,
     if ((rc = wait_touch()) != 0) return status(resp, rc);
     puat_consume();
 
-    uint8_t pubkey[CREDSTORE_PUBKEY_LEN];
+    uint8_t pubkey[CREDSTORE_PUBKEY_MAX];
     uint8_t cred_id[CREDSTORE_CRED_ID_LEN];
     credstore_handle_t handle;
-    rc = credstore_make(rp_hash, SLOTS_ALG_ED25519, rk ? SLOTS_FLAG_RESIDENT : 0u,
+    /* Stored alg = minus the COSE id the parser chose (-8 or -7). */
+    rc = credstore_make(rp_hash, (uint8_t)(-q.alg), rk ? SLOTS_FLAG_RESIDENT : 0u,
                         q.user_id, q.user_id_len, created, replace_mask,
                         pubkey, cred_id, &handle);
     if (rc == -1) return status(resp, CTAP2_ERR_KEY_STORE_FULL);
@@ -432,8 +423,9 @@ static int ga_sign_respond(int slot, const uint8_t rp_hash[32], uint8_t flags,
                                 sig_input, sizeof sig_input);
     if (ad_len < 0) return status(resp, CTAP2_ERR_OTHER);
     memcpy(&sig_input[ad_len], client_hash, 32);
-    uint8_t sig[CREDSTORE_SIG_LEN];
-    if (credstore_sign(slot, sig_input, (size_t) ad_len + 32u, sig) != 0) {
+    uint8_t sig[CREDSTORE_SIG_MAX];
+    int sig_len = credstore_sign(slot, meta.alg, sig_input, (size_t) ad_len + 32u, sig);
+    if (sig_len <= 0) {
         return status(resp, CTAP2_ERR_OTHER);
     }
 
@@ -453,7 +445,7 @@ static int ga_sign_respond(int slot, const uint8_t rp_hash[32], uint8_t flags,
     cbor_write_text(&w, "type");
     cbor_write_text(&w, "public-key");
     cbor_write_uint(&w, 2); cbor_write_byte_string(&w, sig_input, (size_t) ad_len);
-    cbor_write_uint(&w, 3); cbor_write_byte_string(&w, sig, sizeof sig);
+    cbor_write_uint(&w, 3); cbor_write_byte_string(&w, sig, (size_t) sig_len);
     if (with_user) {
         cbor_write_uint(&w, 4);
         cbor_write_map_header(&w, 1);

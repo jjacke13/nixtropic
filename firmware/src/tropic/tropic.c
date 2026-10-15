@@ -319,6 +319,26 @@ int tropic_ecc_eddsa_sign(uint8_t slot, const uint8_t *msg, size_t msg_len,
     return 64;
 }
 
+int tropic_ecc_ecdsa_sign(uint8_t slot, const uint8_t *msg, size_t msg_len,
+                          uint8_t *sig, size_t sig_size)
+{
+    /* lt_ecc_ecdsa_sign takes a uint32_t length; on this target size_t is
+     * no wider, so the cast below never truncates the message. */
+    _Static_assert(sizeof(size_t) <= sizeof(uint32_t), "msg_len narrowing");
+    if (sig == NULL || sig_size < 64u || msg == NULL) return -1;
+    if (tropic_l3_session_ensure() != 0) return -1;
+
+    uint8_t rs[64];
+    lt_ret_t r = lt_ecc_ecdsa_sign(&s_handle,
+                                   (lt_ecc_slot_t)(TR01_ECC_SLOT_0 + slot),
+                                   msg, (uint32_t) msg_len, rs);
+    if (r != LT_OK) {
+        return l3_done(r);
+    }
+    memcpy(sig, rs, 64);
+    return 64;
+}
+
 /* ----- R-mem helpers (Phase 5 M1) -----
  *
  * libtropic's R-mem API is L3-only — the L3 session must be open. We

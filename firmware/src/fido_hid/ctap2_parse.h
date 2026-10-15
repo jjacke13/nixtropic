@@ -21,6 +21,7 @@
 #define CTAP2_OPT_ABSENT        (-1)
 #define CTAP2_USER_ID_MAX       64u    /* WebAuthn user.id limit */
 #define CTAP2_COSE_ALG_EDDSA    (-8)
+#define CTAP2_COSE_ALG_ES256    (-7)
 
 /* An allowList / excludeList: the raw bytes of the validated CBOR array of
  * PublicKeyCredentialDescriptor maps.  present = 0 when the key was absent. */

@@ -165,7 +165,8 @@ static int rd_user(cbor_reader_t *r, const uint8_t **id, size_t *id_len)
 
 /* pubKeyCredParams: every entry must have an integer "alg" and a text
  * "type"; the first "public-key" entry with an algorithm we support is
- * chosen (CTAP §6.1.2 step 3).  All entries are checked. */
+ * chosen (CTAP §6.1.2 step 3): EdDSA or ES256, in the host's order.  All
+ * entries are checked. */
 static int rd_cred_params(cbor_reader_t *r, int *chosen)
 {
     size_t n;
@@ -194,8 +195,9 @@ static int rd_cred_params(cbor_reader_t *r, int *chosen)
             }
         }
         if (!got_alg || !got_type) return (int) CTAP2_ERR_CBOR_UNEXPECTED_TYPE;
-        if (*chosen == 0 && public_key && alg == CTAP2_COSE_ALG_EDDSA) {
-            *chosen = CTAP2_COSE_ALG_EDDSA;
+        if (*chosen == 0 && public_key
+            && (alg == CTAP2_COSE_ALG_EDDSA || alg == CTAP2_COSE_ALG_ES256)) {
+            *chosen = (int) alg;
         }
     }
     return 0;

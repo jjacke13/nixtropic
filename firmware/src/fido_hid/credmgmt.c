@@ -27,6 +27,7 @@
 #include "ctap2.h"
 #include "cbor.h"
 #include "credstore.h"
+#include "cose.h"
 #include "slots.h"
 #include "pin.h"
 #include "pin_token.h"
@@ -148,18 +149,6 @@ static int build_cred_list_for_rp(const uint8_t rp_hash[SLOTS_RP_ID_HASH_LEN],
         }
     }
     return count;
-}
-
-/* COSE_Key map for an Ed25519 public key (matches what MakeCredential
- * emits as attestedCredentialData.credPubKey).  46 bytes total. */
-static int write_cose_ed25519(cbor_writer_t *w, const uint8_t pubkey[32])
-{
-    cbor_write_map_header(w, 4);
-    cbor_write_uint(w, 1);   cbor_write_uint(w, 1);                   /* kty=OKP */
-    cbor_write_uint(w, 3);   cbor_write_negint(w, -8);                /* alg=EdDSA */
-    cbor_write_negint(w, -1); cbor_write_uint(w, 6);                  /* crv=Ed25519 */
-    cbor_write_negint(w, -2); cbor_write_byte_string(w, pubkey, 32);  /* x */
-    return cbor_writer_error(w) ? -1 : 0;
 }
 
 /* PublicKeyCredentialDescriptor for our 18 B credential ID. */
@@ -319,8 +308,9 @@ static int write_cred_entry(uint8_t *resp, size_t resp_max,
         resp[0] = CTAP2_ERR_OTHER;
         return 1;
     }
-    uint8_t pubkey[CREDSTORE_PUBKEY_LEN];
-    if (credstore_get_pubkey(slot_idx, pubkey) != 0) {
+    uint8_t pubkey[CREDSTORE_PUBKEY_MAX];
+    int pub_len = credstore_get_pubkey(slot_idx, meta.alg, pubkey);
+    if (pub_len < 0) {
         resp[0] = CTAP2_ERR_OTHER;
         return 1;
     }
@@ -339,7 +329,7 @@ static int write_cred_entry(uint8_t *resp, size_t resp_max,
     cbor_write_uint(&w, RESP_KEY_CREDENTIAL_ID);
     write_pkc_descriptor(&w, cred_id);
     cbor_write_uint(&w, RESP_KEY_PUBLIC_KEY);
-    if (write_cose_ed25519(&w, pubkey) != 0) {
+    if (cose_write_pubkey(&w, -(int) meta.alg, pubkey, (size_t) pub_len) != 0) {
         resp[0] = CTAP2_ERR_OTHER;
         return 1;
     }

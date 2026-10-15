@@ -65,7 +65,9 @@
  * user_handle_len = 0 (i.e. "no user info"). */
 #define SLOTS_USER_HANDLE_MAX        64u
 
+/* Stored alg = minus the COSE algorithm id: 8 = EdDSA (-8), 7 = ES256 (-7). */
 #define SLOTS_ALG_ED25519            8u
+#define SLOTS_ALG_ES256              7u
 
 #define SLOTS_FLAG_RESIDENT          (1u << 0)
 
@@ -110,7 +112,7 @@ int slots_init(void);
  * is left consistent — partial allocations are rolled back.
  *
  * @param  rp_id_hash       SHA-256 of rp.id (32 B); persisted in meta.
- * @param  alg              COSE alg id (only SLOTS_ALG_ED25519 in M1).
+ * @param  alg              SLOTS_ALG_ED25519 or SLOTS_ALG_ES256.
  * @param  flags            SLOTS_FLAG_* (RESIDENT = discoverable, Phase 9 M3).
  * @param  user_handle      User handle from MakeCredential (optional;
  *                          may be NULL for Phase-5-style alloc).

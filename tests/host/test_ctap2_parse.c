@@ -98,7 +98,7 @@ static void test_mc_valid(void)
     ctap2_mc_req_t r;
     mc_base(0, 16);
     CHECK(mc(&r) == 0);
-    CHECK(r.alg == -8);                       /* ES256 listed first, skipped */
+    CHECK(r.alg == -7);                       /* first supported, host order (M3b) */
     CHECK(r.rp_id_len == 11 && memcmp(r.rp_id, "example.com", 11) == 0);
     CHECK(r.user_id_len == 16 && r.user_id[0] == 0x22);
     CHECK(r.client_hash[0] == 0x11);
@@ -112,12 +112,49 @@ static void test_mc_algorithms(void)
 {
     ctap2_mc_req_t r;
 
-    /* only ES256 → unsupported */
+    /* only ES256 → ES256 (M3b) */
     begin(4);
     cbor_write_uint(&w, 1); put_hash(32);
     cbor_write_uint(&w, 2); put_rp();
     cbor_write_uint(&w, 3); put_user(8);
     cbor_write_uint(&w, 4); cbor_write_array_header(&w, 1); put_param(-7, "public-key");
+    CHECK(mc(&r) == 0 && r.alg == -7);
+
+    /* host order decides: EdDSA listed first wins */
+    begin(4);
+    cbor_write_uint(&w, 1); put_hash(32);
+    cbor_write_uint(&w, 2); put_rp();
+    cbor_write_uint(&w, 3); put_user(8);
+    cbor_write_uint(&w, 4); cbor_write_array_header(&w, 2);
+    put_param(-8, "public-key");
+    put_param(-7, "public-key");
+    CHECK(mc(&r) == 0 && r.alg == -8);
+
+    /* unsupported entries are skipped: RS256, then ES256 */
+    begin(4);
+    cbor_write_uint(&w, 1); put_hash(32);
+    cbor_write_uint(&w, 2); put_rp();
+    cbor_write_uint(&w, 3); put_user(8);
+    cbor_write_uint(&w, 4); cbor_write_array_header(&w, 2);
+    put_param(-257, "public-key");
+    put_param(-7, "public-key");
+    CHECK(mc(&r) == 0 && r.alg == -7);
+
+    /* only RS256 → unsupported */
+    begin(4);
+    cbor_write_uint(&w, 1); put_hash(32);
+    cbor_write_uint(&w, 2); put_rp();
+    cbor_write_uint(&w, 3); put_user(8);
+    cbor_write_uint(&w, 4); cbor_write_array_header(&w, 1); put_param(-257, "public-key");
+    CHECK(mc(&r) == CTAP2_ERR_UNSUPPORTED_ALGORITHM);
+
+    /* -7 - 2^32 must not truncate to -7 */
+    begin(4);
+    cbor_write_uint(&w, 1); put_hash(32);
+    cbor_write_uint(&w, 2); put_rp();
+    cbor_write_uint(&w, 3); put_user(8);
+    cbor_write_uint(&w, 4); cbor_write_array_header(&w, 1);
+    put_param(-7 - 4294967296LL, "public-key");
     CHECK(mc(&r) == CTAP2_ERR_UNSUPPORTED_ALGORITHM);
 
     /* -8 under a type other than public-key does not count */
