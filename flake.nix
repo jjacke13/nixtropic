@@ -201,6 +201,23 @@
           libtropicSrc = libtropic;
         };
 
+        # Phase 9 M3 (plan item 8): the release image carries no lt-rpc —
+        # no policy setters, no chip RPC.  The debug image must have them,
+        # which proves the check can fail.
+        release-surface = pkgs.runCommand "nixtropic-release-surface" {
+          nativeBuildInputs = [ pkgs.gcc-arm-embedded ];
+        } ''
+          syms='hid_rpc_|handle_force_uv_set|handle_pgp_touch_set|handle_pgp_force_verify_set'
+          if arm-none-eabi-nm ${open-firmware}/firmware.elf | grep -E "$syms"; then
+            echo "release firmware contains lt-rpc symbols" >&2
+            exit 1
+          fi
+          # no grep -q: an early exit SIGPIPEs nm and pipefail fails at random
+          arm-none-eabi-nm ${open-firmware-debug}/firmware.elf | grep -E "$syms" >/dev/null \
+            || { echo "check is blind: debug firmware lacks lt-rpc symbols" >&2; exit 1; }
+          echo "release surface ok" > $out
+        '';
+
         devShell = import ./nix/dev-shell.nix { inherit pkgs; };
 
       in
@@ -216,7 +233,7 @@
 
         devShells.default = devShell;
 
-        checks = { inherit host-tests; };
+        checks = { inherit host-tests release-surface; };
 
         inherit apps;
 
