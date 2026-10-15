@@ -3,7 +3,7 @@
  *
  * Algorithm copied verbatim from the original FIDO `pin_md.c` (Phase
  * 5 M4); only the slot indices and the R-mem accessors are now
- * indirected through the `pin_md_layout_t` so other PINs (OpenPGP
+ * indirected through the `pin_md_legacy_layout_t` so other PINs (OpenPGP
  * PW1/PW3/RC in Phase 8 M4.B+) can re-use the same code.
  *
  * Threat-model contract reproduced from `pin_md.c`:
@@ -15,7 +15,7 @@
  *     firmware behavior — chip-enforced.
  */
 
-#include "pin_md_kernel.h"
+#include "pin_md_legacy.h"
 #include "tropic/tropic.h"
 
 #include <stdint.h>
@@ -51,12 +51,12 @@ static void hmac_sha256_compute(const uint8_t *key, size_t key_len,
     hmac_sha256(key, (uint32_t) key_len, msg, (uint32_t) msg_len, out);
 }
 
-static int valid_layout(const pin_md_layout_t *L)
+static int valid_layout(const pin_md_legacy_layout_t *L)
 {
     if (L == NULL) return 0;
-    if (L->rounds == 0u || L->rounds > PIN_MD_KERNEL_ROUNDS_MAX) return 0;
+    if (L->rounds == 0u || L->rounds > PIN_MD_LEGACY_ROUNDS_MAX) return 0;
     if (L->pin_material_len == 0u ||
-        L->pin_material_len > PIN_MD_KERNEL_MATERIAL_MAX) return 0;
+        L->pin_material_len > PIN_MD_LEGACY_MATERIAL_MAX) return 0;
     if (L->state_get == NULL || L->state_set == NULL ||
         L->state_advance == NULL) return 0;
     return 1;
@@ -64,7 +64,7 @@ static int valid_layout(const pin_md_layout_t *L)
 
 /* ----- Public API ----- */
 
-int pin_md_kernel_is_active(const pin_md_layout_t *L)
+int pin_md_legacy_is_active(const pin_md_legacy_layout_t *L)
 {
     if (!valid_layout(L)) return 0;
     uint8_t active = 0;
@@ -74,7 +74,7 @@ int pin_md_kernel_is_active(const pin_md_layout_t *L)
     return active ? 1 : 0;
 }
 
-int pin_md_kernel_attempts_remaining(const pin_md_layout_t *L)
+int pin_md_legacy_attempts_remaining(const pin_md_legacy_layout_t *L)
 {
     if (!valid_layout(L)) return 0;
     uint8_t active = 0;
@@ -87,18 +87,18 @@ int pin_md_kernel_attempts_remaining(const pin_md_layout_t *L)
     return (int)(L->rounds - next_slot);
 }
 
-int pin_md_kernel_setup(const pin_md_layout_t *L,
+int pin_md_legacy_setup(const pin_md_legacy_layout_t *L,
                         const uint8_t *pin_material)
 {
     if (!valid_layout(L) || pin_material == NULL) return -1;
 
-    uint8_t master_secret[PIN_MD_KERNEL_MASTER_LEN] = {0};
-    uint8_t tag[PIN_MD_KERNEL_TAG_LEN] = {0};
+    uint8_t master_secret[PIN_MD_LEGACY_MASTER_LEN] = {0};
+    uint8_t tag[PIN_MD_LEGACY_TAG_LEN] = {0};
     uint8_t u[32]   = {0};
     uint8_t v[32]   = {0};
     uint8_t w_i[32] = {0};
     uint8_t k_i[32] = {0};
-    uint8_t ci_all[PIN_MD_KERNEL_CI_LEN_MAX] = {0};
+    uint8_t ci_all[PIN_MD_LEGACY_CI_LEN_MAX] = {0};
     uint8_t ignore[32];
     static const uint8_t zeros32[32] = {0};
     static const uint8_t kdf_input_00[1] = {0x00};
@@ -106,15 +106,15 @@ int pin_md_kernel_setup(const pin_md_layout_t *L,
 
     int rc = -2;
 
-    if (tropic_random(master_secret, PIN_MD_KERNEL_MASTER_LEN) != 0) {
+    if (tropic_random(master_secret, PIN_MD_LEGACY_MASTER_LEN) != 0) {
         goto cleanup;
     }
 
     /* t = HMAC(s, 0x00) */
-    hmac_sha256_compute(master_secret, PIN_MD_KERNEL_MASTER_LEN,
+    hmac_sha256_compute(master_secret, PIN_MD_LEGACY_MASTER_LEN,
                         kdf_input_00, 1, tag);
     /* u = HMAC(s, 0x01) */
-    hmac_sha256_compute(master_secret, PIN_MD_KERNEL_MASTER_LEN,
+    hmac_sha256_compute(master_secret, PIN_MD_LEGACY_MASTER_LEN,
                         kdf_input_01, 1, u);
     /* v = HMAC(0, pin_material) */
     hmac_sha256_compute(zeros32, 32, pin_material, L->pin_material_len, v);
@@ -126,7 +126,7 @@ int pin_md_kernel_setup(const pin_md_layout_t *L,
         if (tropic_mac_and_destroy(slot, u, ignore) != 0) goto cleanup;
         hmac_sha256_compute(w_i, 32, pin_material, L->pin_material_len, k_i);
         xor32(master_secret, k_i,
-              &ci_all[(size_t) i * PIN_MD_KERNEL_SLOT_SIZE]);
+              &ci_all[(size_t) i * PIN_MD_LEGACY_SLOT_SIZE]);
     }
 
     if (L->state_set(L->user_ctx, 1u, 0u, tag, ci_all) != 0) {
@@ -146,7 +146,7 @@ cleanup:
     return rc;
 }
 
-int pin_md_kernel_verify(const pin_md_layout_t *L,
+int pin_md_legacy_verify(const pin_md_legacy_layout_t *L,
                          const uint8_t *pin_material,
                          int *out_correct)
 {
@@ -157,8 +157,8 @@ int pin_md_kernel_verify(const pin_md_layout_t *L,
 
     uint8_t active = 0;
     uint8_t next_slot = 0;
-    uint8_t stored_tag[PIN_MD_KERNEL_TAG_LEN] = {0};
-    uint8_t stored_ci[PIN_MD_KERNEL_CI_LEN_MAX] = {0};
+    uint8_t stored_tag[PIN_MD_LEGACY_TAG_LEN] = {0};
+    uint8_t stored_ci[PIN_MD_LEGACY_CI_LEN_MAX] = {0};
 
     if (L->state_get(L->user_ctx, &active, &next_slot,
                      stored_tag, stored_ci) != 0) {
@@ -183,8 +183,8 @@ int pin_md_kernel_verify(const pin_md_layout_t *L,
     uint8_t v[32]   = {0};
     uint8_t w_i[32] = {0};
     uint8_t k_i[32] = {0};
-    uint8_t s_prime[PIN_MD_KERNEL_MASTER_LEN] = {0};
-    uint8_t t_prime[PIN_MD_KERNEL_TAG_LEN] = {0};
+    uint8_t s_prime[PIN_MD_LEGACY_MASTER_LEN] = {0};
+    uint8_t t_prime[PIN_MD_LEGACY_TAG_LEN] = {0};
     static const uint8_t zeros32[32] = {0};
     static const uint8_t kdf_input_00[1] = {0x00};
     static const uint8_t kdf_input_01[1] = {0x01};
@@ -198,20 +198,20 @@ int pin_md_kernel_verify(const pin_md_layout_t *L,
     }
 
     hmac_sha256_compute(w_i, 32, pin_material, L->pin_material_len, k_i);
-    xor32(&stored_ci[(size_t) slot_idx * PIN_MD_KERNEL_SLOT_SIZE], k_i,
+    xor32(&stored_ci[(size_t) slot_idx * PIN_MD_LEGACY_SLOT_SIZE], k_i,
           s_prime);
 
-    hmac_sha256_compute(s_prime, PIN_MD_KERNEL_MASTER_LEN,
+    hmac_sha256_compute(s_prime, PIN_MD_LEGACY_MASTER_LEN,
                         kdf_input_00, 1, t_prime);
 
-    if (ct_memcmp(t_prime, stored_tag, PIN_MD_KERNEL_TAG_LEN) == 0) {
+    if (ct_memcmp(t_prime, stored_tag, PIN_MD_LEGACY_TAG_LEN) == 0) {
         /* PIN correct.  Re-initialise ALL slots in the range so prior
          * wrong attempts (and the slot just consumed by this verify)
          * are all restored to K = f(u_setup). */
         uint8_t new_u[32] = {0};
         uint8_t ignore[32];
         int reinit_failed = 0;
-        hmac_sha256_compute(s_prime, PIN_MD_KERNEL_MASTER_LEN,
+        hmac_sha256_compute(s_prime, PIN_MD_LEGACY_MASTER_LEN,
                             kdf_input_01, 1, new_u);
         for (uint8_t i = 0; i < L->rounds; ++i) {
             if (tropic_mac_and_destroy((uint8_t)(L->md_slot_base + i),

@@ -1,20 +1,20 @@
 /*
- * Host tests for firmware/src/tropic/pin_md_kernel.c against the mock chip.
+ * Host tests for firmware/src/tropic/pin_md_legacy.c against the mock chip.
  * Phase 9 M0 baseline: pins down today's behaviour so M4 changes show up.
  */
 #include <string.h>
 
 #include "check.h"
 #include "mock_tropic.h"
-#include "tropic/pin_md_kernel.h"
+#include "tropic/pin_md_legacy.h"
 
 #define ROUNDS 3u
 
 /* In-memory stand-in for the caller's R-mem state record. */
 static struct {
     uint8_t active, next;
-    uint8_t tag[PIN_MD_KERNEL_TAG_LEN];
-    uint8_t ci[ROUNDS * PIN_MD_KERNEL_SLOT_SIZE];
+    uint8_t tag[PIN_MD_LEGACY_TAG_LEN];
+    uint8_t ci[ROUNDS * PIN_MD_LEGACY_SLOT_SIZE];
     unsigned sets;
 } st;
 
@@ -47,7 +47,7 @@ static int st_advance(void *ctx, uint8_t *out_new)
     return 0;
 }
 
-static const pin_md_layout_t L = {
+static const pin_md_legacy_layout_t L = {
     .md_slot_base = 8, .rounds = ROUNDS, .pin_material_len = 16,
     .user_ctx = NULL, .state_get = st_get, .state_set = st_set, .state_advance = st_advance,
 };
@@ -64,17 +64,17 @@ static void fresh(void)
 static int verify(const uint8_t *pin, int *correct)
 {
     *correct = -1;
-    return pin_md_kernel_verify(&L, pin, correct);
+    return pin_md_legacy_verify(&L, pin, correct);
 }
 
 static void test_setup_then_correct(void)
 {
     int ok;
     fresh();
-    CHECK(pin_md_kernel_setup(&L, PIN) == 0);
-    CHECK(pin_md_kernel_is_active(&L));
+    CHECK(pin_md_legacy_setup(&L, PIN) == 0);
+    CHECK(pin_md_legacy_is_active(&L));
     CHECK(verify(PIN, &ok) == 0 && ok == 1);
-    CHECK(pin_md_kernel_attempts_remaining(&L) == (int) ROUNDS);
+    CHECK(pin_md_legacy_attempts_remaining(&L) == (int) ROUNDS);
     CHECK(verify(PIN, &ok) == 0 && ok == 1);   /* slots were re-initialised */
 }
 
@@ -82,12 +82,12 @@ static void test_wrong_then_correct_restores(void)
 {
     int ok;
     fresh();
-    CHECK(pin_md_kernel_setup(&L, PIN) == 0);
+    CHECK(pin_md_legacy_setup(&L, PIN) == 0);
     CHECK(verify(WRONG, &ok) == 0 && ok == 0);
     CHECK(verify(WRONG, &ok) == 0 && ok == 0);
-    CHECK(pin_md_kernel_attempts_remaining(&L) == (int) ROUNDS - 2);
+    CHECK(pin_md_legacy_attempts_remaining(&L) == (int) ROUNDS - 2);
     CHECK(verify(PIN, &ok) == 0 && ok == 1);
-    CHECK(pin_md_kernel_attempts_remaining(&L) == (int) ROUNDS);
+    CHECK(pin_md_legacy_attempts_remaining(&L) == (int) ROUNDS);
     CHECK(verify(PIN, &ok) == 0 && ok == 1);
 }
 
@@ -95,11 +95,11 @@ static void test_lockout(void)
 {
     int ok;
     fresh();
-    CHECK(pin_md_kernel_setup(&L, PIN) == 0);
+    CHECK(pin_md_legacy_setup(&L, PIN) == 0);
     for (unsigned i = 0; i < ROUNDS; ++i) {
         CHECK(verify(WRONG, &ok) == 0 && ok == 0);
     }
-    CHECK(pin_md_kernel_attempts_remaining(&L) == 0);
+    CHECK(pin_md_legacy_attempts_remaining(&L) == 0);
     CHECK(verify(PIN, &ok) == -2);              /* even the right PIN */
 }
 
@@ -109,8 +109,8 @@ static void test_setup_fault_reported(void)
 {
     fresh();
     mock_fail_nth(MOCK_OP_MAC_AND_DESTROY, 2, -21, false);
-    CHECK(pin_md_kernel_setup(&L, PIN) == -2);
-    CHECK(!pin_md_kernel_is_active(&L));
+    CHECK(pin_md_legacy_setup(&L, PIN) == -2);
+    CHECK(!pin_md_legacy_is_active(&L));
     CHECK(st.sets == 0);
 }
 
@@ -120,10 +120,10 @@ static void test_verify_fault_counts_attempt(void)
 {
     int ok;
     fresh();
-    CHECK(pin_md_kernel_setup(&L, PIN) == 0);
+    CHECK(pin_md_legacy_setup(&L, PIN) == 0);
     mock_fail_nth(MOCK_OP_MAC_AND_DESTROY, 1, -21, false);
     CHECK(verify(PIN, &ok) == -1 && ok == 0);
-    CHECK(pin_md_kernel_attempts_remaining(&L) == (int) ROUNDS - 1);
+    CHECK(pin_md_legacy_attempts_remaining(&L) == (int) ROUNDS - 1);
 }
 
 int main(void)
@@ -133,5 +133,5 @@ int main(void)
     test_lockout();
     test_setup_fault_reported();
     test_verify_fault_counts_attempt();
-    return check_done("pin_md_kernel");
+    return check_done("pin_md_legacy");
 }

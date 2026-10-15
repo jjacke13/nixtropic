@@ -1,8 +1,8 @@
 /*
  * OpenPGP MAC-and-Destroy PIN scheme — implementation.
  *
- * Glues `tropic/pin_md_kernel` to three OpenPGP-specific
- * `pin_md_layout_t` instances (one per PW1 / PW3 / RC) using R-mem
+ * Glues `tropic/pin_md_legacy` to three OpenPGP-specific
+ * `pin_md_legacy_layout_t` instances (one per PW1 / PW3 / RC) using R-mem
  * slots 50 / 51 / 52 and TROPIC01 M&D slots 8..10 / 11..13 / 14..16.
  *
  * The R-mem state layout for each PIN is identical (138 B used of
@@ -23,7 +23,7 @@
 
 #include "openpgp_pin_md.h"
 
-#include "tropic/pin_md_kernel.h"
+#include "tropic/pin_md_legacy.h"
 #include "tropic/tropic.h"
 
 #include <stdint.h>
@@ -60,9 +60,9 @@ static const uint8_t MAGIC[MAGIC_LEN] = { 'P', 'M', 'D', '0' };
 
 #define RMEM_PRIMARY_SIZE  256u
 
-_Static_assert(OPENPGP_PIN_MD_TAG_LEN == PIN_MD_KERNEL_TAG_LEN,
+_Static_assert(OPENPGP_PIN_MD_TAG_LEN == PIN_MD_LEGACY_TAG_LEN,
                "OpenPGP M&D tag length must match kernel");
-_Static_assert(OPENPGP_PIN_MD_ROUNDS <= PIN_MD_KERNEL_ROUNDS_MAX,
+_Static_assert(OPENPGP_PIN_MD_ROUNDS <= PIN_MD_LEGACY_ROUNDS_MAX,
                "OpenPGP M&D rounds exceeds kernel maximum");
 
 /* ---- Shared R-mem state callbacks (ctx = R-mem slot index) ---- */
@@ -92,7 +92,7 @@ static int read_payload(uint16_t rmem_slot, uint8_t buf[RMEM_PRIMARY_SIZE])
 static int oppgp_state_get(void *ctx,
                            uint8_t *out_active,
                            uint8_t *out_next_slot,
-                           uint8_t  out_tag[PIN_MD_KERNEL_TAG_LEN],
+                           uint8_t  out_tag[PIN_MD_LEGACY_TAG_LEN],
                            uint8_t *out_ci)
 {
     uint16_t slot = ctx_to_slot(ctx);
@@ -108,7 +108,7 @@ static int oppgp_state_get(void *ctx,
         /* Magic mismatch → no state yet.  Fresh defaults. */
         if (out_active)    *out_active = 0u;
         if (out_next_slot) *out_next_slot = 0u;
-        if (out_tag)       memset(out_tag, 0, PIN_MD_KERNEL_TAG_LEN);
+        if (out_tag)       memset(out_tag, 0, PIN_MD_LEGACY_TAG_LEN);
         if (out_ci)        memset(out_ci,  0, OPENPGP_PIN_MD_CI_LEN);
         memzero(buf, sizeof buf);
         return 0;
@@ -116,7 +116,7 @@ static int oppgp_state_get(void *ctx,
 
     if (out_active)    *out_active    = buf[OFF_ACTIVE];
     if (out_next_slot) *out_next_slot = buf[OFF_NEXT];
-    if (out_tag)       memcpy(out_tag, &buf[OFF_TAG], PIN_MD_KERNEL_TAG_LEN);
+    if (out_tag)       memcpy(out_tag, &buf[OFF_TAG], PIN_MD_LEGACY_TAG_LEN);
     if (out_ci)        memcpy(out_ci,  &buf[OFF_CI],  OPENPGP_PIN_MD_CI_LEN);
 
     memzero(buf, sizeof buf);
@@ -126,7 +126,7 @@ static int oppgp_state_get(void *ctx,
 static int oppgp_state_set(void *ctx,
                            uint8_t active,
                            uint8_t next_slot,
-                           const uint8_t tag[PIN_MD_KERNEL_TAG_LEN],
+                           const uint8_t tag[PIN_MD_LEGACY_TAG_LEN],
                            const uint8_t *ci)
 {
     uint16_t slot = ctx_to_slot(ctx);
@@ -138,7 +138,7 @@ static int oppgp_state_set(void *ctx,
     buf[OFF_SCHEMA + 1u] = SCHEMA_VER;
     buf[OFF_ACTIVE]      = active;
     buf[OFF_NEXT]        = next_slot;
-    if (tag) memcpy(&buf[OFF_TAG], tag, PIN_MD_KERNEL_TAG_LEN);
+    if (tag) memcpy(&buf[OFF_TAG], tag, PIN_MD_LEGACY_TAG_LEN);
     if (ci)  memcpy(&buf[OFF_CI],  ci,  OPENPGP_PIN_MD_CI_LEN);
 
     if (tropic_rmem_erase(slot) != 0) {
@@ -154,7 +154,7 @@ static int oppgp_state_advance(void *ctx, uint8_t *out_new)
 {
     uint8_t active = 0;
     uint8_t next   = 0;
-    uint8_t tag[PIN_MD_KERNEL_TAG_LEN];
+    uint8_t tag[PIN_MD_LEGACY_TAG_LEN];
     uint8_t ci[OPENPGP_PIN_MD_CI_LEN];
 
     if (oppgp_state_get(ctx, &active, &next, tag, ci) != 0) {
@@ -174,7 +174,7 @@ static int oppgp_state_advance(void *ctx, uint8_t *out_new)
 
 /* ---- Per-PIN layouts ---- */
 
-static const pin_md_layout_t LAYOUTS[OPENPGP_PIN_MD_COUNT] = {
+static const pin_md_legacy_layout_t LAYOUTS[OPENPGP_PIN_MD_COUNT] = {
     [OPENPGP_PIN_MD_PW1] = {
         .md_slot_base     = OPENPGP_MD_SLOT_BASE_PW1,
         .rounds           = OPENPGP_PIN_MD_ROUNDS,
@@ -204,7 +204,7 @@ static const pin_md_layout_t LAYOUTS[OPENPGP_PIN_MD_COUNT] = {
     },
 };
 
-static const pin_md_layout_t *layout_for(enum openpgp_pin_md_which which)
+static const pin_md_legacy_layout_t *layout_for(enum openpgp_pin_md_which which)
 {
     if ((unsigned) which >= (unsigned) OPENPGP_PIN_MD_COUNT) return NULL;
     return &LAYOUTS[which];
@@ -215,32 +215,32 @@ static const pin_md_layout_t *layout_for(enum openpgp_pin_md_which which)
 int openpgp_pin_md_setup(enum openpgp_pin_md_which which,
                          const uint8_t pin_material[OPENPGP_PIN_MD_MATERIAL_LEN])
 {
-    const pin_md_layout_t *L = layout_for(which);
+    const pin_md_legacy_layout_t *L = layout_for(which);
     if (!L) return -1;
-    return pin_md_kernel_setup(L, pin_material);
+    return pin_md_legacy_setup(L, pin_material);
 }
 
 int openpgp_pin_md_verify(enum openpgp_pin_md_which which,
                           const uint8_t pin_material[OPENPGP_PIN_MD_MATERIAL_LEN],
                           int *out_correct)
 {
-    const pin_md_layout_t *L = layout_for(which);
+    const pin_md_legacy_layout_t *L = layout_for(which);
     if (!L) return -1;
-    return pin_md_kernel_verify(L, pin_material, out_correct);
+    return pin_md_legacy_verify(L, pin_material, out_correct);
 }
 
 int openpgp_pin_md_is_active(enum openpgp_pin_md_which which)
 {
-    const pin_md_layout_t *L = layout_for(which);
+    const pin_md_legacy_layout_t *L = layout_for(which);
     if (!L) return 0;
-    return pin_md_kernel_is_active(L);
+    return pin_md_legacy_is_active(L);
 }
 
 int openpgp_pin_md_attempts_remaining(enum openpgp_pin_md_which which)
 {
-    const pin_md_layout_t *L = layout_for(which);
+    const pin_md_legacy_layout_t *L = layout_for(which);
     if (!L) return 0;
-    return pin_md_kernel_attempts_remaining(L);
+    return pin_md_legacy_attempts_remaining(L);
 }
 
 int openpgp_pin_md_factory_reset_all(void)
