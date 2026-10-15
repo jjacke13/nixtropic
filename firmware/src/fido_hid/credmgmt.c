@@ -29,7 +29,10 @@
 #include "credstore.h"
 #include "slots.h"
 #include "pin.h"
+#include "pin_token.h"
 #include "proto.h"
+
+#include "stm32u5xx_hal.h"   /* HAL_GetTick: token timers */
 
 #define CREDMGMT_CMD_BYTE          0x0Au   /* matches CTAP2_CMD_CREDENTIAL_MGMT */
 #define CREDMGMT_PIN_PROTO_V1      1u
@@ -100,7 +103,7 @@ static int build_rp_list(int8_t out_slots[SLOTS_MAX])
 {
     int count = 0;
     uint32_t bitmap = slots_bitmap();
-    for (int i = 0; i < (int) SLOTS_MAX; ++i) {
+    for (int i = 0; i < (int) FIDO_SLOTS_MAX; ++i) {
         if ((bitmap & (1u << i)) == 0u) {
             continue;
         }
@@ -132,7 +135,7 @@ static int build_cred_list_for_rp(const uint8_t rp_hash[SLOTS_RP_ID_HASH_LEN],
 {
     int count = 0;
     uint32_t bitmap = slots_bitmap();
-    for (int i = 0; i < (int) SLOTS_MAX; ++i) {
+    for (int i = 0; i < (int) FIDO_SLOTS_MAX; ++i) {
         if ((bitmap & (1u << i)) == 0u) {
             continue;
         }
@@ -170,16 +173,6 @@ static void write_pkc_descriptor(cbor_writer_t *w,
     cbor_write_text(w, "public-key");
 }
 
-/* Reconstruct an 18 B credential ID from a slot index + the metadata's
- * nonce.  Mirrors slots.c's emit format. */
-static void build_cred_id_for_slot(int slot_idx, const slot_meta_t *meta,
-                                   uint8_t out_cred_id[SLOTS_CRED_ID_LEN])
-{
-    out_cred_id[0] = 0x01u;
-    out_cred_id[1] = (uint8_t) slot_idx;
-    memcpy(&out_cred_id[2], meta->cred_id_nonce, SLOTS_CRED_ID_NONCE_LEN);
-}
-
 /* PublicKeyCredentialUserEntity from a slot's user_handle.
  * Spec says `id` is required; we pass user_handle bytes verbatim.
  * If user_handle_len == 0 (Phase 5 cred, or omitted at MakeCred), we
@@ -202,8 +195,14 @@ static void write_user_entity(cbor_writer_t *w,
 
 static int do_get_creds_metadata(uint8_t *resp, size_t resp_max)
 {
+    /* CTAP §6.8.2: cm permission and NO permissions RP ID. */
+    if (puat_has_rp()) {
+        resp[0] = CTAP2_ERR_PIN_AUTH_INVALID;
+        return 1;
+    }
+    /* Capacity = the 29 FIDO ECC slots (29..31 hold the OpenPGP keys). */
     int used = slots_count_used();
-    int free_slots = (int) SLOTS_MAX - used;
+    int free_slots = (int) FIDO_SLOTS_MAX - used;
     if (free_slots < 0) free_slots = 0;
 
     if (resp_max < 1u) return -1;
@@ -274,6 +273,11 @@ static int write_rp_entry(uint8_t *resp, size_t resp_max,
 
 static int do_enum_rps_begin(uint8_t *resp, size_t resp_max)
 {
+    /* CTAP §6.8.3: cm permission and NO permissions RP ID. */
+    if (puat_has_rp()) {
+        resp[0] = CTAP2_ERR_PIN_AUTH_INVALID;
+        return 1;
+    }
     s_iter_rp_count = build_rp_list(s_iter_rp_slots);
     s_iter_rp_pos = 0;
     s_iter_kind = ITER_RPS;
@@ -322,7 +326,7 @@ static int write_cred_entry(uint8_t *resp, size_t resp_max,
     }
 
     uint8_t cred_id[SLOTS_CRED_ID_LEN];
-    build_cred_id_for_slot(slot_idx, &meta, cred_id);
+    slots_make_cred_id(slot_idx, &meta, cred_id);
 
     if (resp_max < 1u) return -1;
     resp[0] = CTAP2_OK;
@@ -388,6 +392,11 @@ static int do_enum_creds_begin(const uint8_t *params, size_t params_len,
     }
     if (!got_rp_hash) {
         resp[0] = CTAP2_ERR_MISSING_PARAMETER;
+        return 1;
+    }
+    /* CTAP §6.8.4: a token bound to an RP lists only that RP. */
+    if (!puat_rp_matches(rp_hash)) {
+        resp[0] = CTAP2_ERR_PIN_AUTH_INVALID;
         return 1;
     }
 
@@ -488,12 +497,46 @@ static int do_delete_credential(const uint8_t *params, size_t params_len,
         resp[0] = CTAP2_ERR_NO_CREDENTIALS;
         return 1;
     }
+    /* CTAP §6.8.5: a token bound to an RP deletes only its credentials. */
+    slot_meta_t meta;
+    if (slots_read_meta((int) handle, &meta) != 0) {
+        resp[0] = CTAP2_ERR_OTHER;
+        return 1;
+    }
+    if (!puat_rp_matches(meta.rp_id_hash)) {
+        resp[0] = CTAP2_ERR_PIN_AUTH_INVALID;
+        return 1;
+    }
     if (credstore_erase_slot((int) handle) != 0) {
         resp[0] = CTAP2_ERR_OTHER;
         return 1;
     }
     resp[0] = CTAP2_OK;
     return 1;
+}
+
+/* pinUvAuthParam = LEFT(HMAC-SHA-256(token, subCommand || subCommandParams), 16)
+ * (CTAP §6.8, no 0x0A prefix: libfido2 follows the spec).  The token must
+ * also hold the cm permission.  Returns 0 or the CTAP2 status. */
+static int check_cm_token(int sub, const uint8_t *params_p, size_t params_len,
+                          int pin_proto, const uint8_t *pin_auth_p, size_t pin_auth_len)
+{
+    if (pin_auth_p == NULL) return CTAP2_ERR_PUAT_REQUIRED;
+    if (pin_proto < 0) return CTAP2_ERR_MISSING_PARAMETER;
+    if (pin_proto != (int) CREDMGMT_PIN_PROTO_V1) return CTAP1_ERR_INVALID_PARAMETER;
+
+    uint8_t auth_input[1 + 512];
+    if (params_len > (sizeof auth_input - 1u)) return CTAP2_ERR_REQUEST_TOO_LARGE;
+    auth_input[0] = (uint8_t) sub;
+    if (params_len > 0u && params_p != NULL) {
+        memcpy(&auth_input[1], params_p, params_len);
+    }
+    if (puat_verify(pin_auth_p, pin_auth_len, auth_input, 1u + params_len,
+                    HAL_GetTick()) != 0
+        || !puat_has_perm(PUAT_PERM_CM)) {
+        return CTAP2_ERR_PIN_AUTH_INVALID;
+    }
+    return 0;
 }
 
 /* ----- Top-level CBOR dispatch ----- */
@@ -517,7 +560,7 @@ int credmgmt_handle_cbor(const uint8_t *req, size_t req_len,
     int sub = -1;
     const uint8_t *params_p = NULL;
     size_t params_len = 0;
-    int pin_proto = 0;
+    int pin_proto = -1;                 /* absent */
     const uint8_t *pin_auth_p = NULL;
     size_t pin_auth_len = 0;
 
@@ -533,7 +576,7 @@ int credmgmt_handle_cbor(const uint8_t *req, size_t req_len,
                 resp[0] = CTAP2_ERR_INVALID_CBOR;
                 return 1;
             }
-            sub = (int) v;
+            sub = (v > 0xFFu) ? 0x100 : (int) v;   /* 0x100: no such sub-command */
         } else if (key == 2u) {
             /* Capture raw bytes of subCommandParams for HMAC input. */
             size_t start = r.pos;
@@ -549,7 +592,7 @@ int credmgmt_handle_cbor(const uint8_t *req, size_t req_len,
                 resp[0] = CTAP2_ERR_INVALID_CBOR;
                 return 1;
             }
-            pin_proto = (int) v;
+            pin_proto = (v > 0xFFFFu) ? 0xFFFF : (int) v;
         } else if (key == 4u) {
             if (cbor_reader_read_bytes(&r, &pin_auth_p, &pin_auth_len) < 0) {
                 resp[0] = CTAP2_ERR_INVALID_CBOR;
@@ -568,44 +611,17 @@ int credmgmt_handle_cbor(const uint8_t *req, size_t req_len,
         return 1;
     }
 
-    /* PIN auth required for ALL credMgmt sub-commands per CTAP2.1 §6.8.
-     * Iterator-continuation sub-commands (GetNextRP, GetNextCredential)
-     * spec-allow either fresh pinAuth OR re-use of the prior Begin's
-     * authentication context.  Pragmatically, libfido2 sends pinAuth on
-     * EVERY sub-command including Get-Next, so we just verify it
-     * every time. */
-    if (pin_auth_p == NULL || pin_auth_len != 16u) {
-        resp[0] = CTAP2_ERR_PIN_REQUIRED;
-        return 1;
-    }
-    if (pin_proto != (int) CREDMGMT_PIN_PROTO_V1) {
-        resp[0] = CTAP1_ERR_INVALID_PARAMETER;
-        return 1;
-    }
-    /* pinUvAuthParam per CTAP2.1 §6.8.2 step 2:
-     *   HMAC-SHA-256(pinUvAuthToken, subCommand || subCommandParams)[:16]
-     *
-     * Spec does NOT prepend the outer cmd byte 0x0a — sub-command alone
-     * is the domain tag.  Cross-command replay defense (e.g. pinAuth
-     * from MakeCred against credMgmt) comes from MakeCred's input being
-     * a 32-byte clientDataHash vs. credMgmt's being subCmd || params —
-     * different byte strings, different HMACs.
-     *
-     * (Earlier implementation prepended 0x0a per a cpp-reviewer
-     * recommendation; that broke libfido2 compat which strictly follows
-     * the spec.  Spec rules; recommendation was over-engineering.) */
-    uint8_t auth_input[1 + 512];
-    if (params_len > (sizeof auth_input - 1u)) {
-        resp[0] = CTAP2_ERR_REQUEST_TOO_LARGE;
-        return 1;
-    }
-    auth_input[0] = (uint8_t) sub;
-    if (params_len > 0u && params_p != NULL) {
-        memcpy(&auth_input[1], params_p, params_len);
-    }
-    if (pin_verify_pinauth_data(pin_auth_p, auth_input, 1u + params_len) != 0) {
-        resp[0] = CTAP2_ERR_PIN_AUTH_INVALID;
-        return 1;
+    /* Begin, metadata and delete need a token with the cm permission
+     * (CTAP §6.8.2-6.8.5); the RP-ID rule is checked per sub-command.
+     * GetNextRP / GetNextCredential carry no pinUvAuthParam: they
+     * continue what an authenticated Begin opened (libfido2 sends none). */
+    if (sub != (int) SUB_ENUM_RPS_GET_NEXT && sub != (int) SUB_ENUM_CREDS_GET_NEXT) {
+        int rc = check_cm_token(sub, params_p, params_len, pin_proto,
+                                pin_auth_p, pin_auth_len);
+        if (rc != 0) {
+            resp[0] = (uint8_t) rc;
+            return 1;
+        }
     }
 
     /* Iterator-reset semantics: any sub-command other than the matching

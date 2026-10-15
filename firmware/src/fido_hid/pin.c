@@ -838,19 +838,6 @@ int pin_token_is_valid(void)
     return puat_token() != NULL;
 }
 
-int pin_verify_pinauth(const uint8_t pinauth_16[PIN_AUTH_LEN],
-                       const uint8_t client_data_hash_32[32])
-{
-    return puat_verify(pinauth_16, PIN_AUTH_LEN, client_data_hash_32, 32,
-                       HAL_GetTick());
-}
-
-int pin_verify_pinauth_data(const uint8_t pinauth_16[PIN_AUTH_LEN],
-                            const uint8_t *data, size_t data_len)
-{
-    return puat_verify(pinauth_16, PIN_AUTH_LEN, data, data_len, HAL_GetTick());
-}
-
 int pin_handle_cbor(const uint8_t *req, size_t req_len,
                     uint8_t *resp, size_t resp_max)
 {

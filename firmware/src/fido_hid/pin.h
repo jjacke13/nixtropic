@@ -5,10 +5,9 @@
  *   pin_init()                — bring up ephemeral P-256 keypair at boot
  *   pin_handle_cbor()         — handle CTAP2_CMD_CLIENT_PIN sub-commands
  *   pin_is_set()              — is a PIN currently configured (from R-mem)
- *   pin_token_is_valid()      — has the host successfully run getPinToken
- *                               this boot? (RAM token still exists)
- *   pin_verify_pinauth()      — check a 16 B pinAuth from MakeCred/GetAssertion
- *                               against (pinUvAuthToken, clientDataHash)
+ *   pin_reset_ram()           — forget token + in-boot PIN failure state
+ *   pin_token_is_valid()      — is a pinUvAuthToken in use? (debug lt-rpc gate)
+ *   Token checks for MakeCred / GetAssertion / credMgmt / config: pin_token.h
  *
  * Crypto layout for pinProtocol version 1:
  *   - Authenticator: ephemeral P-256 keypair, regenerated at boot AND
@@ -86,40 +85,10 @@ int pin_handle_cbor(const uint8_t *req, size_t req_len,
 int pin_is_set(void);
 
 /**
- * @brief Has the platform performed a successful getPinToken this boot?
- *        Required before MakeCred/GetAssertion when pin_is_set().
+ * @brief Is a pinUvAuthToken in use (issued, not reset)?  Only the debug
+ *        lt-rpc setters use this; CTAP commands check the token with
+ *        pin_token.h (permissions, RP ID, timers).
  */
 int pin_token_is_valid(void);
-
-/**
- * @brief Verify a pinAuth tag from a MakeCred/GetAssertion request.
- *        Computes LEFT(HMAC-SHA256(pinUvAuthToken, client_data_hash), 16)
- *        and constant-time-compares against the supplied tag.
- *
- * @param pinauth_16          The 16 B tag from CBOR key 8 (MakeCred) / 6 (GetAssertion)
- * @param client_data_hash_32 The 32 B clientDataHash from CBOR key 1 (MakeCred) / 2 (GetAssertion)
- * @return 0 on match; -1 on mismatch / no token available
- */
-int pin_verify_pinauth(const uint8_t pinauth_16[PIN_AUTH_LEN],
-                       const uint8_t client_data_hash_32[32]);
-
-/**
- * @brief Variable-length pinUvAuthParam verifier (Phase 6 M3).
- *
- *        Computes LEFT(HMAC-SHA256(pinUvAuthToken, data || data_len B), 16)
- *        and constant-time-compares against `pinauth_16`.
- *
- *        Used by `authenticatorCredentialManagement` (CTAP2 cmd 0x0A)
- *        where the HMAC input is domain-separated as
- *           [0x0a, subCommand, ...subCommandParams bytes...]
- *        rather than the fixed 32-byte clientDataHash used by
- *        MakeCred / GetAssertion.  H3 defense in
- *        docs/PHASE-6-PLAN.md §3 — prevents replay of a pinAuth from one
- *        CTAP context (MakeCred) against another (credMgmt sub-command).
- *
- * @return 0 on match; -1 on mismatch or no active token.
- */
-int pin_verify_pinauth_data(const uint8_t pinauth_16[PIN_AUTH_LEN],
-                            const uint8_t *data, size_t data_len);
 
 #endif /* NIXTROPIC_FIDO_HID_PIN_H */

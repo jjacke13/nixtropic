@@ -31,6 +31,15 @@
  * credMgmt's is `subCmd || params` which starts with a small integer.
  * Different byte sequences, different HMAC outputs.)
  *
+ * Phase 9 M3 — permissions (CTAP2.1 §6.8.2-6.8.5): Begin, metadata and
+ * delete need a token with the cm permission.  A token bound to an RP
+ * may list or delete only that RP's credentials; metadata and RP
+ * enumeration need an unbound token.  GetNextRP / GetNextCredential
+ * carry no pinUvAuthParam (libfido2 sends none): they continue an
+ * authenticated Begin.  Every FIDO credential is listed, discoverable or
+ * not, because each one holds one of the 29 chip slots (documented
+ * deviation: CTAP lists discoverable credentials only).
+ *
  * Iterator state machine: any sub-command OTHER than the matching
  * GetNext* resets the iterator.  Strictly spec-conformant per
  * CTAP2.1 §6.8 (iterator expires on "any other authenticator operation").
