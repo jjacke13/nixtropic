@@ -1,6 +1,6 @@
 /*
  * Host tests for firmware/src/fido_hid/cbor.c.  Phase 9 M0 baseline;
- * M3 adds the nesting-depth and length-bound cases.
+ * M3 adds whole-message validation (depth, bounds) and the skip() cap.
  */
 #include <string.h>
 
@@ -70,11 +70,84 @@ static void test_indefinite_rejected(void)
     CHECK(cbor_reader_skip(&r) == -1);
 }
 
+/* Phase 9 M3: whole-message validation (CTAP §8: at most 4 nesting levels). */
+static void test_validate(void)
+{
+    /* {1: [{2: [3]}]} — 4 levels: accepted */
+    static const uint8_t ok4[] = { 0xa1, 0x01, 0x81, 0xa1, 0x02, 0x81, 0x03 };
+    CHECK(cbor_validate(ok4, sizeof ok4) == 0);
+
+    /* {1: [{2: [[3]]}]} — 5 levels: rejected */
+    static const uint8_t deep5[] = { 0xa1, 0x01, 0x81, 0xa1, 0x02, 0x81, 0x81, 0x03 };
+    CHECK(cbor_validate(deep5, sizeof deep5) == -1);
+
+    /* scalars and strings at the top level are fine */
+    static const uint8_t s[] = { 0x63, 'a', 'b', 'c' };
+    CHECK(cbor_validate(s, sizeof s) == 0);
+
+    /* one item, then a stray byte */
+    static const uint8_t trailing[] = { 0xa0, 0x00 };
+    CHECK(cbor_validate(trailing, sizeof trailing) == -1);
+
+    /* empty input */
+    CHECK(cbor_validate(trailing, 0) == -1);
+
+    /* byte string longer than the buffer */
+    static const uint8_t longbs[] = { 0xa1, 0x01, 0x45, 0x00, 0x00 };
+    CHECK(cbor_validate(longbs, sizeof longbs) == -1);
+
+    /* array claiming 2^32 items in 9 bytes: rejected without looping */
+    static const uint8_t huge[] = { 0x9b, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00 };
+    CHECK(cbor_validate(huge, sizeof huge) == -1);
+
+    /* map claiming more pairs than bytes left */
+    static const uint8_t bigmap[] = { 0xb8, 0xff, 0x01, 0x02 };
+    CHECK(cbor_validate(bigmap, sizeof bigmap) == -1);
+
+    /* map with a key and no value */
+    static const uint8_t halfmap[] = { 0xa1, 0x01 };
+    CHECK(cbor_validate(halfmap, sizeof halfmap) == -1);
+
+    /* tag 1 (major type 6) */
+    static const uint8_t tag[] = { 0xc1, 0x01 };
+    CHECK(cbor_validate(tag, sizeof tag) == -1);
+
+    /* indefinite-length map */
+    static const uint8_t indef[] = { 0xbf, 0x01, 0x02, 0xff };
+    CHECK(cbor_validate(indef, sizeof indef) == -1);
+
+    /* lone break byte */
+    static const uint8_t brk[] = { 0xff };
+    CHECK(cbor_validate(brk, sizeof brk) == -1);
+
+    /* true / false / null and a float are scalars */
+    static const uint8_t simple[] = { 0x84, 0xf5, 0xf4, 0xf6, 0xf9, 0x3c, 0x00 };
+    CHECK(cbor_validate(simple, sizeof simple) == 0);
+}
+
+/* skip() has its own recursion cap: deep nesting fails instead of
+ * exhausting the stack, even without a cbor_validate() first. */
+static void test_skip_depth_cap(void)
+{
+    uint8_t deep[300];
+    memset(deep, 0x81, sizeof deep);       /* [[[[ ... */
+    deep[sizeof deep - 1] = 0x00;
+    cbor_reader_t r;
+    cbor_reader_init(&r, deep, sizeof deep);
+    CHECK(cbor_reader_skip(&r) == -1);
+
+    static const uint8_t ok[] = { 0x81, 0x81, 0x81, 0x00 };
+    cbor_reader_init(&r, ok, sizeof ok);
+    CHECK(cbor_reader_skip(&r) == 0 && r.pos == sizeof ok);
+}
+
 int main(void)
 {
     test_roundtrip();
     test_writer_overflow();
     test_truncated();
     test_indefinite_rejected();
+    test_validate();
+    test_skip_depth_cap();
     return check_done("cbor");
 }

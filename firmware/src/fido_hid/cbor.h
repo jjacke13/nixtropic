@@ -82,6 +82,13 @@ int cbor_reader_read_array_header(cbor_reader_t *r, size_t *count);
 /* Read a map header (mt 5). Returns the key/value pair count. */
 int cbor_reader_read_map_header(cbor_reader_t *r, size_t *count);
 
+/* Check a whole request once, before any field is parsed (Phase 9 M3):
+ * exactly one well-formed item filling buf[0..len), at most
+ * CBOR_MAX_DEPTH nested maps/arrays (CTAP §8), every length inside the
+ * buffer, no tags, no indefinite lengths.  Returns 0 if valid, -1 if not. */
+#define CBOR_MAX_DEPTH 4u
+int cbor_validate(const uint8_t *buf, size_t len);
+
 /* Skip exactly one CBOR data item (recursively, for containers). Used
  * for ignoring unknown / non-relevant map entries. Returns 0/-1. */
 int cbor_reader_skip(cbor_reader_t *r);

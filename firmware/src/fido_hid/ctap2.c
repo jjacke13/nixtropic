@@ -186,6 +186,14 @@ int fido_hid_cbor_dispatch(const uint8_t *req, size_t req_len,
         credmgmt_reset_iterator();
     }
 
+    /* Phase 9 M3: one structural check of the whole parameter map before
+     * any handler reads a field (nesting depth, lengths, no trailing
+     * bytes).  The handlers' own checks stay as a second line. */
+    if (req_len > 1u && cbor_validate(&req[1], req_len - 1u) != 0) {
+        resp[0] = CTAP2_ERR_INVALID_CBOR;
+        return 1;
+    }
+
     switch (sub) {
     case CTAP2_CMD_GET_INFO: {
         int n = build_get_info(&resp[1], resp_max - 1u);

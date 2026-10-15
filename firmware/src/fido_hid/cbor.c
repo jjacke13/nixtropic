@@ -251,10 +251,15 @@ int cbor_reader_read_map_header(cbor_reader_t *r, size_t *count)
     return 0;
 }
 
-int cbor_reader_skip(cbor_reader_t *r)
+/* Second line of defence behind cbor_validate(): a hard cap so a deeply
+ * nested input can never exhaust the stack, whoever calls skip(). */
+#define CBOR_SKIP_MAX_DEPTH 16u
+
+static int skip_item(cbor_reader_t *r, unsigned depth)
 {
     uint8_t mt;
     uint64_t v;
+    if (depth > CBOR_SKIP_MAX_DEPTH) { r->err = 1; return -1; }
     if (cbor_reader_read_head(r, &mt, &v) < 0) return -1;
     switch (mt) {
     case CBOR_MT_UINT:
@@ -267,13 +272,13 @@ int cbor_reader_skip(cbor_reader_t *r)
         return 0;
     case CBOR_MT_ARRAY:
         for (uint64_t i = 0; i < v; ++i) {
-            if (cbor_reader_skip(r) < 0) return -1;
+            if (skip_item(r, depth + 1u) < 0) return -1;
         }
         return 0;
     case CBOR_MT_MAP:
         for (uint64_t i = 0; i < v; ++i) {
-            if (cbor_reader_skip(r) < 0) return -1;   /* key */
-            if (cbor_reader_skip(r) < 0) return -1;   /* val */
+            if (skip_item(r, depth + 1u) < 0) return -1;   /* key */
+            if (skip_item(r, depth + 1u) < 0) return -1;   /* val */
         }
         return 0;
     case CBOR_MT_SIMPLE:
@@ -284,4 +289,51 @@ int cbor_reader_skip(cbor_reader_t *r)
         r->err = 1;
         return -1;
     }
+}
+
+int cbor_reader_skip(cbor_reader_t *r)
+{
+    return skip_item(r, 0u);
+}
+
+/* depth = maps/arrays already open around this item. */
+static int validate_item(cbor_reader_t *r, unsigned depth)
+{
+    uint8_t mt;
+    uint64_t v;
+    if (cbor_reader_read_head(r, &mt, &v) < 0) return -1;
+    switch (mt) {
+    case CBOR_MT_UINT:
+    case CBOR_MT_NEGINT:
+    case CBOR_MT_SIMPLE:            /* read_head consumed any payload */
+        return 0;
+    case CBOR_MT_BYTE_STR:
+    case CBOR_MT_TEXT_STR:
+        if (v > (uint64_t)(r->len - r->pos)) { r->err = 1; return -1; }
+        r->pos += (size_t) v;
+        return 0;
+    case CBOR_MT_ARRAY:
+    case CBOR_MT_MAP: {
+        if (depth >= CBOR_MAX_DEPTH) { r->err = 1; return -1; }
+        /* Every item takes at least one byte: a count above the bytes
+         * left is wrong, and checking it first bounds the loop. */
+        if (v > (uint64_t)(r->len - r->pos)) { r->err = 1; return -1; }
+        uint64_t items = (mt == CBOR_MT_MAP) ? 2u * v : v;
+        for (uint64_t i = 0; i < items; ++i) {
+            if (validate_item(r, depth + 1u) < 0) return -1;
+        }
+        return 0;
+    }
+    default:                        /* major type 6: tags */
+        r->err = 1;
+        return -1;
+    }
+}
+
+int cbor_validate(const uint8_t *buf, size_t len)
+{
+    cbor_reader_t r;
+    cbor_reader_init(&r, buf, len);
+    if (validate_item(&r, 0u) < 0) return -1;
+    return (r.pos == r.len) ? 0 : -1;
 }
