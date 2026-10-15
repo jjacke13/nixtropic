@@ -255,3 +255,101 @@ Notes:
   free FIDO slot from the bitmap and erase it afterwards; `sign-test`
   refuses an occupied or OpenPGP slot.  First hardware run of the fixed tool:
   M3.
+
+## 2026-10-15 — Phase 9 M3 FIDO2 fixes, permission tokens, authenticatorConfig ✅
+
+`docs/PHASE-9-PLAN.md §5`; how and why: `docs/PHASE-9-M3-WORKPLAN.md` (reviewed by
+Jan before code).  Commits `ca628dc`..`e6f8951`.
+
+- **Requests are checked before parsing (M3.1).**  `cbor_validate()` runs once per
+  CTAP2 request: one well-formed item, ≤ 4 nesting levels (CTAP §8), every length
+  inside the buffer, no tags or indefinite lengths.  `cbor_reader_skip()` has its own
+  recursion cap.  MakeCredential / GetAssertion parsing moved to chip-free
+  `ctap2_parse.c` (every `pubKeyCredParams` entry checked, no int truncation of COSE
+  ids, options as booleans, `user.id` ≤ 64 B, enterpriseAttestation refused).
+- **Credentials are bound to their RP; discoverable credentials are real (M3.3).**
+  GetAssertion walks the whole allowList and uses the first credential that exists
+  **and** was made for this RP (before: the first entry, any RP).  `rk` is stored per
+  credential; GetAssertion without an allowList returns the RP's discoverable
+  credentials newest first (creation sequence in the slot metadata) with
+  `numberOfCredentials`, `user.id` and GetNextAssertion.  excludeList is honoured;
+  a new `rk` credential for the same RP + user replaces the old one in one bitmap
+  write.  `credProps.rk` reports what was stored.
+- **signCount (M3.4).**  Every assertion reserves its value first (counter Update,
+  then Get) and signs it; errors fail the operation (before: a read error reported
+  0, a write error was ignored).  The counter is initialised only on a genuine first
+  boot (slot 0 and every credential slot read empty, once per boot) or by a reset
+  whose key erases all succeeded; the reset now stops before touching PIN or bitmap
+  if any key erase fails, and always asks for a touch.
+- **Permission tokens (M3.5/6).**  `pin_token.c`: one token with permissions,
+  permissions RP ID, 30 s to first use, 10 min life, spent by a touch-tested
+  operation.  ClientPIN 0x09 (getPinUvAuthTokenUsingPinWithPermissions); 0x05 gives
+  mc+ga only.  MakeCredential / GetAssertion / credMgmt / config each check their
+  permission and RP; with a PIN set a discoverable credential needs a token
+  (`makeCredUvNotRqd` = !alwaysUv); `up=false` is a silent pre-flight; zero-length
+  pinUvAuthParam is the touch probe.
+- **credMgmt (M3.7).**  `cm` permission and the per-subcommand RP rules; GetNextRP /
+  GetNextCredential without pinUvAuthParam while the Begin's token lives — libfido2
+  sends none there, so `fido2-token -L` stopped after the first RP or credential
+  before.  Capacity from 29 slots.  Lists every credential, discoverable or not
+  (each holds a chip slot; documented deviation).
+- **authenticatorConfig 0x0D toggleAlwaysUv + honest GetInfo (M3.8).**  With a PIN,
+  the toggle needs a token with `acfg`; without one it is open.  On a release build:
+  `fido2-token -S -u` (on) / `-D -u` (off).  GetInfo: versions `FIDO_2_0` only
+  (FIDO_2_1 needs hmac-secret, credProtect, protocol 2), new option IDs `authnrCfg`,
+  `pinUvAuthToken`, `makeCredUvNotRqd`; `credentialMgmtPreview` and ES256 dropped
+  (neither existed).  AAGUID trailing byte 03 → 04.
+- **One request at a time during a touch wait (M3.9, BACKLOG 6.6).**  CCID APDUs and
+  CTAPHID requests now run from the main loop, never inside a USB callback; a touch
+  wait pumps USB but starts no other request (FIDO: CHANNEL_BUSY, CCID: answered after
+  the wait, lt-rpc: BUSY); only one wait at a time.  CTAPHID_CANCEL ends the waiting
+  request (KEEPALIVE_CANCEL) and is never answered (it was echoed).
+- **Release surface check (M3.10):** flake check `release-surface` — the release ELF
+  has no lt-rpc symbols, the debug ELF has them.
+- Host tests: `test_cbor` (validate, depth, skip cap), `test_ctap2_parse`,
+  `test_pin_token` (permissions, RP binding, timers, generation); mutants red.
+  Hardware suite `tools/validate_fido_m3.py` (54 checks, destructive for FIDO only).
+- Reviews: cpp-reviewer R1 changes required (CONT/INIT clobbering during a wait,
+  RP re-check, fail-open getters, …) → R2 approve.  Jan: plan review (counter
+  bootstrap, reset order, overwrite, creation sequence) + 4 code rounds (sticky
+  bootstrap, CONT bypass, Reset gate, unreadable records, uncertain bitmap write,
+  CCID bus reset, deferred-dispatch ownership) → approve at `e6f8951`, with host
+  probes against the real sources.
+
+**Found on hardware, invisible to every review:** TinyUSB re-arms the HID OUT
+endpoint only after `tud_hid_set_report_cb` returns.  A CTAPHID request handled
+inside that callback blocked every packet on the FIDO interface for its whole touch
+wait, so CANCEL (and INIT/BUSY handling) never arrived (suite 51/53).  Fixed by
+running requests from `fido_hid_task()` (`85009ee`, `e6f8951`).
+
+**Hardware (one dongle).**
+
+| Build | Check | Result |
+|---|---|---|
+| debug 2b9ffbb4 | `lt_rpc.py validate` / `sign-test` (M2 tool fix, first HW run) | ✓ 5/5 on a free slot / refuses occupied slot 0 |
+| debug 2b9ffbb4, e6b4ee79 | `validate_fido_m3.py` | 51/53, 52/54 → CANCEL root cause above |
+| debug fce3c528 (final) | `validate_fido_m3.py` (incl. CCID APDU during a FIDO wait) | ✓ 54/54 |
+| debug fce3c528 | `validate-openpgp` / `validate-fido` | ✓ 16/16 / 5/5 |
+| release c2cbb3e9 (final) | `validate_fido_m3.py` / `validate-openpgp` / `validate-fido` | ✓ 54/54 / 16/16 / 5/5 |
+| release | `fido2-token -I` | ✓ options as implemented, EdDSA only, AAGUID …04 |
+| release | `fido2-token -L -k webauthn.io` (2 creds via GetNext without auth), `-S -u` / `-D -u` | ✓ |
+| release | webauthn.io discoverable register + usernameless login; non-discoverable register | ✓ (owner) |
+| release | www.webauthn.me (EdDSA) register + authenticate with its credential ID | ✓ UP+UV, signCount 5 → 6 |
+
+Final binaries: release `firmware.bin` sha256 `c2cbb3e9…` (on the dongle), debug
+`fce3c528…`.  Sizes (Arm GNU 15.2): release 220 628 B (84.2 %, +11 232 B vs M2),
+RAM 30.4 KB; debug 226 448 B, RAM 35.2 KB.  Same compiler warnings as M2.
+
+Notes:
+- Sites that offer only ES256/RS256 (webauthn.me's default) do not see the key: it
+  announces EdDSA only now (before M3 it claimed ES256 and then refused it).  ES256
+  support = BACKLOG 2.3.  webauthn.me's RP ID is `www.webauthn.me`.
+- credMgmt shows RPs as the hex of their hash (only the hash is stored).
+- A request in the first second after enumeration can be lost while the firmware
+  boots; the suite retries INIT.
+- `fido2_test.py validate-phase6-m2/m3` (lt-rpc Force-UV, legacy-token credMgmt,
+  capacity 32) are superseded by `validate_fido_m3.py`.
+- M4 inputs from the reviews: `slots_init` still rewrites slot 0 after a non-empty
+  read error or a torn erase+write (PIN and alwaysUv lost); orphan scrub / record
+  validation; other global-state writers do not mark an uncertain write; one-packet
+  CTAPHID replies are dropped under IN backpressure.

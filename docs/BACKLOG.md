@@ -62,24 +62,41 @@ rule tagging `cafe:4001` with `ID_SECURITY_TOKEN=1` + group access
 to `plugdev`, so libfido2 / browsers see the dongle without a
 manual rule.
 
+
+### 2.3 ES256 (P-256) credentials
+
+GetInfo announces EdDSA only since Phase 9 M3, so sites that offer only
+ES256/RS256 (e.g. webauthn.me's default) do not see the key.  TROPIC01
+signs P-256 ECDSA on chip; needs COSE EC2 keys, DER signatures, the alg in the
+slot metadata, and the credential cap shared with EdDSA.
+
+### 2.4 Claim FIDO_2_1
+
+Needs hmac-secret, credProtect (3.2) and PIN/UV auth protocol 2 (HKDF,
+AES-CBC with random IV, full HMAC) — CTAP 2.1 §9.
+
+### 2.5 Store the RP ID text
+
+credMgmt shows each RP as the hex of its hash: only rpIdHash is stored.
+
 ---
 
 ## 3. Configurable policies (Yubikey-class)
 
-### 3.1 authenticatorConfig (CTAP2.1 command 0x0D)
+### 3.1 authenticatorConfig (CTAP2.1 command 0x0D) — ✅ DONE (Phase 9 M3, toggleAlwaysUv)
 
-Runtime toggles for Force-UV / alwaysUv / etc.  Currently all options
-are compile-time.  CTAP2.1 §6.11.  Requires PIN auth.
+`fido2-token -S -u` / `-D -u`.  Not implemented: setMinPINLength,
+enableEnterpriseAttestation (both optional).
 
 ### 3.2 credProtect per-credential UV
 
 Per-credential UV requirement (CTAP2.1 §11.1.2).  Some RPs (Google,
 Microsoft) request `credProtect: 3` for high-value credentials.
 
-### 3.3 PIN protocol v2 token permissions
+### 3.3 Token permissions — ✅ DONE (Phase 9 M3)
 
-Scope-limited PIN tokens — token authorizes only specific operations
-(e.g. credential management read but not delete).  CTAP2.1 §6.5.5.7.
+getPinUvAuthTokenUsingPinWithPermissions (0x09), `pin_token.c`.  PIN/UV
+auth protocol 2 is still open (see 2.4).
 
 ### 3.4 OpenPGP touch policy — ✅ PARTIAL (Phase 8 M3, GLOBAL only)
 
@@ -219,10 +236,10 @@ ever needed: print the banner from `tud_mount_cb`, or after boot.
 
 README and docs/UBUNTU mention the CDC + lt-rpc interfaces as if always
 present in places, and Force-UV was toggled with `lt_rpc.py`, which the
-release build no longer has (M3 adds `authenticatorConfig`).  Rewrite in
+release build no longer has (M3: `fido2-token -S -u` / `-D -u`).  Rewrite in
 Phase 9 M6 with CARD-SETUP.md.
 
-### 6.6 Requests interleave during a touch wait (Phase 9 M2 review → M3)
+### 6.6 Requests interleave during a touch wait — ✅ DONE (Phase 9 M3, PROJECT.md decision 18)
 
 `user_presence_check()` pumps `tud_task()` while it waits for SW1.  CTAPHID
 refuses other FIDO requests then, but a CCID APDU is processed right away,
@@ -233,11 +250,26 @@ affected.  Define a dispatch policy covering both directions, nested touch
 waits, the shared consent state, and the debug lt-rpc.  Found by Jan in the
 M2 review; plan it with the M3 FIDO work.
 
+Fixed: requests run from the main loop, never inside a USB callback; one
+request and one touch wait at a time.
+
+### 6.7 CTAPHID KEEPALIVE and reply backpressure
+
+No KEEPALIVE packets during a touch wait (CTAP SHOULD; clients work without).
+One-packet replies sent while a request owns the buffers are dropped if the IN
+endpoint is busy (Jan, M3).
+
+### 6.8 Retire superseded test suites
+
+`fido2_test.py validate-phase6-m2/m3` assume lt-rpc Force-UV, legacy-token
+credMgmt and 32 slots; `tools/validate_fido_m3.py` replaces them (M6 cleanup).
+
 ---
 
 ## 7. Performance / flash budget
 
-Current `firmware.elf` text = 218856 B / 256 KB (83.5%) post-Phase-8
+Current release `firmware.bin` = 220 628 B / 256 KB (84.2 %) after Phase 9 M3
+(was 218 856 B text post-Phase-8)
 (M&D PIN counters + global touch + credProps + udev rule landed).
 ~37 KB headroom.
 

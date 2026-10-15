@@ -1,6 +1,6 @@
 # Phase 9 — Plan (v2)
 
-Status: in progress — M0 and M1 done (2026-10-14), M2 done (2026-10-15); see STATUS.md. v1 (98cbfde,
+Status: in progress — M0 and M1 done (2026-10-14), M2 and M3 done (2026-10-15); see STATUS.md. v1 (98cbfde,
 2026-10-14) was reviewed against the official TROPIC01 documentation the same evening;
 verdict "changes required, direction supported". v2 folds that review in. This
 document is the contract.
@@ -194,6 +194,18 @@ Reviews: cpp-reviewer, Jan.  STATUS.md has the record.
 site A refused for site B; alwaysUv matrix: PIN configured (toggle needs a
 0x09 token with acfg; refused with a legacy token or none) and PIN not configured
 (the spec's bootstrap behaviour). Rerun after M4/M5.
+
+**Done 2026-10-15** (three days early): all of the above on hardware, release and
+debug (`tools/validate_fido_m3.py` 54/54, OpenPGP 16/16, webauthn.io and
+www.webauthn.me).  How and why: `PHASE-9-M3-WORKPLAN.md`.  The touch-wait policy
+also had to move CTAPHID requests out of the USB callback (TinyUSB re-arms HID OUT
+only after it returns; found on hardware).  Reviews: cpp-reviewer, Jan (plan + 4
+rounds).  STATUS.md has the record; PROJECT.md decisions 18 and 19.
+
+**Inputs for M4 from the M3 reviews:** `slots_init` still rewrites slot 0 after a
+non-empty read error or a torn erase+write (PIN and alwaysUv lost, credentials
+kept); orphan scrub / full record validation; the other global-state writers do not
+mark an uncertain write the way `slots_alloc` / `slots_erase` do.
 
 ## 6. M4 — PIN + persistent-state integrity (Mon 19 – Wed 21 Oct)
 
