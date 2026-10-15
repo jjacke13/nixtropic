@@ -62,10 +62,10 @@ fi
 
 # --- 4. AAGUID check ---
 echo ""
-echo "4/5  AAGUID matches 6e697874726f70696300000000000003..."
+echo "4/5  AAGUID matches 6e697874726f70696300000000000004..."
 # fido2-token -I prints AAGUID with hyphens; strip them for the compare.
 AAGUID_GOT=$(echo "$INFO_OUT" | awk '/aaguid:/ {print $2}' | tr -d '-' | head -1)
-AAGUID_EXPECT="6e697874726f70696300000000000003"
+AAGUID_EXPECT="6e697874726f70696300000000000004"
 if [ "$AAGUID_GOT" = "$AAGUID_EXPECT" ]; then
   echo "  ✓ AAGUID = $AAGUID_GOT"
 else
