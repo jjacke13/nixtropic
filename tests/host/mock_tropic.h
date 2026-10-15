@@ -11,11 +11,13 @@
  * links a module using another one fails to link, which is the reminder to
  * model it here.
  *
- * MAC-and-Destroy model (PIN application note, Appendix A, simplified):
- * each slot holds 32 bytes x.  MACANDD(i, d) returns HMAC(x, d) and then
- * replaces x with HMAC(K_FA, d), K_FA being a per-chip secret.  So calling
- * with the same d twice in a row restores the slot, and any other d
- * destroys what the slot held.
+ * MAC-and-Destroy model (PIN application note §3.2 + Appendix A,
+ * simplified; M4 design §7): each slot i holds 32 bytes x.  MACANDD(i, d)
+ * sets x' = F1(d || i) = HMAC(K_FA, d || i), K_FA a per-chip secret, and
+ * returns F2(x, x', i) = HMAC(x, x' || i).  So a slot is a function of the
+ * last input only: M&D(u) puts it back after any other call (how a correct
+ * verify restores and how a binding is retired), and a consumed slot still
+ * answers OK, with a wrong value [J2a, J2b].
  */
 #ifndef NIXTROPIC_TESTS_MOCK_TROPIC_H
 #define NIXTROPIC_TESTS_MOCK_TROPIC_H
@@ -40,6 +42,9 @@ void mock_reset(uint32_t seed);
  * performs the operation first: the caller sees an error although the
  * state changed.  One pending fault per op. */
 void mock_fail_nth(mock_op_t op, unsigned n, int rc, bool executed);
+
+/* Drop every pending fault. */
+void mock_disarm(void);
 
 /* Number of calls of `op` since mock_reset. */
 unsigned mock_calls(mock_op_t op);

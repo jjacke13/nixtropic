@@ -87,6 +87,11 @@ void mock_rmem_damage(uint16_t slot, mock_damage_t how)
     s_rmem[slot].data[s_rmem[slot].len / 2] ^= 0x5a;
 }
 
+void mock_disarm(void)
+{
+    memset(s_fault, 0, sizeof s_fault);
+}
+
 unsigned mock_calls(mock_op_t op)
 {
     return s_calls[op];
@@ -167,9 +172,13 @@ int tropic_mac_and_destroy(uint8_t idx, const uint8_t *data_out, uint8_t *data_i
     int rc = enter(MOCK_OP_MAC_AND_DESTROY, &exec);
     if (idx >= MOCK_MAD_SLOTS || data_out == NULL || data_in == NULL) return -1;
     if (exec) {
-        uint8_t out[32];
-        hmac_sha256(s_mad[idx], 32, data_out, 32, out);
-        hmac_sha256(s_kfa, sizeof s_kfa, data_out, 32, s_mad[idx]);
+        uint8_t in[33], nv[32], out[32];
+        memcpy(in, data_out, 32);
+        in[32] = idx;
+        hmac_sha256(s_kfa, sizeof s_kfa, in, sizeof in, nv);        /* new = F1(data || slot) */
+        memcpy(in, nv, 32);
+        hmac_sha256(s_mad[idx], 32, in, sizeof in, out);            /* out = F2(old, new, slot) */
+        memcpy(s_mad[idx], nv, 32);
         if (rc == 0) memcpy(data_in, out, 32);   /* lost response: caller gets nothing */
     }
     return rc;

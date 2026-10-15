@@ -625,3 +625,13 @@ follows a fault before the M&D call or after the re-key (§3.3).
 - Reviews: cpp-reviewer CHANGES REQUIRED on test strength only (raw state checked right
   after an acknowledged action; CORRUPT allowed only inside the window above; a failed
   write must leave the pair uncertain; silent-mask fault added) → fixed; Jan APPROVE.
+
+**Step 2 (kernel v2, 2026-10-16):**
+- `setup` returns OK once the record is committed (the new PIN is live); a failed
+  retirement after that stays `retire_pending` and the next call's settle finishes it.
+- `status` settles too, so it can write; `clear` does not settle and needs no readable
+  record (retire every range, then clear the pair), so it also recovers a damaged one.
+- A record whose fields are out of range (range, `retire_pending`, `next_slot`, length)
+  is ERROR, never a binding. A one-range layout (RC) refuses `setup` unless ABSENT.
+- Kernel v1 lives on as `pin_md_legacy` until FIDO (step 3) and OpenPGP (step 4) move.
+- The host M&D mock now models §7: slot ← `F1(data ‖ slot)`, answer `F2(old, new, slot)`.
