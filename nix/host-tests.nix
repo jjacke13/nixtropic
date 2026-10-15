@@ -62,7 +62,7 @@ stdenv.mkDerivation {
       hmac.o sha2.o memzero.o -o test_fido_state
     $CC $STRICT $SAN $INC -DNIXTROPIC_HOST_TEST -ffunction-sections -Wl,--gc-sections \
       tests/host/test_fido_pin_cmd.c tests/host/mock_tropic.c \
-      firmware/src/fido_hid/pin.c firmware/src/fido_hid/pin_token.c firmware/src/fido_hid/cbor.c \
+      firmware/src/fido_hid/ctap2.c firmware/src/fido_hid/credstore.c firmware/src/fido_hid/pin.c firmware/src/fido_hid/pin_token.c firmware/src/fido_hid/cbor.c \
       firmware/src/fido_hid/fido_state.c firmware/src/fido_hid/pin_md.c firmware/src/fido_hid/slots.c \
       firmware/src/tropic/pin_md_kernel.c firmware/src/tropic/rec_pair.c \
       $P256 hmac.o sha2.o memzero.o -o test_fido_pin_cmd

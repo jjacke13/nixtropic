@@ -43,6 +43,10 @@ int fido_pin_change(const uint8_t old_mat[PIN_MD_MATERIAL_LEN],
                     const uint8_t new_mat[PIN_MD_MATERIAL_LEN], uint8_t new_pin_len,
                     int *correct);
 
+/* 0 after a PIN-binding write whose outcome is unknown (the pair is
+ * uncertain until reboot or reset): the FIDO state is then not ready. */
+int fido_pin_usable(void);
+
 /* Reset path: retire both ranges and clear O2 (no readable record needed).
  * The guard is cleared by the fresh O1 written afterwards (fido_state.c). */
 int fido_pin_clear(void);

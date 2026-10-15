@@ -9,6 +9,7 @@
 #include "credstore.h"
 #include "slots.h"
 #include "fido_state.h"
+#include "pin_md.h"
 #include "cose.h"
 
 #include <stdint.h>
@@ -289,5 +290,7 @@ int credstore_factory_reset(void)
 
 int credstore_ready(void)
 {
-    return s_initted && slots_usable();
+    /* O1 and the PIN binding O2: an ambiguous write to either ends
+     * readiness until reboot or a completed reset (Jan, step 3 r2). */
+    return s_initted && slots_usable() && fido_pin_usable();
 }

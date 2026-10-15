@@ -9,7 +9,10 @@
  * a policy-violating new PIN is reported only after a correct old PIN; the
  * in-boot 3-strike rule; BLOCKED; an unreadable binding answers OTHER, never
  * "8 retries"; and (Jan, step 3 HIGH) no PIN token outlives a changePin
- * whose kernel call failed after the new PIN was committed.
+ * whose kernel call failed after the new PIN was committed.  Plus the CTAP
+ * dispatcher's readiness gate (Jan, step 3): after an ambiguous O2 write
+ * only GetInfo and authenticatorReset get through (the other handlers are
+ * stubs here that record being reached).
  */
 #include <string.h>
 
@@ -21,6 +24,10 @@
 #include "nist256p1.h"
 #include "sha2.h"
 #include "fido_hid/cbor.h"
+#include "fido_hid/credmgmt.h"
+#include "fido_hid/credstore.h"
+#include "fido_hid/ctaphid.h"
+#include "fido_hid/user_presence.h"
 #include "fido_hid/ctap2.h"
 #include "fido_hid/fido_state.h"
 #include "fido_hid/pin.h"
@@ -29,6 +36,27 @@
 #include "tropic/tropic.h"
 
 uint32_t mock_tick;
+
+/* Handlers the gate must keep out; each records that it was reached. */
+static int s_reached;
+static int stub(int cmd_byte, uint8_t *resp)
+{
+    s_reached = cmd_byte;
+    resp[0] = CTAP2_OK;
+    return 1;
+}
+int ctap2_make_credential(const uint8_t *q, size_t n, uint8_t *resp, size_t m)
+{ (void) q; (void) n; (void) m; return stub(0x01, resp); }
+int ctap2_get_assertion(const uint8_t *q, size_t n, uint8_t *resp, size_t m)
+{ (void) q; (void) n; (void) m; return stub(0x02, resp); }
+int ctap2_get_next_assertion(uint8_t *resp, size_t m) { (void) m; return stub(0x08, resp); }
+int credmgmt_handle_cbor(const uint8_t *q, size_t n, uint8_t *resp, size_t m)
+{ (void) q; (void) n; (void) m; return stub(0x0A, resp); }
+int ctap2_config(const uint8_t *q, size_t n, uint8_t *resp, size_t m)
+{ (void) q; (void) n; (void) m; return stub(0x0D, resp); }
+void ctap2_assertion_reset(void) {}
+void credmgmt_reset_iterator(void) {}
+up_result_t user_presence_check(uint32_t timeout_ms) { (void) timeout_ms; return UP_OK; }
 
 /* trezor rand.c draws from random32(); the firmware supplies it from the
  * TRNG.  Deterministic here (it only blinds the point multiplication). */
@@ -316,6 +344,45 @@ static void test_no_token_after_failed_change(void)
     CHECK(get_token("5678") == CTAP2_OK);
 }
 
+/* One CTAP2 command through the real dispatcher: an empty parameter map
+ * (none for GetInfo); ClientPIN = getKeyAgreement. */
+static uint8_t dispatch(uint8_t cmd_byte)
+{
+    uint8_t req[8] = { cmd_byte, 0xa0 };
+    size_t n = 2;
+    if (cmd_byte == 0x04) n = 1;
+    if (cmd_byte == 0x06) {
+        static const uint8_t ka[] = { 0x06, 0xa2, 0x01, 0x01, 0x02, 0x02 };
+        memcpy(req, ka, sizeof ka);
+        n = sizeof ka;
+    }
+    s_reached = 0;
+    (void) fido_hid_cbor_dispatch(req, n, resp, sizeof resp);
+    return resp[0];
+}
+
+static void test_dispatch_gate(void)
+{
+    static const uint8_t gated[] = { 0x01, 0x02, 0x06, 0x08, 0x0A, 0x0D };
+    fresh();
+    CHECK(credstore_init() == 0 && credstore_ready());
+    CHECK(dispatch(0x01) == CTAP2_OK && s_reached == 0x01);
+    CHECK(dispatch(0x06) == CTAP2_OK);
+    CHECK(set_pin("1234") == CTAP2_OK);
+    mock_fail_nth(MOCK_OP_RMEM_WRITE, 1, -1, true);      /* changePin's reservation, copy A */
+    CHECK(change_pin("1234", "5678", false) == CTAP2_ERR_OTHER);
+    CHECK(!credstore_ready());
+    for (size_t i = 0; i < sizeof gated; ++i) {
+        CHECK(dispatch(gated[i]) == CTAP2_ERR_NOT_ALLOWED && s_reached == 0);
+    }
+    CHECK(dispatch(0x04) == CTAP2_OK);                    /* GetInfo answers */
+    mock_tick = 20000u;                                   /* Reset only in the 10 s window */
+    CHECK(dispatch(0x07) == CTAP2_ERR_NOT_ALLOWED);
+    mock_tick = 0u;
+    CHECK(dispatch(0x07) == CTAP2_OK && credstore_ready());
+    CHECK(dispatch(0x01) == CTAP2_OK && s_reached == 0x01);
+}
+
 int main(void)
 {
     test_set_and_retries();
@@ -324,5 +391,6 @@ int main(void)
     test_blocked();
     test_unreadable_binding();
     test_no_token_after_failed_change();
+    test_dispatch_gate();
     return check_done("fido_pin_cmd");
 }

@@ -184,7 +184,8 @@ int credstore_factory_reset(void);
 
 /**
  * @brief 1 if FIDO state was validated at boot (or freshly wiped by a
- *        completed reset) and no state write has failed since.  The CTAP
+ *        completed reset) and no write to O1 or the PIN binding O2 has
+ *        failed since.  The CTAP
  *        dispatcher serves only GetInfo and authenticatorReset otherwise
  *        (design §4/§6; no re-initialisation at runtime).
  */

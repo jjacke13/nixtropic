@@ -63,6 +63,11 @@ int fido_pin_change(const uint8_t old_mat[PIN_MD_MATERIAL_LEN],
                                        correct, NULL));
 }
 
+int fido_pin_usable(void)
+{
+    return !s_o2.uncertain;
+}
+
 int fido_pin_clear(void)
 {
     /* Reset is the way out of an uncertain pair (design §6): the clear is a
