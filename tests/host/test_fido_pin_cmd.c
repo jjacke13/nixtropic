@@ -261,6 +261,11 @@ static void test_three_strikes(void)
     CHECK(retries() == (int) FIDO_PIN_ROUNDS - 3);
     boot();
     CHECK(get_token("1234") == CTAP2_OK);
+    /* Wrong old PINs in changePin count toward the same rule. */
+    CHECK(change_pin("0000", "5678", false) == CTAP2_ERR_PIN_INVALID);
+    CHECK(get_token("0000") == CTAP2_ERR_PIN_INVALID);
+    CHECK(change_pin("0000", "5678", false) == CTAP2_ERR_PIN_AUTH_BLOCKED);
+    CHECK(get_token("1234") == CTAP2_ERR_PIN_AUTH_BLOCKED);
 }
 
 static void test_blocked(void)

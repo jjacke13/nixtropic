@@ -55,7 +55,8 @@ stdenv.mkDerivation {
     $CC $STRICT $SAN $INC tests/host/test_pin_md_kernel.c tests/host/mock_tropic.c \
       firmware/src/tropic/pin_md_kernel.c firmware/src/tropic/rec_pair.c \
       hmac.o sha2.o memzero.o -o test_pin_md_kernel
-    $CC $STRICT $SAN $INC -DNIXTROPIC_HOST_TEST tests/host/test_fido_state.c tests/host/mock_tropic.c \
+    $CC $STRICT $SAN $INC -DNIXTROPIC_HOST_TEST -ffunction-sections -Wl,--gc-sections \
+      tests/host/test_fido_state.c tests/host/mock_tropic.c firmware/src/fido_hid/credstore.c \
       firmware/src/fido_hid/fido_state.c firmware/src/fido_hid/pin_md.c firmware/src/fido_hid/slots.c \
       firmware/src/tropic/pin_md_kernel.c firmware/src/tropic/rec_pair.c \
       hmac.o sha2.o memzero.o -o test_fido_state

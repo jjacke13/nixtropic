@@ -16,6 +16,7 @@
 #include "check.h"
 #include "mock_tropic.h"
 #include "sha2.h"
+#include "fido_hid/credstore.h"
 #include "fido_hid/fido_state.h"
 #include "fido_hid/pin_md.h"
 #include "fido_hid/slots.h"
@@ -287,11 +288,12 @@ static void test_other_app_untouched(void)
 /* O1 with out-of-range fields, and a counter beyond its start value: refuse. */
 static void test_o1_fields_and_counter(void)
 {
-    static const uint8_t bad[][7] = {
+    static const uint8_t bad[][8] = {
         { 5, 0, 0, 0, 0, 0, 0 },          /* [0] = length 5 (one byte short) */
         { 6, 0, 0, 0, 0, 2, 0 },          /* force_uv 2 */
         { 6, 0, 0, 0, 0, 0, 2 },          /* pin_bound 2 */
         { 6, 0x20, 0, 0, 0, 0, 0 },       /* bitmap bit 29 (an OpenPGP key slot) */
+        { 7, 0, 0, 0, 0, 0, 0 },          /* 7 bytes (one too many) */
     };
     for (size_t i = 0; i < sizeof bad / sizeof bad[0]; ++i) {
         rec_pair_t o1 = REC_PAIR(0, 40, 1, 1);
@@ -335,12 +337,43 @@ static void test_reset_after_failed_write(void)
     CHECK(fido_state_boot() == 0);
     CHECK(set_pin("1234") == 0);
     CHECK(add_cred() == 0);
-    mock_fail_nth(MOCK_OP_RMEM_WRITE, 2, -1, true);     /* O1 copy B of the next alloc */
+    mock_fail_nth(MOCK_OP_RMEM_WRITE, 2, -1, true);     /* next alloc: metadata, then O1 copy A */
     CHECK(add_cred() == -1 && !slots_usable());
     CHECK(fido_state_wipe() == 0);                      /* no reboot in between */
     CHECK(!creds_left() && slots_usable() && fido_pin_state(NULL) == FPIN_NOT_SET);
     reboot();
     CHECK(fido_state_boot() == 0 && fido_pin_state(NULL) == FPIN_NOT_SET);
+}
+
+/* M2, O2 half: a failed reservation write leaves O2 uncertain; the reset
+ * still completes in the same boot. */
+static void test_reset_after_failed_pin_write(void)
+{
+    fresh_chip();
+    CHECK(fido_state_boot() == 0);
+    CHECK(set_pin("1234") == 0);
+    CHECK(add_cred() == 0);
+    mock_fail_nth(MOCK_OP_RMEM_WRITE, 1, -1, true);     /* the reservation, copy A */
+    CHECK(verify("1234") == -1);
+    CHECK(fido_pin_state(NULL) == FPIN_ERROR);          /* O2 uncertain */
+    CHECK(fido_state_wipe() == 0);                      /* no reboot in between */
+    CHECK(!creds_left() && fido_pin_state(NULL) == FPIN_NOT_SET);
+}
+
+/* The CTAP dispatcher's gate: ready only after a successful boot or a
+ * completed reset wipe, never after a failed one (Jan step 3 MED). */
+static void test_credstore_ready(void)
+{
+    fresh_chip();
+    put_old_layout(false);
+    CHECK(credstore_init() != 0 && !credstore_ready());
+    mock_fail_nth(MOCK_OP_ECC_ERASE, 2, -1, false);
+    CHECK(credstore_factory_reset() != 0 && !credstore_ready());
+    mock_fail_nth(MOCK_OP_MCOUNTER, 1, -1, false);      /* last step: O1 already fresh */
+    CHECK(credstore_factory_reset() != 0 && slots_usable() && !credstore_ready());
+    CHECK(credstore_factory_reset() == 0 && credstore_ready());
+    mock_fail_nth(MOCK_OP_RMEM_WRITE, 2, -1, true);     /* a failed O1 write later */
+    CHECK(add_cred() == -1 && !credstore_ready());
 }
 
 /* ---- reset wipe, single-fault sweep ---- */
@@ -429,6 +462,8 @@ int main(void)
     test_o1_fields_and_counter();
     test_slot_ops();
     test_reset_after_failed_write();
+    test_reset_after_failed_pin_write();
+    test_credstore_ready();
     test_wipe_sweep();
     return check_done("fido_state");
 }
