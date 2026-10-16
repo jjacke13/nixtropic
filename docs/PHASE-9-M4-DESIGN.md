@@ -681,3 +681,38 @@ follows a fault before the M&D call or after the re-key (§3.3).
   - pin.c on one parser: the shared key is derived after parsing and wiped on one path;
     a mismatch on an unreadable binding answers OTHER, not PIN_BLOCKED.
   - ECC key erase stays checked by its result code (Jan: enough per API Table 31).
+
+**Step 4 (OpenPGP, 2026-10-16):**
+- Files: `openpgp_state.{c,h}` = O3 (33/43, schema 1, 154 B: lifecycle, `rc_set`, C4 byte 0,
+  UIF, DOs, signature counter, DEC key), cached in RAM after a clean read, every change a pair
+  write first; `pgp_pin.{c,h}` = PW1 / PW3 / RC on kernel v2 (O4 50/53 + 16–18/19–21, O5 51/54 +
+  22–24/25–27, O6 52/55 + 28–30; 3 rounds; material = SHA-256(PIN)); `pgp_lifecycle.{c,h}` = wipe,
+  boot/bootstrap, TERMINATE, ACTIVATE.  `openpgp_pin_md.{c,h}`, `pin_md_legacy.{c,h}` and their
+  test are deleted; the transition gate went with them.
+- **RC guard, simplified:** RC is "set" only while `rc_set` = 1; with `rc_set` = 0 whatever O6
+  holds is ignored (a cut after the RC setup and before `rc_set` 1 leaves the state *before*,
+  RC not set) — no boot repair needed.  O6 ABSENT under `rc_set` 1 = ERROR.  PUT DATA D3 always
+  clears first (retire + checked erase, needs no record), so it is also the way out of a
+  damaged or uncertain O6.
+- PIN status for PW1/PW3: ABSENT reads NOT_SET only while O3 is TERMINATED; otherwise ERROR.
+  An admin RESET RETRY COUNTER (P1=02) may rebind a lost PW1 (setup over ABSENT); a damaged
+  (ERROR) PW1 record is refused (`setup` needs a readable record) → TERMINATE.
+- **Boot is lazy and retried:** the first APDU of a power cycle reads O3 (bootstrap on ABSENT);
+  if that fails, the next APDU tries again.  A transient chip error must not push the user
+  towards TERMINATE.  An uncertain pair is not retried (stays ERROR until reboot or TERMINATE).
+- Access status (D9) lives in the applet: AUTH_81 / AUTH_82 / AUTH_83.  A successful VERIFY sets
+  only its P2; a failed PW1 VERIFY clears 81 and 82.  Cleared also by CCID IccPowerOn/Off, USB
+  bus reset (and a bus reset that lands inside an APDU), SELECT of another AID, TERMINATE,
+  ACTIVATE, CHANGE / RESET RETRY COUNTER of that PIN, and VERIFY P1=FF (that P2).
+- CDS with C4 `00`: the 81 flag is consumed once the PIN check passed (before touch).  The
+  signature counter is written **before** signing: a counter that cannot be written means no
+  signature; the counter never shows fewer signatures than were made.
+- ERROR (O3 unreadable, damaged, or uncertain): only SELECT, VERIFY 83, TERMINATE (answered
+  6F00 otherwise).  TERMINATE needs PW3 verified unless O3 is ERROR or PW3 is BLOCKED / ERROR.
+  The old PG7R record reads CORRUPT → ERROR → TERMINATE + ACTIVATE (release note).
+- lt-rpc PGP_FORCE_VERIFY keeps its wire meaning (1 = re-verify per signature) = C4 byte 0 `00`.
+- Host tests: `test_openpgp_state` (lifecycle, guards, old and masked layouts, read errors,
+  uncertain O3 / PW1 / RC, wipe barriers, FIDO untouched, both resets in either order, a
+  single-fault sweep over bootstrap / TERMINATE / ACTIVATE / PUT DATA D3) and
+  `test_openpgp_applet` (APDU semantics with stubbed key ops and touch).  71 mutants, all killed
+  but one equivalent (CHANGE's `body_len <= old_len` check: `len_ok` refuses the same input).

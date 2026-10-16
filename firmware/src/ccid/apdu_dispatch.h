@@ -43,4 +43,8 @@
 int apdu_dispatch_process(const uint8_t *in, size_t in_len,
                           uint8_t *out, size_t out_max, size_t *out_len);
 
+/* A card reset (IccPowerOn/Off, USB bus reset): every applet forgets its
+ * session access status (Phase 9 M4, D9). */
+void apdu_dispatch_card_reset(void);
+
 #endif /* NIXTROPIC_CCID_APDU_DISPATCH_H */

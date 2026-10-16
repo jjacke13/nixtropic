@@ -1,299 +1,101 @@
 /*
- * OpenPGP applet state on TROPIC01 R-mem slot 33.  Persisted state
- * + accessors for the OpenPGP card surface.
+ * OpenPGP persistent state O3 (Phase 9 M4, docs/PHASE-9-M4-DESIGN.md §5).
  *
- * Slot 33 layout (256 B) — magic "PG7R" / schema v6 (current after
- * the Phase-8 R-mem collision fix moved this slot away from slot 1):
+ * One record pair (tropic/rec_pair.h), R-mem slots 33 / 43, cached in RAM
+ * after it was read; every change is written through (both copies) and
+ * only then taken into RAM.  O3 holds the lifecycle, the RC guard, the DOs,
+ * the signature counter, DO C4 byte 0, UIF and the DEC private key (until
+ * M5 wraps it).  No PIN hashes, retry mirrors or PIN lengths: the PIN
+ * bindings O4/O5/O6 (pgp_pin.h) are the only PIN state (D5, D6).
  *
- *   offset  size   field
- *   ------  ----   -----
- *      0      4    magic "PG7R" (0x50,0x47,0x37,0x52)
- *      4      2    schema_version = 6
- *      6      1    pgp_state_present (1 once activated, 2 terminated)
- *      7      1    PW1 retry counter cache (0..3)
- *      8      1    PW3 retry counter cache (0..3)
- *      9      1    RC retry counter cache (0xFF if unset, else 0..3)
- *     10      1    force_verify (DO C4 bit 0; default 1)
- *     11      1    touch_required (alias for D6/D7/D8; default 1)
- *     12      2    reserved
- *     14     40    cardholder name (1 B len + 39 B data) — DO 5B
- *     54      2    language (ISO 639) — DO 5F2D
- *     56      1    sex (ISO 5218) — DO 5F35
- *     57     20    fingerprint sig — DO C7
- *     77     20    fingerprint dec — DO C8
- *     97     20    fingerprint aut — DO C9
- *    117      4    generation time sig (BE u32) — DO CE
- *    121      4    generation time dec — DO CF
- *    125      4    generation time aut — DO D0
- *    129      3    signature counter (BE 24) — DO 93
- *    132     16    PW1 hash (SHA-256[:16])
- *    148     16    PW3 hash (SHA-256[:16])
- *    164     16    RC  hash (SHA-256[:16], all-zero if unset)
- *    180     32    X25519 dec priv key (Trezor Safe 7 host-side pattern)
- *    212      1    PW1 length (M6 audit H2 fix — canonical split boundary)
- *    213      1    PW3 length
- *    214      1    RC  length (0 if unset)
- *    215     41    reserved
- *                                                              ----
- *   total = 256 B (matches TROPIC01 default per-slot size)
+ * Payload (schema 1, 154 B):
+ *   off  len  field
+ *     0    1  lifecycle (1 OPERATIONAL, 2 TERMINATED)
+ *     1    1  rc_set (guard of O6, §2.5)
+ *     2    1  DO C4 byte 0, spec meaning: 00 = PW1 valid for one PSO:CDS,
+ *             01 = valid until reset (default, Vaios: PIN once per plug-in)
+ *     3    1  UIF (0 off, 1 on, 2 permanent) for D6/D7/D8
+ *     4    1  name length (0..39), then 39 B name (DO 5B)
+ *    44    2  language (DO 5F2D)
+ *    46    1  sex (DO 5F35)
+ *    47   60  fingerprints sig | dec | aut (DO C7..C9)
+ *   107   12  generation times sig | dec | aut (DO CE..D0)
+ *   119    3  signature counter (DO 93)
+ *   122   32  X25519 DEC private key (all zero = none)
  *
- * Magic bumps: PG7K → PG7L → PG7M → PG7N → PG7O → PG7P → PG7Q → PG7R as schema evolves.  Magic
- * mismatch on read triggers a clean write of defaults
- * (write_activated_defaults), which is the user-visible side effect
- * of every M5/M6 upgrade.
- *
- * Why R-mem and not flash: persistent across power cycles, encrypted
- * on the chip side, accessible only via L3 session — so a firmware
- * reflash that doesn't have the L3 keys can't read prior state.
+ * The state is usable only after it was read cleanly (or written) in this
+ * power cycle, and never while its pair is uncertain (a failed write):
+ * openpgp_state_lifecycle() then reports PGP_LC_ERROR and every setter
+ * refuses.  Getters of an unusable state return zeros / defaults; callers
+ * gate on the lifecycle first.
  */
-
 #ifndef NIXTROPIC_OPENPGP_STATE_H
 #define NIXTROPIC_OPENPGP_STATE_H
 
-#include <stdint.h>
 #include <stddef.h>
+#include <stdint.h>
 
-/* Phase 8 collision fix (2026-05-20) — moved from R-mem slot 1 to
- * slot 33.  FIDO per-credential metadata lives at SLOTS_RMEM_SLOT_FOR(0)
- * = slot 1, so any FIDO credential allocation (e.g. webauthn.io
- * registration) was overwriting OpenPGP state.  Slot 33 is clear of
- * the entire FIDO range (per-cred slots 1..32 for SLOTS_MAX=32). */
-#define OPENPGP_RMEM_PRIMARY_SLOT    33u
-/* 256 bytes — matches Phase 5 slots.c (SLOTS_RMEM_GLOBAL_SIZE).  475
- * was the chip's *max* slot capacity per the inventory doc, but the
- * default per-slot configuration on this silicon is smaller — writes
- * over 256 silently break subsequent reads (caught at Phase 7 M3 HW
- * test 2026-05-12: 0x6F01 mid-VERIFY on the second invocation). */
-#define OPENPGP_RMEM_PRIMARY_SIZE    256u
+#define OPENPGP_NAME_MAX         39u
+#define OPENPGP_LANG_LEN          2u
+#define OPENPGP_FPR_LEN          20u
+#define OPENPGP_GENTIME_LEN       4u
+#define OPENPGP_SIG_COUNTER_LEN   3u
+#define OPENPGP_DEC_PRIV_LEN     32u
 
-/* PIN retry-counter defaults — match OpenPGP card spec.  Stored in the
- * cache bytes of the primary slot; the actual M&D enforcement lives in chip M&D
- * slots 8..16 (M3). */
-#define OPENPGP_PW1_RETRIES_INITIAL  3u
-#define OPENPGP_PW3_RETRIES_INITIAL  3u
-#define OPENPGP_RC_UNSET             0xFFu
+typedef enum {
+    PGP_LC_ERROR = 0,           /* unread, damaged, unreadable or uncertain */
+    PGP_LC_OPERATIONAL = 1,
+    PGP_LC_TERMINATED = 2,
+} pgp_lifecycle_t;
 
-/* Cardholder field sizes (DO 5B, 5F2D, 5F35). */
-#define OPENPGP_NAME_MAX             39u  /* + 1 B length prefix */
-#define OPENPGP_LANG_LEN             2u
-#define OPENPGP_SEX_LEN              1u
+/* Read O3 into RAM.  0 = loaded; 1 = ABSENT (both copies empty: the
+ * caller bootstraps); negative = damaged / unreadable (stays ERROR). */
+int openpgp_state_load(void);
 
-/* Fingerprint + generation-time sizes (DO C7/C8/C9, CE/CF/D0). */
-#define OPENPGP_FPR_LEN              20u
-#define OPENPGP_GENTIME_LEN          4u
-#define OPENPGP_SIG_COUNTER_LEN      3u   /* DO 93, BCD encoded */
+pgp_lifecycle_t openpgp_state_lifecycle(void);
 
-/* PIN hash storage — SHA-256(PIN)[:16].  Same convention as Phase 5's
- * pin.c.  Stored in R-mem primary slot at v2 layout offsets 132..179. */
-#define OPENPGP_PIN_HASH_LEN         16u
+/* 1 once a state was loaded or written in this power cycle (it may still
+ * have become uncertain since). */
+int openpgp_state_loaded(void);
 
-/* M5 — X25519 private key for the dec slot.  TROPIC01 doesn't expose
- * ECDH; the priv key lives in R-mem and STM32 does curve25519_donna
- * scalarmult in software (trezor_crypto).  Trust model: priv is plain
- * here (readable by anyone with SH0 + L3 session).  M6 audit + close
- * wraps with M&D-gated KEK derived from PW1 (Trezor Safe 7 pattern). */
-#define OPENPGP_DEC_PRIV_LEN         32u
+/* Checked erase of both copies (the DEC key is inside).  Also the way out
+ * of an uncertain pair.  0 = both copies read empty. */
+int openpgp_state_clear(void);
 
-/* PIN indices.  PW1.sig and PW1.dec/auth share the same hash + counter
- * per OpenPGP spec §7.2.2. */
-#define OPENPGP_PIN_PW1              0
-#define OPENPGP_PIN_PW3              1
-#define OPENPGP_PIN_RC               2
-#define OPENPGP_PIN_COUNT            3
+/* (Re)initialise O3: checked erase of both copies, then the defaults of
+ * that lifecycle (TERMINATED: everything zero). */
+int openpgp_state_init(pgp_lifecycle_t lc);
 
-/* PIN length constraints (spec §4.3). */
-#define OPENPGP_PW1_MIN_LEN          6u
-#define OPENPGP_PW3_MIN_LEN          8u
-#define OPENPGP_RC_MIN_LEN           8u
-#define OPENPGP_PIN_MAX_LEN          64u
+/* TERMINATED → OPERATIONAL defaults (ACTIVATE), as one pair write. */
+int openpgp_state_activate(void);
 
-/**
- * @brief First-call init: ensure R-mem primary slot has the PGP state magic.
- *        Idempotent — safe to call from openpgp_applet open hook.
- *        If the slot is uninitialised (or wrong magic), writes a
- *        default-state v1 layout (pgp_state_present=0, PIN retry
- *        counters at defaults, fingerprints/cardholder empty).
- *
- *        Does NOT generate any keys — that's M4.  Does NOT set any
- *        PW1/PW3 — those are M3.
- *
- * @return 0 on success; negative on chip error.
- */
-int openpgp_state_init(void);
+/* ---- getters (RAM) ---- */
+uint8_t openpgp_state_rc_set(void);
+uint8_t openpgp_state_c4_multi(void);       /* DO C4 byte 0 */
+uint8_t openpgp_state_uif(void);
+size_t  openpgp_state_name(uint8_t out[OPENPGP_NAME_MAX]);
+void    openpgp_state_lang(uint8_t out[OPENPGP_LANG_LEN]);
+uint8_t openpgp_state_sex(void);
+void    openpgp_state_fingerprint(int key, uint8_t out[OPENPGP_FPR_LEN]);   /* 0 sig, 1 dec, 2 aut */
+void    openpgp_state_gentime(int key, uint8_t out[OPENPGP_GENTIME_LEN]);
+void    openpgp_state_sig_counter(uint8_t out[OPENPGP_SIG_COUNTER_LEN]);
+/* 0 = key copied (caller wipes it); -1 = none or state unusable. */
+int     openpgp_state_dec_priv_get(uint8_t out[OPENPGP_DEC_PRIV_LEN]);
 
-/* ---- M2 GET DATA accessors (read-only) ---- */
-
-/**
- * @brief Read the current force_verify flag (DO C4 bit 0).
- * @return 1 if force-verify is enabled (default), 0 if disabled.
- */
-uint8_t openpgp_state_force_verify_get(void);
-
-/**
- * @brief Read the global touch_required flag (aliases DO D6/D7/D8).
- * @return 0 = off, 1 = enabled (default), 2 = permanent.
- */
-uint8_t openpgp_state_touch_required_get(void);
-
-/**
- * @brief Read PW1 retry counter cache.  0..3.
- */
-uint8_t openpgp_state_pw1_retries_get(void);
-
-/**
- * @brief Read PW3 retry counter cache.  0..3.
- */
-uint8_t openpgp_state_pw3_retries_get(void);
-
-/**
- * @brief Read RC retry counter cache.  0..3, or 0xFF if RC unset.
- */
-uint8_t openpgp_state_rc_retries_get(void);
-
-/**
- * @brief Copy 20 B fingerprint for the requested slot.
- *        slot_idx = 0 (sig), 1 (dec), 2 (aut).
- *        Reads R-mem; returns all-zero if no key generated for slot.
- * @return 0 on success; -1 on bad slot_idx; -2 on chip error.
- */
-int openpgp_state_fingerprint_get(int slot_idx, uint8_t out[OPENPGP_FPR_LEN]);
-
-/**
- * @brief Copy 4 B generation timestamp (BE u32) for the requested slot.
- *        slot_idx = 0 (sig), 1 (dec), 2 (aut).
- *        Reads R-mem; returns all-zero if no key generated.
- */
-int openpgp_state_gentime_get(int slot_idx, uint8_t out[OPENPGP_GENTIME_LEN]);
-
-/**
- * @brief Copy 3 B signature counter (BCD) — DO 93.
- *        Returns all-zero on fresh state.
- */
-int openpgp_state_sig_counter_get(uint8_t out[OPENPGP_SIG_COUNTER_LEN]);
-
-/**
- * @brief Copy cardholder name (DO 5B).  Returns length 0..39 via
- *        *out_len; out buffer must be ≥ OPENPGP_NAME_MAX.
- */
-int openpgp_state_name_get(uint8_t out[OPENPGP_NAME_MAX], size_t *out_len);
-
-/**
- * @brief Copy 2 B language (DO 5F2D, ISO 639).  Returns all-zero if unset.
- */
-int openpgp_state_lang_get(uint8_t out[OPENPGP_LANG_LEN]);
-
-/**
- * @brief Read 1 B sex (DO 5F35, ISO 5218).  Returns 0x39 ('9' — "not applicable") if unset.
- */
-uint8_t openpgp_state_sex_get(void);
-
-/* ---- M3 PIN hash storage + retry counter writers ---- */
-
-/**
- * @brief Read PIN hash (16 B) for the given PIN index.  Returns 0 OK,
- *        -1 bad index, -2 chip error.
- */
-int openpgp_state_pin_hash_get(int which, uint8_t out[OPENPGP_PIN_HASH_LEN]);
-
-/**
- * @brief Write PIN hash for the given PIN index.  Caller is responsible
- *        for hashing the raw PIN (SHA-256[:16]).  Returns 0 OK, -1 bad
- *        index, -2 chip error.
- */
-int openpgp_state_pin_hash_set(int which,
-                               const uint8_t hash[OPENPGP_PIN_HASH_LEN]);
-
-/**
- * @brief Set retry counter for one PIN.  Used by VERIFY (decrement on
- *        wrong, reset to default on correct) and RESET RETRY COUNTER.
- *        Returns 0 OK, -1 bad index, -2 chip error.
- */
-int openpgp_state_pin_retries_set(int which, uint8_t v);
-
-/**
- * @brief Get/set the recorded length of a PIN (M6 audit H2 fix —
- *        schema v6 PG7R).  Used by CHANGE REFERENCE DATA / RESET
- *        RETRY COUNTER to split the APDU body at the canonical
- *        old/new boundary on a single verify attempt.
- *        Returns 0 OK, -1 bad index, -2 chip error.
- *        For RC, length 0 means "unset".
- */
-int openpgp_state_pin_len_get(int which, uint8_t *out);
-int openpgp_state_pin_len_set(int which, uint8_t v);
-
-/**
- * @brief Get / set pgp_state_present flag.  Set to 1 on ACTIVATE FILE;
- *        zeroed on TERMINATE DF (which wipes all PGP state).
- */
-uint8_t openpgp_state_present_get(void);
-int     openpgp_state_present_set(uint8_t v);
-
-/* ---- M3 writable DO setters (PUT DATA) ---- */
-
-int openpgp_state_name_set(const uint8_t *data, size_t len);  /* DO 5B */
-int openpgp_state_lang_set(const uint8_t data[OPENPGP_LANG_LEN]);  /* DO 5F2D */
-int openpgp_state_sex_set(uint8_t v);  /* DO 5F35 */
-int openpgp_state_force_verify_set(uint8_t v);  /* DO C4 bit 0 */
-int openpgp_state_touch_required_set(uint8_t v);  /* aliases DO D6/D7/D8 */
-
-/* ---- M4 fingerprint + gentime + sig counter writers ---- */
-
-/**
- * @brief Write 20 B fingerprint for the given slot (DO C7/C8/C9).
- *        slot_idx = 0 (sig), 1 (dec), 2 (aut).
- *        Caller responsible for PW3-verified gate.
- */
-int openpgp_state_fingerprint_set(int slot_idx,
-                                   const uint8_t fpr[OPENPGP_FPR_LEN]);
-
-/**
- * @brief Write 4 B generation timestamp BE u32 (DO CE/CF/D0).
- *        slot_idx = 0 (sig), 1 (dec), 2 (aut).
- */
-int openpgp_state_gentime_set(int slot_idx,
-                               const uint8_t gt[OPENPGP_GENTIME_LEN]);
-
-/**
- * @brief Increment the 3-byte BCD signature counter (DO 93) by 1.
- *        Called on each successful PSO:CDS.  Overflow wraps to 0
- *        and triggers force_verify (consume PW1.81 again per spec).
- */
+/* ---- setters (OPERATIONAL only; 0 = committed in both copies) ---- */
+int openpgp_state_set_rc_set(uint8_t v);
+int openpgp_state_set_c4_multi(uint8_t v);
+int openpgp_state_set_uif(uint8_t v);          /* -3: permanent cannot be lowered */
+int openpgp_state_set_name(const uint8_t *data, size_t len);
+int openpgp_state_set_lang(const uint8_t data[OPENPGP_LANG_LEN]);
+int openpgp_state_set_sex(uint8_t v);
+int openpgp_state_set_fingerprint(int key, const uint8_t fpr[OPENPGP_FPR_LEN]);
+int openpgp_state_set_gentime(int key, const uint8_t gt[OPENPGP_GENTIME_LEN]);
 int openpgp_state_sig_counter_increment(void);
-
-/* ---- TERMINATE DF / ACTIVATE FILE ---- */
-
-/**
- * @brief Wipe all PGP state in R-mem primary slot (PIN hashes, fingerprints,
- *        cardholder data, etc).  Sets pgp_state_present = 0.  After
- *        TERMINATE, the only valid INS is ACTIVATE FILE.
- *        Does NOT erase chip ECC slots — that happens in M4 GENERATE
- *        path (TERMINATE here also calls into pgp_keys later).
- */
-int openpgp_state_terminate(void);
-
-/* ---- M5 dec key X25519 priv storage ---- */
-
-/**
- * @brief Read the 32-byte X25519 private key for the dec slot.
- *        Returns 0 OK, -2 chip error.  Caller must zero `out`
- *        after use.
- */
-int openpgp_state_dec_priv_get(uint8_t out[OPENPGP_DEC_PRIV_LEN]);
-
-/**
- * @brief Write the 32-byte X25519 private key for the dec slot.
- *        Caller must clamp (RFC 7748 §5) before passing in.
- *        Returns 0 OK, -2 chip error.
- */
 int openpgp_state_dec_priv_set(const uint8_t key[OPENPGP_DEC_PRIV_LEN]);
 
-/**
- * @brief Re-init R-mem primary slot with spec-default PINs ("123456" / "12345678" /
- *        RC unset), default retry counters (3/3/0), touch_required=1,
- *        force_verify=1, sex=0x39.  Sets pgp_state_present = 1.
- *        Called from openpgp_state_init on first boot, AND from
- *        ACTIVATE FILE after TERMINATE DF.
- */
-int openpgp_state_activate(void);
+#ifdef NIXTROPIC_HOST_TEST
+void openpgp_state_test_reboot(void);
+#endif
 
 #endif /* NIXTROPIC_OPENPGP_STATE_H */

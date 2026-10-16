@@ -62,8 +62,8 @@
  * want a CLI for, without having to go through `gpg --card-edit`.
  *
  *   PGP_FORCE_VERIFY  — PW1 cache-across-session flag (DO C4 byte 0).
- *                       0 = cache (default after M4.0; PIN once per plug).
- *                       1 = force re-verify before each PSO:CDS.
+ *                       0 = cache (default; PIN once per plug) = C4 byte 0 01.
+ *                       1 = force re-verify before each PSO:CDS = C4 byte 0 00.
  *   PGP_TOUCH         — global SW1 touch requirement (UIF DO D6/D7/D8).
  *                       0 = no touch needed for sign / dec / auth.
  *                       1 = SW1 press required for each crypto op.

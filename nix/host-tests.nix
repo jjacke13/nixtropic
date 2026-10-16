@@ -50,8 +50,15 @@ stdenv.mkDerivation {
       firmware/src/fido_hid/cbor.c -o test_cose
     $CC $STRICT $SAN $INC tests/host/test_l3_result.c -o test_l3_result
     $CC $STRICT $SAN $INC tests/host/test_trezor_rng.c firmware/src/platform/trezor_rng.c -o test_trezor_rng
-    $CC $STRICT $SAN $INC tests/host/test_pin_md_legacy.c tests/host/mock_tropic.c \
-      firmware/src/tropic/pin_md_legacy.c hmac.o sha2.o memzero.o -o test_pin_md_legacy
+    PGP="firmware/src/openpgp/openpgp_state.c firmware/src/openpgp/pgp_pin.c firmware/src/openpgp/pgp_lifecycle.c"
+    $CC $STRICT $SAN $INC -DNIXTROPIC_HOST_TEST tests/host/test_openpgp_state.c tests/host/mock_tropic.c \
+      $PGP firmware/src/fido_hid/fido_state.c firmware/src/fido_hid/pin_md.c firmware/src/fido_hid/slots.c \
+      firmware/src/tropic/pin_md_kernel.c firmware/src/tropic/rec_pair.c \
+      hmac.o sha2.o memzero.o -o test_openpgp_state
+    $CC $STRICT $SAN $INC -DNIXTROPIC_HOST_TEST tests/host/test_openpgp_applet.c tests/host/mock_tropic.c \
+      firmware/src/openpgp/openpgp_applet.c firmware/src/openpgp/openpgp_aid.c $PGP \
+      firmware/src/tropic/pin_md_kernel.c firmware/src/tropic/rec_pair.c \
+      hmac.o sha2.o memzero.o -o test_openpgp_applet
     $CC $STRICT $SAN $INC tests/host/test_pin_md_kernel.c tests/host/mock_tropic.c \
       firmware/src/tropic/pin_md_kernel.c firmware/src/tropic/rec_pair.c \
       hmac.o sha2.o memzero.o -o test_pin_md_kernel
@@ -80,7 +87,8 @@ stdenv.mkDerivation {
     ./test_cose
     ./test_l3_result
     ./test_trezor_rng
-    ./test_pin_md_legacy
+    ./test_openpgp_state
+    ./test_openpgp_applet
     ./test_pin_md_kernel
     ./test_fido_state
     ./test_fido_pin_cmd

@@ -58,4 +58,8 @@
 int openpgp_applet_dispatch(const uint8_t *in, size_t in_len,
                              uint8_t *out, size_t out_max, size_t *out_len);
 
+/* Card reset / USB reset / IccPowerOn+Off: forget PW1.81, PW1.82 and PW3
+ * (Phase 9 M4, D9). */
+void openpgp_applet_card_reset(void);
+
 #endif /* NIXTROPIC_OPENPGP_APPLET_H */

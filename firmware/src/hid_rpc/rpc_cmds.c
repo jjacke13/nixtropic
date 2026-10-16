@@ -270,7 +270,7 @@ static int handle_pgp_force_verify_get(const uint8_t *req, size_t req_len,
 {
     (void) req; (void) req_len;
     if (resp_max < 1u) return -1;
-    resp[0] = openpgp_state_force_verify_get();
+    resp[0] = (uint8_t) (openpgp_state_c4_multi() == 0u);   /* force = C4 byte 0 "00" */
     return 1;
 }
 
@@ -281,7 +281,7 @@ static int handle_pgp_force_verify_set(const uint8_t *req, size_t req_len,
     if (req_len < 1u) return -1;
     if (!pin_token_is_valid()) return -1;
     uint8_t value = (req[0] != 0u) ? 1u : 0u;
-    if (openpgp_state_force_verify_set(value) != 0) return -1;
+    if (openpgp_state_set_c4_multi((uint8_t) (value == 0u)) != 0) return -1;
     return 0;
 }
 
@@ -290,7 +290,7 @@ static int handle_pgp_touch_get(const uint8_t *req, size_t req_len,
 {
     (void) req; (void) req_len;
     if (resp_max < 1u) return -1;
-    resp[0] = openpgp_state_touch_required_get();
+    resp[0] = openpgp_state_uif();
     return 1;
 }
 
@@ -301,7 +301,7 @@ static int handle_pgp_touch_set(const uint8_t *req, size_t req_len,
     if (req_len < 1u) return -1;
     if (!pin_token_is_valid()) return -1;
     uint8_t value = (req[0] != 0u) ? 1u : 0u;
-    if (openpgp_state_touch_required_set(value) != 0) return -1;
+    if (openpgp_state_set_uif(value) != 0) return -1;
     return 0;
 }
 

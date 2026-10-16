@@ -1,117 +1,80 @@
 /*
- * OpenPGP PIN handling (PW1 / PW3 / RC).
+ * OpenPGP PINs PW1 / PW3 / RC on the M&D kernel v2 (Phase 9 M4,
+ * docs/PHASE-9-M4-DESIGN.md §5).
  *
- * VERIFY / CHANGE REFERENCE DATA / RESET RETRY COUNTER over an R-mem
- * persisted PIN hash + retry counter.  Session state ("PW3 has been
- * verified this session") lives in RAM and is cleared on TERMINATE DF
- * or USB reset.
+ * Each PIN is one kernel binding (tropic/pin_md_kernel.h), 3 rounds:
+ *   PW1  O4 R-mem 50 / 53, M&D ranges 16..18 / 19..21
+ *   PW3  O5 R-mem 51 / 54, M&D ranges 22..24 / 25..27
+ *   RC   O6 R-mem 52 / 55, M&D range  28..30 (one range: set = clear, then setup)
+ * The binding is the only PIN state: no software check, no retry mirror;
+ * the PIN length lives in the binding (CHANGE splits its body with it).
+ * PIN material = SHA-256(PIN).
  *
- * SECURITY NOTE — SHIPS WITH SOFTWARE-ONLY RETRY COUNTERS.  The retry
- * counter lives in R-mem on the TROPIC01 chip but is NOT hardware-
- * enforced via MAC-and-Destroy as the FIDO PIN is (firmware/src/
- * fido_hid/pin_md.c).  An attacker who can reflash the STM32 firmware
- * can bypass the counter and brute-force the SHA-256[:16] hash
- * offline (tractable for weak PINs; unreachable for 8-char random
- * PINs).
+ * Guards (§2.5): PW1 / PW3 ABSENT while O3 is OPERATIONAL = ERROR; RC is
+ * "not set" while O3 rc_set = 0 (whatever O6 holds), and ABSENT under
+ * rc_set = 1 = ERROR.
  *
- * Threat model:
- *   - Wire-level attacker (no STM32 reflash): cannot bypass; gets 3
- *     wrong-PIN attempts then 0x6983 forever (until ACTIVATE FILE).
- *   - STM32-reflash attacker: can wipe retry counter and brute-force
- *     PIN hash offline.
- *
- * Hardening path: swap the software counter for M&D-backed retries
- * (either parameterise pin_md.c or inline an M&D scheme here against
- * TROPIC01 chip slots 8..16).  See docs/BACKLOG.md §1.1.
+ * Session state ("PW1.81 verified" …) is not kept here: the applet owns it.
  */
-
 #ifndef NIXTROPIC_OPENPGP_PGP_PIN_H
 #define NIXTROPIC_OPENPGP_PGP_PIN_H
 
-#include <stdint.h>
 #include <stddef.h>
+#include <stdint.h>
 
-#include "openpgp_state.h"   /* OPENPGP_PIN_PW1 / PW3 / RC etc. */
+#define OPENPGP_PIN_PW1   0
+#define OPENPGP_PIN_PW3   1
+#define OPENPGP_PIN_RC    2
 
-/* Return codes shared with applet so caller can map to SW. */
-#define PGP_PIN_OK                       0
-#define PGP_PIN_BAD                      -1   /* wrong PIN, counter decremented */
-#define PGP_PIN_BLOCKED                  -2   /* counter at 0 — needs reset */
-#define PGP_PIN_NOT_SET                  -3   /* RC only — not configured */
-#define PGP_PIN_BAD_LEN                  -4
-#define PGP_PIN_CHIP_ERR                 -5   /* generic */
-/* DEBUG sub-codes — pinpoint which R-mem op failed.  Mapped to
- * distinct SW values by pgp_pin_rc_to_sw so we can diagnose without
- * UART/CDC logging. */
-#define PGP_PIN_CHIP_ERR_HASH_GET        -6   /* generic — replaced by 3 below */
-#define PGP_PIN_CHIP_ERR_RETRIES_MATCH   -7
-#define PGP_PIN_CHIP_ERR_RETRIES_BAD     -8
-#define PGP_PIN_CHIP_ERR_HASH_SET        -9
-/* Sub-codes propagated from openpgp_state read_payload so we can tell
- * WHICH read-side failure occurred during HW debug. */
-#define PGP_PIN_CHIP_ERR_READ_CHIP       -10  /* tropic_rmem_read rc != 0 */
-#define PGP_PIN_CHIP_ERR_READ_SHORT      -11  /* short read (got < 12) */
-#define PGP_PIN_CHIP_ERR_READ_MAGIC      -12  /* magic mismatch */
+#define OPENPGP_PIN_ROUNDS    3u
+#define OPENPGP_PW1_MIN_LEN   6u
+#define OPENPGP_PW3_MIN_LEN   8u
+#define OPENPGP_RC_MIN_LEN    8u
+#define OPENPGP_PIN_MAX_LEN  64u
 
-/**
- * @brief Verify a PIN against its stored hash.  Decrements retry on
- *        mismatch, resets to OPENPGP_PW1_RETRIES_INITIAL etc. on match.
- *        Successful VERIFY also flags the PIN as "verified this session".
- *
- * @param which  OPENPGP_PIN_PW1 / PW3 / RC.
- * @param pin    Raw PIN bytes.
- * @param len    Length in bytes (must satisfy min/max for `which`).
- */
+typedef enum {
+    PGP_PIN_ACTIVE,
+    PGP_PIN_BLOCKED,
+    PGP_PIN_NOT_SET,     /* RC with rc_set 0; PW1/PW3 only while TERMINATED */
+    PGP_PIN_ERROR,
+} pgp_pin_state_t;
+
+/* Return codes. */
+#define PGP_PIN_OK        0
+#define PGP_PIN_WRONG    (-1)   /* the attempt is spent */
+#define PGP_PIN_BLK      (-2)   /* no attempts left */
+#define PGP_PIN_UNSET    (-3)   /* RC not set */
+#define PGP_PIN_BAD_LEN  (-4)   /* refused before any attempt */
+#define PGP_PIN_ERR      (-5)   /* chip / record error; after a commit the
+                                   NEW PIN may be live (kernel, Jan step 2) */
+
+/* `attempts` / `pin_len` (nullable) are 0 unless ACTIVE or BLOCKED. */
+pgp_pin_state_t pgp_pin_status(int which, uint8_t *attempts, uint8_t *pin_len);
+
 int pgp_pin_verify(int which, const uint8_t *pin, size_t len);
 
-/**
- * @brief CHANGE REFERENCE DATA — verify old PIN, set new PIN.  Old PIN
- *        counter decrements on wrong old.  On success the new PIN's
- *        counter is reset to initial.
- */
-int pgp_pin_change(int which,
-                   const uint8_t *old_pin, size_t old_len,
+/* CHANGE REFERENCE DATA for PW1 / PW3: old PIN checked (attempt counted),
+ * then the new one bound with the same s (k survives, D4). */
+int pgp_pin_change(int which, const uint8_t *old_pin, size_t old_len,
                    const uint8_t *new_pin, size_t new_len);
 
-/**
- * @brief RESET RETRY COUNTER via Reset Code (RC).  RC must verify
- *        successfully (consumes RC counter on failure); on success
- *        sets the new PW1 + resets PW1 counter.
- */
-int pgp_pin_reset_pw1_via_rc(const uint8_t *rc, size_t rc_len,
-                             const uint8_t *new_pw1, size_t new_pw1_len);
+/* New PW1 binding with a fresh s (RESET RETRY COUNTER; the caller has
+ * checked RC or PW3). */
+int pgp_pin_reset_pw1(const uint8_t *pin, size_t len);
 
-/**
- * @brief RESET RETRY COUNTER via PW3.  PW3 must already be verified
- *        this session.  Sets new PW1 + resets PW1 counter.
- */
-int pgp_pin_reset_pw1_via_pw3(const uint8_t *new_pw1, size_t new_pw1_len);
+/* PUT DATA D3 (the caller has checked PW3): len 0 clears RC; otherwise RC
+ * is cleared, then set: clear O6 → rc_set 0 → setup → rc_set 1. */
+int pgp_pin_set_rc(const uint8_t *rc, size_t len);
 
-/**
- * @brief Set Reset Code (RC).  PW3 must be verified this session.
- *        Setting RC of zero-length clears RC (PUT DATA D3 with empty
- *        body is the spec-defined "clear RC" form).
- */
-int pgp_pin_set_rc(const uint8_t *rc, size_t rc_len);
+/* Factory PW1 "123456" / PW3 "12345678", fresh s (bootstrap, ACTIVATE). */
+int pgp_pin_bind_factory(void);
 
-/**
- * @brief Check whether the given PIN was verified in this session.
- *        Session is cleared by `pgp_pin_clear_session()` (called on
- *        TERMINATE DF, USB reset, etc).
- */
-int pgp_pin_is_verified(int which);
+/* Retire every range and clear O4, O5, O6 (pgp_wipe).  Also the way out
+ * of an uncertain binding. */
+int pgp_pin_clear_all(void);
 
-/**
- * @brief Forget all session-verified PINs.  Doesn't affect R-mem state.
- */
-void pgp_pin_clear_session(void);
-
-/**
- * @brief Compute SHA-256(pin)[:16] into the caller's buffer.  Exposed
- *        because some applet paths (e.g. CHANGE) need to compare/hash
- *        before persisting.
- */
-void pgp_pin_hash(const uint8_t *pin, size_t len,
-                  uint8_t out[OPENPGP_PIN_HASH_LEN]);
+#ifdef NIXTROPIC_HOST_TEST
+void pgp_pin_test_reboot(void);
+#endif
 
 #endif /* NIXTROPIC_OPENPGP_PGP_PIN_H */

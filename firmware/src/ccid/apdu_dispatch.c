@@ -29,3 +29,8 @@ int apdu_dispatch_process(const uint8_t *in, size_t in_len,
 
     return openpgp_applet_dispatch(in, in_len, out, out_max, out_len);
 }
+
+void apdu_dispatch_card_reset(void)
+{
+    openpgp_applet_card_reset();
+}

@@ -223,10 +223,12 @@ static void process_message(const uint8_t *msg, size_t len)
 
     switch (msg_type) {
     case CCID_PC_TO_RDR_IccPowerOn:
+        apdu_dispatch_card_reset();      /* a new card session (D9) */
         resp_power_on(bSeq);
         break;
 
     case CCID_PC_TO_RDR_IccPowerOff:
+        apdu_dispatch_card_reset();
         resp_slot_status(bSeq,
                          (uint8_t)(CCID_ICC_STATUS_PRESENT_INACT | CCID_CMD_STATUS_SUCCESS),
                          CCID_ERROR_NONE);
@@ -278,6 +280,7 @@ static bool ccid_deinit(void)
 static void ccid_reset(uint8_t rhport)
 {
     (void) rhport;
+    apdu_dispatch_card_reset();          /* USB bus reset = card reset (D9) */
     ccid_init();
 }
 
@@ -386,6 +389,7 @@ void usb_ccid_task(void)
     s_processing = false;
     if (epoch != s_epoch) {
         /* The bus was reset during the APDU: drop the stale answer. */
+        apdu_dispatch_card_reset();      /* and whatever access it granted */
         s_tx_len = 0;
         if (s_itf_num == 0xFFu) return;        /* not configured again */
     } else if (s_tx_len > 0u

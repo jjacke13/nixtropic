@@ -33,7 +33,7 @@
 #include "openpgp_applet.h"
 #include "openpgp_aid.h"
 #include "openpgp_state.h"
-#include "openpgp_pin_md.h"           /* Phase 8 M4.E — wipe M&D on TERMINATE */
+#include "pgp_lifecycle.h"
 #include "pgp_pin.h"
 #include "pgp_keys.h"
 #include "ccid/ccid_proto.h"
@@ -207,34 +207,41 @@ static int emit_tlv(uint8_t *out, size_t out_max, size_t *off,
 
 /* ===== Composite DO builders ===== */
 
-/* PW status (DO C4) — 7 bytes. */
+/* Attempts left, from the binding (an unreadable PIN or an unset RC: 0). */
+static uint8_t pin_attempts(int which)
+{
+    uint8_t att = 0;
+    (void) pgp_pin_status(which, &att, NULL);
+    return att;
+}
+
+/* PW status (DO C4) — 7 bytes; byte 0 with its spec meaning (D9). */
 static void build_pw_status(uint8_t out[7])
 {
-    out[0] = openpgp_state_force_verify_get();  /* PW1 force-verify */
-    out[1] = 64u;                               /* PW1 max length */
-    out[2] = 64u;                               /* RC max length */
-    out[3] = 64u;                               /* PW3 max length */
-    out[4] = openpgp_state_pw1_retries_get();
-    uint8_t rc = openpgp_state_rc_retries_get();
-    out[5] = (rc == OPENPGP_RC_UNSET) ? 0u : rc;
-    out[6] = openpgp_state_pw3_retries_get();
+    out[0] = openpgp_state_c4_multi();
+    out[1] = OPENPGP_PIN_MAX_LEN;               /* PW1 max length */
+    out[2] = OPENPGP_PIN_MAX_LEN;               /* RC max length */
+    out[3] = OPENPGP_PIN_MAX_LEN;               /* PW3 max length */
+    out[4] = pin_attempts(OPENPGP_PIN_PW1);
+    out[5] = pin_attempts(OPENPGP_PIN_RC);
+    out[6] = pin_attempts(OPENPGP_PIN_PW3);
 }
 
 /* Fingerprints (DO C5) — 60 B concatenated sig||dec||aut.  Returns
  * 0 OK, -1 on chip error (still writes zero buffer). */
 static void build_fingerprints(uint8_t out[60])
 {
-    (void) openpgp_state_fingerprint_get(0, &out[0]);
-    (void) openpgp_state_fingerprint_get(1, &out[20]);
-    (void) openpgp_state_fingerprint_get(2, &out[40]);
+    openpgp_state_fingerprint(0, &out[0]);
+    openpgp_state_fingerprint(1, &out[20]);
+    openpgp_state_fingerprint(2, &out[40]);
 }
 
 /* Generation timestamps (DO CD) — 12 B concatenated. */
 static void build_gentimes(uint8_t out[12])
 {
-    (void) openpgp_state_gentime_get(0, &out[0]);
-    (void) openpgp_state_gentime_get(1, &out[4]);
-    (void) openpgp_state_gentime_get(2, &out[8]);
+    openpgp_state_gentime(0, &out[0]);
+    openpgp_state_gentime(1, &out[4]);
+    openpgp_state_gentime(2, &out[8]);
 }
 
 /* Emit a constructed DO wrapper around the bytes a builder writes.
@@ -276,11 +283,10 @@ static int emit_constructed(uint8_t *out, size_t out_max, size_t *off,
 static int build_do_65(uint8_t *out, size_t out_max, size_t *off)
 {
     uint8_t name[OPENPGP_NAME_MAX];
-    size_t  name_len = 0;
-    (void) openpgp_state_name_get(name, &name_len);
+    size_t  name_len = openpgp_state_name(name);
     uint8_t lang[OPENPGP_LANG_LEN];
-    (void) openpgp_state_lang_get(lang);
-    uint8_t sex = openpgp_state_sex_get();
+    openpgp_state_lang(lang);
+    uint8_t sex = openpgp_state_sex();
 
     if (emit_tlv(out, out_max, off, 0x005B, name, name_len) < 0) return -1;
     if (emit_tlv(out, out_max, off, 0x5F2D, lang, sizeof lang) < 0) return -1;
@@ -330,7 +336,7 @@ static int build_do_6e(uint8_t *out, size_t out_max, size_t *off)
 static int build_do_7a(uint8_t *out, size_t out_max, size_t *off)
 {
     uint8_t sig_counter[OPENPGP_SIG_COUNTER_LEN];
-    (void) openpgp_state_sig_counter_get(sig_counter);
+    openpgp_state_sig_counter(sig_counter);
     return emit_tlv(out, out_max, off, 0x0093, sig_counter, sizeof sig_counter);
 }
 
@@ -338,10 +344,6 @@ static int build_do_7a(uint8_t *out, size_t out_max, size_t *off)
 
 static int handle_get_data(uint16_t tag, uint8_t *out, size_t out_max, size_t *out_len)
 {
-    /* Initialise state on first GET DATA — handles fresh dongles
-     * where the OpenPGP applet has never been touched. */
-    (void) openpgp_state_init();
-
     size_t off = 0;
 
     switch (tag) {
@@ -433,7 +435,7 @@ static int handle_get_data(uint16_t tag, uint8_t *out, size_t out_max, size_t *o
     case 0x00C9: {
         int slot = (int)(tag - 0x00C7);
         uint8_t fpr[OPENPGP_FPR_LEN];
-        (void) openpgp_state_fingerprint_get(slot, fpr);
+        openpgp_state_fingerprint(slot, fpr);
         if (off + sizeof fpr > out_max) return emit_sw(SW_WRONG_LENGTH, out, out_max, out_len);
         memcpy(&out[off], fpr, sizeof fpr);
         off += sizeof fpr;
@@ -454,7 +456,7 @@ static int handle_get_data(uint16_t tag, uint8_t *out, size_t out_max, size_t *o
     case 0x00D0: {
         int slot = (int)(tag - 0x00CE);
         uint8_t gt[OPENPGP_GENTIME_LEN];
-        (void) openpgp_state_gentime_get(slot, gt);
+        openpgp_state_gentime(slot, gt);
         if (off + sizeof gt > out_max) return emit_sw(SW_WRONG_LENGTH, out, out_max, out_len);
         memcpy(&out[off], gt, sizeof gt);
         off += sizeof gt;
@@ -463,7 +465,7 @@ static int handle_get_data(uint16_t tag, uint8_t *out, size_t out_max, size_t *o
 
     case 0x0093: { /* Signature counter */
         uint8_t sig_counter[OPENPGP_SIG_COUNTER_LEN];
-        (void) openpgp_state_sig_counter_get(sig_counter);
+        openpgp_state_sig_counter(sig_counter);
         if (off + sizeof sig_counter > out_max) return emit_sw(SW_WRONG_LENGTH, out, out_max, out_len);
         memcpy(&out[off], sig_counter, sizeof sig_counter);
         off += sizeof sig_counter;
@@ -472,8 +474,7 @@ static int handle_get_data(uint16_t tag, uint8_t *out, size_t out_max, size_t *o
 
     case 0x005B: { /* Cardholder name */
         uint8_t name[OPENPGP_NAME_MAX];
-        size_t  name_len = 0;
-        (void) openpgp_state_name_get(name, &name_len);
+        size_t  name_len = openpgp_state_name(name);
         if (off + name_len > out_max) return emit_sw(SW_WRONG_LENGTH, out, out_max, out_len);
         memcpy(&out[off], name, name_len);
         off += name_len;
@@ -482,7 +483,7 @@ static int handle_get_data(uint16_t tag, uint8_t *out, size_t out_max, size_t *o
 
     case 0x5F2D: { /* Language */
         uint8_t lang[OPENPGP_LANG_LEN];
-        (void) openpgp_state_lang_get(lang);
+        openpgp_state_lang(lang);
         if (off + sizeof lang > out_max) return emit_sw(SW_WRONG_LENGTH, out, out_max, out_len);
         memcpy(&out[off], lang, sizeof lang);
         off += sizeof lang;
@@ -490,7 +491,7 @@ static int handle_get_data(uint16_t tag, uint8_t *out, size_t out_max, size_t *o
     }
 
     case 0x5F35: { /* Sex */
-        uint8_t sex = openpgp_state_sex_get();
+        uint8_t sex = openpgp_state_sex();
         if (off + 1u > out_max) return emit_sw(SW_WRONG_LENGTH, out, out_max, out_len);
         out[off++] = sex;
         break;
@@ -499,7 +500,7 @@ static int handle_get_data(uint16_t tag, uint8_t *out, size_t out_max, size_t *o
     case 0x00D6:   /* UIF — sig (all alias the global flag in our impl) */
     case 0x00D7:   /* UIF — dec */
     case 0x00D8: { /* UIF — aut */
-        uint8_t uif = openpgp_state_touch_required_get();
+        uint8_t uif = openpgp_state_uif();
         /* UIF DO contents are 2 B: [UIF value, default 0x20 reserved] */
         if (off + 2u > out_max) return emit_sw(SW_WRONG_LENGTH, out, out_max, out_len);
         out[off++] = uif;
@@ -515,48 +516,58 @@ static int handle_get_data(uint16_t tag, uint8_t *out, size_t out_max, size_t *o
     return emit_sw(SW_OK, out, out_max, out_len);
 }
 
-/* ===== M3 INS handlers ===== */
+/* ===== PIN handlers (Phase 9 M4, design §5) ===== */
 
-/* Map P2 byte from VERIFY / CHANGE / RESET RC to our PIN index.
- * Returns -1 for invalid P2.  PW1.81 and PW1.82 both map to PW1 (they
- * share counter + hash per spec §7.2.2). */
-static int p2_to_pin(uint8_t p2)
+/* Session access status (D9): PW1.81 (PSO:CDS), PW1.82 (PSO:DEC, INTERNAL
+ * AUTHENTICATE), PW3 (admin).  RAM only; cleared by a card reset
+ * (IccPowerOff/On, USB reset), a SELECT of another AID, TERMINATE,
+ * ACTIVATE, and any change or reset of that PIN. */
+#define AUTH_81  0x01u
+#define AUTH_82  0x02u
+#define AUTH_83  0x04u
+static uint8_t s_auth;
+
+void openpgp_applet_card_reset(void)
+{
+    s_auth = 0;
+}
+
+static uint8_t auth_flag(uint8_t p2)
 {
     switch (p2) {
-    case 0x81: return OPENPGP_PIN_PW1;
-    case 0x82: return OPENPGP_PIN_PW1;
-    case 0x83: return OPENPGP_PIN_PW3;
-    default:   return -1;
+    case 0x81: return AUTH_81;
+    case 0x82: return AUTH_82;
+    case 0x83: return AUTH_83;
+    default:   return 0u;
     }
 }
 
-/* Map a pgp_pin_* return code to a CTAP/ISO 7816 status word. */
-static uint16_t pgp_pin_rc_to_sw(int rc, int which)
+static int pin_of(uint8_t flag)
+{
+    return flag == AUTH_83 ? OPENPGP_PIN_PW3 : OPENPGP_PIN_PW1;
+}
+
+static uint8_t flags_of(int which)
+{
+    return which == OPENPGP_PIN_PW1 ? (uint8_t) (AUTH_81 | AUTH_82)
+         : which == OPENPGP_PIN_PW3 ? AUTH_83 : 0u;
+}
+
+static uint16_t retries_sw(int which)
+{
+    return (uint16_t) (0x63C0u | (pin_attempts(which) & 0x0Fu));
+}
+
+/* SW for a pgp_pin_* result; a wrong PIN answers 63CX, X = attempts left. */
+static uint16_t pin_sw(int rc, int which)
 {
     switch (rc) {
-    case PGP_PIN_OK:           return SW_OK;
-    case PGP_PIN_BAD: {
-        /* 0x63CN where N = remaining tries (0..F). */
-        uint8_t rem = 0;
-        switch (which) {
-        case OPENPGP_PIN_PW1: rem = openpgp_state_pw1_retries_get(); break;
-        case OPENPGP_PIN_PW3: rem = openpgp_state_pw3_retries_get(); break;
-        case OPENPGP_PIN_RC:  rem = openpgp_state_rc_retries_get();  break;
-        }
-        return (uint16_t)(0x63C0 | (rem & 0x0F));
-    }
-    case PGP_PIN_BLOCKED:                  return SW_AUTH_BLOCKED;        /* 0x6983 */
-    case PGP_PIN_NOT_SET:                  return SW_REF_DATA_NOT_FOUND;  /* 0x6A88 */
-    case PGP_PIN_BAD_LEN:                  return SW_WRONG_LENGTH;        /* 0x6700 */
-    case PGP_PIN_CHIP_ERR:                 return 0x6F00;                 /* generic */
-    case PGP_PIN_CHIP_ERR_HASH_GET:        return 0x6F01;                 /* pin_hash_get (generic) */
-    case PGP_PIN_CHIP_ERR_RETRIES_MATCH:   return 0x6F02;                 /* retries_set (match path) */
-    case PGP_PIN_CHIP_ERR_RETRIES_BAD:     return 0x6F03;                 /* retries_set (mismatch path) */
-    case PGP_PIN_CHIP_ERR_HASH_SET:        return 0x6F04;                 /* pin_hash_set */
-    case PGP_PIN_CHIP_ERR_READ_CHIP:       return 0x6F05;                 /* tropic_rmem_read rc != 0 */
-    case PGP_PIN_CHIP_ERR_READ_SHORT:      return 0x6F06;                 /* short read */
-    case PGP_PIN_CHIP_ERR_READ_MAGIC:      return 0x6F07;                 /* magic mismatch */
-    default:                               return SW_UNKNOWN_ERROR;
+    case PGP_PIN_OK:      return SW_OK;
+    case PGP_PIN_WRONG:   return retries_sw(which);
+    case PGP_PIN_BLK:     return SW_AUTH_BLOCKED;
+    case PGP_PIN_UNSET:   return SW_CONDITIONS_NOT_SATISFIED;
+    case PGP_PIN_BAD_LEN: return SW_WRONG_LENGTH;
+    default:              return SW_UNKNOWN_ERROR;
     }
 }
 
@@ -564,115 +575,87 @@ static int handle_verify(uint8_t p1, uint8_t p2,
                           const uint8_t *body, size_t body_len,
                           uint8_t *out, size_t out_max, size_t *out_len)
 {
-    if (p1 != 0x00u) return emit_sw(SW_INCORRECT_P1P2, out, out_max, out_len);
-    int which = p2_to_pin(p2);
-    if (which < 0) return emit_sw(SW_INCORRECT_P1P2, out, out_max, out_len);
-
-    /* Body of length 0 with VERIFY = "check whether already verified
-     * this session" — spec §7.2.2.  Returns 0x9000 if so, else
-     * 0x63CN with current retry count. */
-    if (body_len == 0u) {
-        if (pgp_pin_is_verified(which)) return emit_sw(SW_OK, out, out_max, out_len);
-        uint8_t rem = 0;
-        switch (which) {
-        case OPENPGP_PIN_PW1: rem = openpgp_state_pw1_retries_get(); break;
-        case OPENPGP_PIN_PW3: rem = openpgp_state_pw3_retries_get(); break;
-        }
-        return emit_sw((uint16_t)(0x63C0 | (rem & 0x0F)), out, out_max, out_len);
+    uint8_t flag = auth_flag(p2);
+    if (flag == 0u || (p1 != 0x00u && p1 != 0xFFu)) {
+        return emit_sw(SW_INCORRECT_P1P2, out, out_max, out_len);
     }
-
+    int which = pin_of(flag);
+    if (p1 == 0xFFu) {                  /* §7.2.2: reset this access status */
+        if (body_len != 0u) return emit_sw(SW_WRONG_LENGTH, out, out_max, out_len);
+        s_auth &= (uint8_t) ~flag;
+        return emit_sw(SW_OK, out, out_max, out_len);
+    }
+    if (body_len == 0u) {               /* status: verified, or 63CX */
+        uint16_t sw = (s_auth & flag) ? SW_OK : retries_sw(which);
+        return emit_sw(sw, out, out_max, out_len);
+    }
     int rc = pgp_pin_verify(which, body, body_len);
-    return emit_sw(pgp_pin_rc_to_sw(rc, which), out, out_max, out_len);
+    if (rc == PGP_PIN_OK) {
+        s_auth |= flag;                 /* this P2 only */
+    } else {
+        s_auth &= (uint8_t) ~flags_of(which);
+    }
+    return emit_sw(pin_sw(rc, which), out, out_max, out_len);
 }
 
 static int handle_change_ref(uint8_t p1, uint8_t p2,
                               const uint8_t *body, size_t body_len,
                               uint8_t *out, size_t out_max, size_t *out_len)
 {
-    if (p1 != 0x00u) return emit_sw(SW_INCORRECT_P1P2, out, out_max, out_len);
-    int which = p2_to_pin(p2);
-    if (which < 0 || which == OPENPGP_PIN_RC) {
+    uint8_t flag = auth_flag(p2);
+    if (p1 != 0x00u || (flag != AUTH_81 && flag != AUTH_83)) {
         return emit_sw(SW_INCORRECT_P1P2, out, out_max, out_len);
     }
-
-    /* M6 audit H2 — split body = old_pin || new_pin at the CANONICAL
-     * boundary recorded in R-mem (OFF_PW1_LEN / OFF_PW3_LEN, written
-     * by every successful PIN-setting op).  Per OpenPGP card v3.4.1
-     * §7.2.6, the card is authoritative for the old PIN's length.
-     *
-     * The earlier split-search loop tried every plausible boundary
-     * and each wrong split consumed a retry — a single hostile APDU
-     * could exhaust the PW1 (or PW3) retry counter and lock the PIN
-     * without the user ever entering a wrong PIN.  Single-attempt
-     * matches Yubikey/Nitrokey behaviour. */
-    size_t min_len = (which == OPENPGP_PIN_PW1) ? OPENPGP_PW1_MIN_LEN
-                                                 : OPENPGP_PW3_MIN_LEN;
-
-    uint8_t old_len_b = 0;
-    if (openpgp_state_pin_len_get(which, &old_len_b) != 0) {
-        return emit_sw(SW_UNKNOWN_ERROR, out, out_max, out_len);
-    }
-    size_t old_len = (size_t) old_len_b;
-    if (old_len < min_len || old_len > OPENPGP_PIN_MAX_LEN) {
-        /* State corruption — caller can recover via TERMINATE+ACTIVATE. */
-        return emit_sw(SW_UNKNOWN_ERROR, out, out_max, out_len);
-    }
-    if (body_len < old_len + min_len) {
+    int which = pin_of(flag);
+    /* Body = old || new, split at the old PIN's length from its binding
+     * (§7.2.3; committed with the PIN, D5): one attempt per APDU. */
+    uint8_t old_len = 0;
+    pgp_pin_state_t st = pgp_pin_status(which, NULL, &old_len);
+    if (st == PGP_PIN_BLOCKED) return emit_sw(SW_AUTH_BLOCKED, out, out_max, out_len);
+    if (st != PGP_PIN_ACTIVE) return emit_sw(SW_UNKNOWN_ERROR, out, out_max, out_len);
+    if (body == NULL || body_len <= old_len) {
         return emit_sw(SW_WRONG_LENGTH, out, out_max, out_len);
     }
-
-    int rc = pgp_pin_change(which, body, old_len,
-                             body + old_len, body_len - old_len);
-    return emit_sw(pgp_pin_rc_to_sw(rc, which), out, out_max, out_len);
+    s_auth &= (uint8_t) ~flags_of(which);
+    int rc = pgp_pin_change(which, body, old_len, body + old_len, body_len - old_len);
+    return emit_sw(pin_sw(rc, which), out, out_max, out_len);
 }
 
 static int handle_reset_rc(uint8_t p1, uint8_t p2,
                             const uint8_t *body, size_t body_len,
                             uint8_t *out, size_t out_max, size_t *out_len)
 {
-    if (p2 != 0x81u) return emit_sw(SW_INCORRECT_P1P2, out, out_max, out_len);
-
-    if (p1 == 0x00u) {
-        /* M6 audit H2 — single-attempt split at stored RC length.
-         * If RC was never set (len == 0), the verify path returns
-         * PGP_PIN_NOT_SET which maps to SW_CONDITIONS_NOT_SATISFIED. */
-        uint8_t rc_len_b = 0;
-        if (openpgp_state_pin_len_get(OPENPGP_PIN_RC, &rc_len_b) != 0) {
-            return emit_sw(SW_UNKNOWN_ERROR, out, out_max, out_len);
-        }
-        if (rc_len_b == 0u) {
-            /* RC unset — body has no canonical split point. */
-            return emit_sw(SW_CONDITIONS_NOT_SATISFIED,
-                           out, out_max, out_len);
-        }
-        size_t rc_len_s = (size_t) rc_len_b;
-        if (rc_len_s < OPENPGP_RC_MIN_LEN ||
-            rc_len_s > OPENPGP_PIN_MAX_LEN) {
-            return emit_sw(SW_UNKNOWN_ERROR, out, out_max, out_len);
-        }
-        if (body_len < rc_len_s + OPENPGP_PW1_MIN_LEN) {
-            return emit_sw(SW_WRONG_LENGTH, out, out_max, out_len);
-        }
-        int rc = pgp_pin_reset_pw1_via_rc(body, rc_len_s,
-                                           body + rc_len_s,
-                                           body_len - rc_len_s);
-        return emit_sw(pgp_pin_rc_to_sw(rc, OPENPGP_PIN_RC),
-                       out, out_max, out_len);
-    } else if (p1 == 0x02u) {
-        /* Body = new_PW1.  PW3 must already be verified. */
-        if (body_len < OPENPGP_PW1_MIN_LEN) {
-            return emit_sw(SW_WRONG_LENGTH, out, out_max, out_len);
-        }
-        int rc = pgp_pin_reset_pw1_via_pw3(body, body_len);
-        if (rc == PGP_PIN_BAD) {
-            /* "PW3 not verified this session" → security condition */
-            return emit_sw(SW_SECURITY_NOT_SATISFIED, out, out_max, out_len);
-        }
-        return emit_sw(pgp_pin_rc_to_sw(rc, OPENPGP_PIN_PW1),
-                       out, out_max, out_len);
-    } else {
+    if (p2 != 0x81u || (p1 != 0x00u && p1 != 0x02u)) {
         return emit_sw(SW_INCORRECT_P1P2, out, out_max, out_len);
     }
+    const uint8_t *pw1 = body;
+    size_t pw1_len = body_len;
+    if (p1 == 0x00u) {
+        /* Body = RC || new PW1, split at the RC's length. */
+        uint8_t rc_len = 0;
+        pgp_pin_state_t st = pgp_pin_status(OPENPGP_PIN_RC, NULL, &rc_len);
+        if (st == PGP_PIN_NOT_SET) {
+            return emit_sw(SW_CONDITIONS_NOT_SATISFIED, out, out_max, out_len);
+        }
+        if (st == PGP_PIN_BLOCKED) return emit_sw(SW_AUTH_BLOCKED, out, out_max, out_len);
+        if (st != PGP_PIN_ACTIVE) return emit_sw(SW_UNKNOWN_ERROR, out, out_max, out_len);
+        if (body == NULL || body_len < (size_t) rc_len + OPENPGP_PW1_MIN_LEN
+            || body_len - rc_len > OPENPGP_PIN_MAX_LEN) {
+            return emit_sw(SW_WRONG_LENGTH, out, out_max, out_len);   /* no RC attempt */
+        }
+        int rc = pgp_pin_verify(OPENPGP_PIN_RC, body, rc_len);
+        if (rc != PGP_PIN_OK) {
+            return emit_sw(pin_sw(rc, OPENPGP_PIN_RC), out, out_max, out_len);
+        }
+        pw1 = body + rc_len;
+        pw1_len = body_len - rc_len;
+    } else if (!(s_auth & AUTH_83)) {
+        return emit_sw(SW_SECURITY_NOT_SATISFIED, out, out_max, out_len);
+    }
+    /* A new PW1 with a fresh s: the "k changed" event M5 hooks into. */
+    s_auth &= (uint8_t) ~flags_of(OPENPGP_PIN_PW1);
+    int rc = pgp_pin_reset_pw1(pw1, pw1_len);
+    return emit_sw(pin_sw(rc, OPENPGP_PIN_PW1), out, out_max, out_len);
 }
 
 static int handle_put_data(uint16_t tag,
@@ -680,65 +663,67 @@ static int handle_put_data(uint16_t tag,
                             uint8_t *out, size_t out_max, size_t *out_len)
 {
     /* All PUT DATA operations require PW3 verified — admin authority. */
-    if (!pgp_pin_is_verified(OPENPGP_PIN_PW3)) {
+    if (!(s_auth & AUTH_83)) {
         return emit_sw(SW_SECURITY_NOT_SATISFIED, out, out_max, out_len);
     }
 
     int rc;
     switch (tag) {
     case 0x005B:  /* Cardholder name */
-        rc = openpgp_state_name_set(body, body_len);
+        if (body_len > OPENPGP_NAME_MAX) {
+            return emit_sw(SW_WRONG_LENGTH, out, out_max, out_len);
+        }
+        rc = openpgp_state_set_name(body, body_len);
         break;
     case 0x5F2D:  /* Language (ISO 639) */
         if (body_len != OPENPGP_LANG_LEN) {
             return emit_sw(SW_WRONG_LENGTH, out, out_max, out_len);
         }
-        rc = openpgp_state_lang_set(body);
+        rc = openpgp_state_set_lang(body);
         break;
     case 0x5F35:  /* Sex (ISO 5218) */
         if (body_len != 1u) {
             return emit_sw(SW_WRONG_LENGTH, out, out_max, out_len);
         }
-        rc = openpgp_state_sex_set(body[0]);
+        if (body[0] != 0x31u && body[0] != 0x32u && body[0] != 0x39u) {
+            return emit_sw(SW_INCORRECT_DATA, out, out_max, out_len);
+        }
+        rc = openpgp_state_set_sex(body[0]);
         break;
-    case 0x00C4:  /* PW status — only byte 0 (force_verify) writable */
+    case 0x00C4:  /* PW status — only byte 0 is writable (00 / 01) */
         if (body_len < 1u) {
             return emit_sw(SW_WRONG_LENGTH, out, out_max, out_len);
         }
-        rc = openpgp_state_force_verify_set(body[0]);
+        rc = openpgp_state_set_c4_multi(body[0] != 0u ? 1u : 0u);
         break;
-    case 0x00D3:  /* Resetting Code (RC) */
+    case 0x00D3:  /* Resetting Code (RC): empty body clears it */
         rc = pgp_pin_set_rc(body, body_len);
-        if (rc == PGP_PIN_BAD) {
-            return emit_sw(SW_SECURITY_NOT_SATISFIED, out, out_max, out_len);
-        }
-        return emit_sw(pgp_pin_rc_to_sw(rc, OPENPGP_PIN_RC),
-                       out, out_max, out_len);
+        return emit_sw(pin_sw(rc, OPENPGP_PIN_RC), out, out_max, out_len);
     case 0x00D6:  /* UIF sig — aliases global touch */
     case 0x00D7:  /* UIF dec */
     case 0x00D8:  /* UIF aut */
         if (body_len < 1u) {
             return emit_sw(SW_WRONG_LENGTH, out, out_max, out_len);
         }
-        rc = openpgp_state_touch_required_set(body[0]);
+        if (body[0] > 2u) {
+            return emit_sw(SW_INCORRECT_DATA, out, out_max, out_len);
+        }
+        rc = openpgp_state_set_uif(body[0]);
         if (rc == -3) {
             return emit_sw(SW_CONDITIONS_NOT_SATISFIED, out, out_max, out_len);
         }
         break;
 
-    /* M4 — fingerprints + generation timestamps. Host (gpg) writes
-     * these after a GENERATE so subsequent GET DATA reflects the
-     * actual key.  20 B fingerprint = SHA-1 over the public-key
-     * material per RFC 4880.  4 B gentime = BE u32 seconds since
-     * Unix epoch. */
+    /* Fingerprints + generation timestamps, written by gpg after a
+     * GENERATE.  20 B fingerprint = SHA-1 over the public-key material
+     * (RFC 4880); 4 B gentime = BE u32 seconds since the epoch. */
     case 0x00C7:   /* Fingerprint — sig */
     case 0x00C8:   /* Fingerprint — dec */
     case 0x00C9: { /* Fingerprint — aut */
         if (body_len != OPENPGP_FPR_LEN) {
             return emit_sw(SW_WRONG_LENGTH, out, out_max, out_len);
         }
-        int slot = (int)(tag - 0x00C7);
-        rc = openpgp_state_fingerprint_set(slot, body);
+        rc = openpgp_state_set_fingerprint((int)(tag - 0x00C7), body);
         break;
     }
 
@@ -748,8 +733,7 @@ static int handle_put_data(uint16_t tag,
         if (body_len != OPENPGP_GENTIME_LEN) {
             return emit_sw(SW_WRONG_LENGTH, out, out_max, out_len);
         }
-        int slot = (int)(tag - 0x00CE);
-        rc = openpgp_state_gentime_set(slot, body);
+        rc = openpgp_state_set_gentime((int)(tag - 0x00CE), body);
         break;
     }
 
@@ -805,7 +789,7 @@ static int handle_generate(uint8_t p1, uint8_t p2,
 
     /* GENERATE (P1=80) requires PW3 verified.  READ (P1=81) does not
      * (per spec §7.2.14 — public keys are public). */
-    if (generate && !pgp_pin_is_verified(OPENPGP_PIN_PW3)) {
+    if (generate && !(s_auth & AUTH_83)) {
         return emit_sw(SW_SECURITY_NOT_SATISFIED, out, out_max, out_len);
     }
 
@@ -916,7 +900,7 @@ static int parse_pso_dec_body(const uint8_t *body, size_t body_len,
 #define OPENPGP_TOUCH_TIMEOUT_MS  15000u
 static int require_touch_if_enabled(void)
 {
-    if (openpgp_state_touch_required_get() == 0u) {
+    if (openpgp_state_uif() == 0u) {
         return 0;
     }
     if (user_presence_check(OPENPGP_TOUCH_TIMEOUT_MS) != UP_OK) {
@@ -934,9 +918,8 @@ static int handle_pso(uint8_t p1, uint8_t p2,
 
     /* PSO:DEC branch */
     if (p1 == 0x80u && p2 == 0x86u) {
-        /* PW1.82 (decrypt/auth) must be session-verified.  M3 doesn't
-         * distinguish PW1.81 vs PW1.82; accept any PW1 verified. */
-        if (!pgp_pin_is_verified(OPENPGP_PIN_PW1)) {
+        /* PW1.82 (decrypt / auth) must be verified this session (D9). */
+        if (!(s_auth & AUTH_82)) {
             return emit_sw(SW_SECURITY_NOT_SATISFIED, out, out_max, out_len);
         }
         if (require_touch_if_enabled() != 0) {
@@ -976,12 +959,13 @@ static int handle_pso(uint8_t p1, uint8_t p2,
         return emit_sw(SW_INCORRECT_P1P2, out, out_max, out_len);
     }
 
-    /* PW1 must be session-verified.  Spec says P2=0x81 (PW1.81 — sign
-     * authority) specifically; M3's pgp_pin only tracks a single PW1
-     * verified flag, so we accept either 81 or 82.  Force_verify
-     * semantics (consume after one sig) deferred to M6 polish. */
-    if (!pgp_pin_is_verified(OPENPGP_PIN_PW1)) {
+    /* PW1.81 must be verified this session.  With DO C4 byte 0 = 00 it
+     * covers one signature: consumed once the access check passed (D9). */
+    if (!(s_auth & AUTH_81)) {
         return emit_sw(SW_SECURITY_NOT_SATISFIED, out, out_max, out_len);
+    }
+    if (openpgp_state_c4_multi() == 0u) {
+        s_auth &= (uint8_t) ~AUTH_81;
     }
     if (require_touch_if_enabled() != 0) {
         return emit_sw(SW_SECURITY_NOT_SATISFIED, out, out_max, out_len);
@@ -991,6 +975,11 @@ static int handle_pso(uint8_t p1, uint8_t p2,
         return emit_sw(SW_WRONG_LENGTH, out, out_max, out_len);
     }
 
+    /* Count first (DO 93): the counter never shows fewer signatures than
+     * the card made; a counter that cannot be written means no signature. */
+    if (openpgp_state_sig_counter_increment() != 0) {
+        return emit_sw(SW_UNKNOWN_ERROR, out, out_max, out_len);
+    }
     uint8_t sig[PGP_KEYS_SIG_LEN];
     int rc = pgp_keys_sign_with_sig(body, body_len, sig);
     if (rc == PGP_KEYS_NO_KEY) {
@@ -999,10 +988,6 @@ static int handle_pso(uint8_t p1, uint8_t p2,
     if (rc != PGP_KEYS_OK) {
         return emit_sw(SW_UNKNOWN_ERROR, out, out_max, out_len);
     }
-
-    /* Best-effort: increment the signature counter (DO 93).  Failure
-     * doesn't fail the sign — we already have a valid sig. */
-    (void) openpgp_state_sig_counter_increment();
 
     if (out_max < PGP_KEYS_SIG_LEN + 2u) {
         return emit_sw(SW_WRONG_LENGTH, out, out_max, out_len);
@@ -1018,43 +1003,18 @@ static int handle_terminate_df(uint8_t p1, uint8_t p2,
     if (p1 != 0x00u || p2 != 0x00u) {
         return emit_sw(SW_INCORRECT_P1P2, out, out_max, out_len);
     }
-    /* PW3 must be verified.  Spec also allows unauth TERMINATE when
-     * PW1+PW3+RC are all blocked (recovery from total lockout); M3
-     * keeps it simple — PW3-only. */
-    if (!pgp_pin_is_verified(OPENPGP_PIN_PW3)) {
+    /* PW3 verified, or without PW3 when PW3 is blocked or the state cannot
+     * be read (§7.2.16; no secure messaging here).  Only destroys. */
+    pgp_pin_state_t pw3 = pgp_pin_status(OPENPGP_PIN_PW3, NULL, NULL);
+    if (!(s_auth & AUTH_83) && openpgp_state_lifecycle() != PGP_LC_ERROR
+        && pw3 != PGP_PIN_BLOCKED && pw3 != PGP_PIN_ERROR) {
         return emit_sw(SW_SECURITY_NOT_SATISFIED, out, out_max, out_len);
     }
-    /* M6 audit H1 — destroy chip-side ECC keys BEFORE wiping R-mem.
-     * openpgp_state_terminate() wipes the dec priv at byte 180-211 but
-     * sig (slot 29) + aut (slot 31) live on the chip and would survive
-     * a TERMINATE+ACTIVATE cycle, leaving the original keypairs usable
-     * by anyone who knows the default PIN.  Spec §7.2.16 requires
-     * TERMINATE to invalidate all key material.  Erase failures are
-     * fatal — partial erase is unsafe. */
-    if (pgp_keys_erase_sig() != PGP_KEYS_OK) {
-        return emit_sw(SW_UNKNOWN_ERROR, out, out_max, out_len);
-    }
-    if (pgp_keys_erase_aut() != PGP_KEYS_OK) {
-        return emit_sw(SW_UNKNOWN_ERROR, out, out_max, out_len);
-    }
-    if (openpgp_state_terminate() != 0) {
-        return emit_sw(SW_UNKNOWN_ERROR, out, out_max, out_len);
-    }
-    /* Phase 8 M4.E — wipe the M&D retry-counter state for PW1 / PW3 /
-     * RC.  Slot indices 50 / 51 / 52 in R-mem are erased; the
-     * TROPIC01 chip-side M&D slots themselves (8..16) will be
-     * consumed-and-reinitialised lazily on the next pgp_pin_change
-     * call (= when the user sets a fresh PIN post-ACTIVATE), exactly
-     * the same lifecycle as the FIDO authenticatorReset path.
-     *
-     * Failure here is non-fatal: TERMINATE has already succeeded
-     * w.r.t. the R-mem slot 1 wipe; leaving stale M&D state in
-     * slots 50/51/52 just means a future `openpgp_pin_md_setup`
-     * will overwrite them anyway.  The spec doesn't require us to
-     * touch slots 50/51/52 — they're our private extension. */
-    (void) openpgp_pin_md_factory_reset_all();
-    pgp_pin_clear_session();
-    return emit_sw(SW_OK, out, out_max, out_len);
+    s_auth = 0;
+    /* Keys, the DEC key (both O3 copies) and every PIN, checked, in that
+     * order (D8); a failure stops it and TERMINATE can be sent again. */
+    int rc = pgp_lifecycle_terminate();
+    return emit_sw(rc == 0 ? SW_OK : SW_UNKNOWN_ERROR, out, out_max, out_len);
 }
 
 static int handle_activate_file(uint8_t p1, uint8_t p2,
@@ -1063,20 +1023,15 @@ static int handle_activate_file(uint8_t p1, uint8_t p2,
     if (p1 != 0x00u || p2 != 0x00u) {
         return emit_sw(SW_INCORRECT_P1P2, out, out_max, out_len);
     }
-    /* ACTIVATE FILE is the recovery path after TERMINATE DF.
-     * Per spec §7.2.17, no auth required when card is in TERMINATED
-     * state.  We also accept it as a no-op when already OPERATIONAL
-     * (returns SW=9000). */
-    uint8_t st = openpgp_state_present_get();
-    if (st == 1u /* OPERATIONAL */) {
-        return emit_sw(SW_OK, out, out_max, out_len);  /* no-op */
+    /* No-op on an operational card (§7.2.17); factory PINs only over a
+     * cleanly read TERMINATED state (D11). */
+    if (openpgp_state_lifecycle() == PGP_LC_OPERATIONAL) {
+        return emit_sw(SW_OK, out, out_max, out_len);
     }
-    /* Either TERMINATED or FRESH — re-init defaults. */
-    if (openpgp_state_activate() != 0) {
-        return emit_sw(SW_UNKNOWN_ERROR, out, out_max, out_len);
-    }
-    pgp_pin_clear_session();
-    return emit_sw(SW_OK, out, out_max, out_len);
+    s_auth = 0;
+    int rc = pgp_lifecycle_activate();
+    uint16_t sw = rc == 0 ? SW_OK : rc == -1 ? SW_CONDITIONS_NOT_SATISFIED : SW_UNKNOWN_ERROR;
+    return emit_sw(sw, out, out_max, out_len);
 }
 
 /* ===== SELECT handler ===== */
@@ -1100,13 +1055,9 @@ static int handle_select(uint8_t p1, uint8_t p2,
                memcmp(aid, OPENPGP_AID_PREFIX, OPENPGP_AID_PREFIX_LEN) == 0) {
         /* Partial match on RID prefix — accept. */
     } else {
+        s_auth = 0;                     /* another application: access status reset (D9) */
         return emit_sw(SW_FILE_NOT_FOUND, out, out_max, out_len);
     }
-
-    /* Best-effort state init on SELECT.  Failure not fatal (the
-     * SELECT itself succeeds; later GET DATA may return default
-     * values). */
-    (void) openpgp_state_init();
 
     /* M2: no FCI template returned.  Just SW=9000. */
     *out_len = 0;
@@ -1156,13 +1107,27 @@ int openpgp_applet_dispatch(const uint8_t *in, size_t in_len,
         }
     }
 
-    /* Terminated-state guard: when the applet is in TERMINATED state
-     * (post-TERMINATE DF, awaiting ACTIVATE FILE), every INS except
-     * SELECT and ACTIVATE FILE returns 0x6285. */
-    if (openpgp_state_present_get() == 2u /* TERMINATED */) {
+    /* The state is read once per power cycle (bootstrap on ABSENT); a boot
+     * that failed is tried again with the next APDU — a transient chip
+     * error must not push the user towards TERMINATE.  An uncertain pair
+     * is not retried: it stays ERROR until reboot or TERMINATE. */
+    if (!openpgp_state_loaded()) {
+        (void) pgp_lifecycle_boot();
+    }
+    switch (openpgp_state_lifecycle()) {
+    case PGP_LC_OPERATIONAL:
+        break;
+    case PGP_LC_TERMINATED:             /* awaiting ACTIVATE FILE */
         if (ins != INS_SELECT && ins != INS_ACTIVATE_FILE) {
             return emit_sw(SW_TERMINATED, out, out_max, out_len);
         }
+        break;
+    default:                            /* unreadable: only the way out (§5) */
+        if (ins != INS_SELECT && ins != INS_TERMINATE_DF
+            && !(ins == INS_VERIFY && p2 == 0x83u)) {
+            return emit_sw(SW_UNKNOWN_ERROR, out, out_max, out_len);
+        }
+        break;
     }
 
     switch (ins) {
@@ -1208,7 +1173,7 @@ int openpgp_applet_dispatch(const uint8_t *in, size_t in_len,
         if (p1 != 0x00u || p2 != 0x00u) {
             return emit_sw(SW_INCORRECT_P1P2, out, out_max, out_len);
         }
-        if (!pgp_pin_is_verified(OPENPGP_PIN_PW1)) {
+        if (!(s_auth & AUTH_82)) {
             return emit_sw(SW_SECURITY_NOT_SATISFIED, out, out_max, out_len);
         }
         if (require_touch_if_enabled() != 0) {

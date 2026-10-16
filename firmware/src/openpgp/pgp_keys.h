@@ -18,8 +18,8 @@
  *
  *   - dec key (X25519): host-side compute.  TROPIC01 doesn't expose
  *     ECDH at the user-key level (confirmed via libtropic API audit
- *     + TROPIC01.md line 32).  X25519 priv lives in R-mem slot 1
- *     byte 180-211 (encrypted by L3 session); STM32 does
+ *     + TROPIC01.md line 32).  X25519 priv lives in OpenPGP state O3
+ *     (R-mem 33/43, encrypted by L3 session); STM32 does
  *     curve25519_donna scalarmult in software via trezor-crypto.
  *     Future work hardens this further with M&D-KEK gating
  *     (see docs/BACKLOG.md §1.2).

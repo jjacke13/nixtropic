@@ -234,7 +234,7 @@ set(APP_SOURCES
     src/openpgp/openpgp_applet.c
     src/openpgp/pgp_pin.c
     src/openpgp/pgp_keys.c
-    src/openpgp/openpgp_pin_md.c
+    src/openpgp/pgp_lifecycle.c
     src/fido_hid/ctaphid.c
     src/fido_hid/cbor.c
     src/fido_hid/ctap2.c
@@ -251,7 +251,6 @@ set(APP_SOURCES
     src/fido_hid/fido_state.c
     src/fido_hid/user_presence.c
     src/tropic/tropic.c
-    src/tropic/pin_md_legacy.c
     src/tropic/pin_md_kernel.c
     src/tropic/rec_pair.c
     # src/tropic/lt_crypto_stubs.c  — M4: replaced by trezor_crypto CAL below

@@ -147,15 +147,7 @@ int pgp_keys_read_dec_pubkey(uint8_t pubkey_out[PGP_KEYS_PUBKEY_LEN])
     if (pubkey_out == NULL) return PGP_KEYS_BAD_PARAM;
 
     uint8_t priv[32];
-    int rc = openpgp_state_dec_priv_get(priv);
-    if (rc != 0) {
-        memzero(priv, sizeof priv);
-        return PGP_KEYS_NO_KEY;
-    }
-    /* All-zero priv = "no key generated yet". */
-    uint8_t zero[32] = {0};
-    if (memcmp(priv, zero, sizeof zero) == 0) {
-        memzero(priv, sizeof priv);
+    if (openpgp_state_dec_priv_get(priv) != 0) {      /* none (all zero) */
         return PGP_KEYS_NO_KEY;
     }
 
@@ -172,14 +164,7 @@ int pgp_keys_ecdh_dec(const uint8_t peer_pubkey[PGP_KEYS_PUBKEY_LEN],
     if (peer_pubkey == NULL || shared_out == NULL) return PGP_KEYS_BAD_PARAM;
 
     uint8_t priv[32];
-    int rc = openpgp_state_dec_priv_get(priv);
-    if (rc != 0) {
-        memzero(priv, sizeof priv);
-        return PGP_KEYS_CHIP_ERR;
-    }
-    uint8_t zero[32] = {0};
-    if (memcmp(priv, zero, sizeof zero) == 0) {
-        memzero(priv, sizeof priv);
+    if (openpgp_state_dec_priv_get(priv) != 0) {      /* none (all zero) */
         return PGP_KEYS_NO_KEY;
     }
 
