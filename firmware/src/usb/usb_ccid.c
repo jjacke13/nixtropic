@@ -27,9 +27,10 @@
  *                                          │
  *                                          ▼
  *                                  post EP_IN transmit
+ *                                  post next EP_OUT receive (Phase 9 M4)
  *                                          │
- *                                          ▼ on IN xfer done
- *                                  post next EP_OUT receive
+ *                                          ▼ the next message waits in
+ *                                  usb_ccid_task() until the IN is done
  *
  * pcsc-lite serialises commands per-slot, so we don't need a queue.
  *

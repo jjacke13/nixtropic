@@ -133,10 +133,9 @@ static void boot_banner(void)
 
     /* Now pump tud_task so the banner has time to drain through USB.
      * The pump runs in the release build too (where printf goes nowhere,
-     * see usb/cdc_io.c): USB enumeration is serviced here, before the
-     * chip-init stages below, which pump tud_task only briefly
-     * (tropic_init's settle loop).  Same boot timing as the builds
-     * validated in Phases 4–8. */
+     * see usb/cdc_io.c): USB enumeration is serviced here.  Since Phase 9
+     * M4 the banner runs after the chip / FIDO / PIN boot stages, so the
+     * dongle appears on the bus only once it can answer (main.c stage 7). */
     uint32_t deadline = HAL_GetTick() + 1500u;
     while ((int32_t)(HAL_GetTick() - deadline) < 0) {
         tud_task();
