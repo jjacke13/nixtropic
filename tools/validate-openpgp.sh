@@ -134,12 +134,11 @@ echo " 5/16  GET DATA C4 (PW status)..."
 PW_OUT=$(timeout 5 opensc-tool --reader 0 --card-driver default \
   --send-apdu "$SELECT_APDU" \
   --send-apdu "00:CA:00:C4:00" 2>&1 | tail -5 || true)
-# Expect: NN 40 40 40 03 00 03 then SW=9000 (force_verify, 64,64,64, retries 3,0,3)
-# where NN is 00 after Phase 8 M4.0 (PIN cached for session) or 01 on
-# pre-M4.0 firmware (PIN re-prompted per PSO).  Both byte sequences
-# are spec-valid, just policy differences — accept either.
-if echo "$PW_OUT" | grep -qiE "0[01].{0,2}40.{0,2}40.{0,2}40.{0,2}03.{0,2}00.{0,2}03"; then
-  echo "  ✓ PW status = .. 40 40 40 03 00 03 (default state)"
+# Expect: 01 40 40 40 03 00 03 then SW=9000: byte 0 with its spec meaning
+# (01 = PW1 valid for several signatures, the default since Phase 9 M4 D9),
+# max lengths 64,64,64, retries PW1 3, RC 0 (not set), PW3 3.
+if echo "$PW_OUT" | grep -qiE "01.{0,2}40.{0,2}40.{0,2}40.{0,2}03.{0,2}00.{0,2}03"; then
+  echo "  ✓ PW status = 01 40 40 40 03 00 03 (default state)"
 else
   echo "  ✗ PW status didn't match expected:"
   echo "$PW_OUT" | sed 's/^/      /'
@@ -229,12 +228,22 @@ echo "11/16  INTERNAL AUTHENTICATE — sign 32-byte challenge..."
 CHAL=""
 for _ in $(seq 1 32); do CHAL="${CHAL}55:"; done
 CHAL="${CHAL%:}"
-INTAUT_OUT=$(timeout 10 opensc-tool --reader 0 --card-driver default \
+# PW1.81 (signing) does not open INTERNAL AUTHENTICATE; PW1.82 does (Phase 9 M4, D9).
+INTAUT81_OUT=$(timeout 10 opensc-tool --reader 0 --card-driver default \
   --send-apdu "$SELECT_APDU" \
   --send-apdu "00:20:00:81:$PW1_LC:$PW1_HEX" \
   --send-apdu "00:88:00:00:20:${CHAL}:00" 2>&1 | tail -10 || true)
+if ! echo "$INTAUT81_OUT" | grep -E "^[[:space:]]*Received \(SW1=" | tail -1 | grep -qiE "SW1=0x69.{0,20}SW2=0x82"; then
+  echo "  ✗ INTERNAL AUTHENTICATE after VERIFY 81 only was not refused with 6982:"
+  echo "$INTAUT81_OUT" | sed 's/^/      /'
+  exit 14
+fi
+INTAUT_OUT=$(timeout 10 opensc-tool --reader 0 --card-driver default \
+  --send-apdu "$SELECT_APDU" \
+  --send-apdu "00:20:00:82:$PW1_LC:$PW1_HEX" \
+  --send-apdu "00:88:00:00:20:${CHAL}:00" 2>&1 | tail -10 || true)
 if echo "$INTAUT_OUT" | grep -E "^[[:space:]]*Received \(SW1=" | tail -1 | grep -qiE "SW1=0x90.{0,20}SW2=0x00"; then
-  echo "  ✓ INTERNAL AUTHENTICATE produced signature + SW=9000"
+  echo "  ✓ INTERNAL AUTHENTICATE: refused after VERIFY 81, signed after VERIFY 82 (SW=9000)"
 else
   echo "  ✗ INTERNAL AUTHENTICATE failed:"
   echo "$INTAUT_OUT" | sed 's/^/      /'
