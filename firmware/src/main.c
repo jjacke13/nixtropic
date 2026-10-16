@@ -191,17 +191,6 @@ int main(void)
         raw_blink_code(2);
     }
 
-    /* Stage 7 — USB peripheral + TinyUSB */
-    if (usb_init() != 0) {
-        raw_blink_code(3);
-    }
-
-    /* Stage 8 — boot banner + protocol init */
-    boot_banner();
-#if NIXTROPIC_DEBUG
-    hid_rpc_init();
-#endif
-    fido_hid_init();
 
     /* Stage 8.5 — libtropic on chip.  Runs a second power-cycle then
      * lt_init.  We log but don't halt — FIDO2 / OpenPGP (and the debug
@@ -240,6 +229,23 @@ int main(void)
             printf("[pin] ephemeral P-256 key ready; pin_set=%d\n", pin_is_set());
         }
     }
+
+    /* Stage 7 — USB peripheral + TinyUSB, only now (Phase 9 M4 HIL): the
+     * dongle appears on the bus once the chip and FIDO state are booted.
+     * Before, a host could talk to it during the boot stages above, get
+     * its CCID answers late, give up on them — and the next request then
+     * waited on an answer nobody read: pcscd dropped the reader for good. */
+    if (usb_init() != 0) {
+        raw_blink_code(3);
+    }
+
+    /* Stage 8 — protocol init, banner (enumeration: 1.5 s of tud_task) */
+#if NIXTROPIC_DEBUG
+    hid_rpc_init();
+#endif
+    fido_hid_init();
+    boot_banner();
+
 
     /* LED state machine takes over.  Boot phase used
      * LED_HEARTBEAT (default initial state).  Off (LED_IDLE) means

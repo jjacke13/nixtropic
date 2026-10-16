@@ -35,6 +35,7 @@ ssize_t _write(int fd, const void *buf, size_t count)
 ssize_t _write(int fd, const void *buf, size_t count)
 {
     (void) fd;
+    if (!tud_inited()) return (ssize_t) count;   /* boot stages run before USB (M4) */
 
     /* Copy into TinyUSB's CDC TX FIFO; the main loop's tud_task() drains
      * it.  Never call tud_task() from here (Phase 9 M2, jan review):
