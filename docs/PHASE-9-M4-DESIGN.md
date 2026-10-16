@@ -433,7 +433,7 @@ them) → `kernel_clear` PW1, PW3, RC. Any failure stops it.
 | Bootstrap (O3 ABSENT) | `pgp_wipe` → bind PW1 `123456`, PW3 `12345678` (fresh s) → init O3 OPERATIONAL | ABSENT → bootstrap again |
 | TERMINATE (PW3 verified; or without PW3 only when PW3 itself is blocked or unreadable, §7.2.16 — an unreadable O3 alone is no reason, Jan step 4) | `pgp_wipe` → init O3 TERMINATED | ABSENT → bootstrap, or TERMINATED |
 | ACTIVATE (only when O3 reads OK and TERMINATED) | clear the PIN bindings (a torn earlier ACTIVATE) → bind factory PINs → write O3 OPERATIONAL | TERMINATED (send ACTIVATE again) |
-| Old layout of either application | global migration (§2.6) → bootstrap | migration repeats from step 1 |
+| Old layout (v0.2/M3, no migration since 2026-10-16, §2.6) | O3 reads CORRUPT → ERROR → TERMINATE (old PW3 unreadable, so without PW3) → ACTIVATE; FIDO separately by authenticatorReset | each reset independent and checked; repeat it |
 | O3 ERROR / CORRUPT | refuse all but SELECT, VERIFY 83, TERMINATE | — |
 
 Bootstrap and ACTIVATE bind factory PINs only after `pgp_wipe` has completed with
@@ -747,3 +747,7 @@ follows a fault before the M&D call or after the re-key (§3.3).
   - Confirmed by Jan: wipe order and barriers, ECC 30 erase when empty, M&D 16–30 inside
     UAP 0–31 and outside FIDO 0–15, no irreversible chip operation, the RC guard, lazy boot
     retry, counter before signing, C4 / failed-PW1 flag rules, PW3 rebinding PW1 over ABSENT.
+- Review r2 (Jan, 0bc9f36): **APPROVE**; both r1 probes now pass (TERMINATE 6982 with the key kept,
+  then VERIFY 83 + TERMINATE; torn ACTIVATE recovers by ACTIVATE).  LOW: §5 table row on the old
+  layout still named the dropped global migration → replaced.  cpp-reviewer: APPROVE (de24b7a, findings
+  fixed in 90e90c5).  Step 4 closed; next the hardware session (§7).
