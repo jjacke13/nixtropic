@@ -94,11 +94,6 @@ int pgp_keys_read_sig_pubkey(uint8_t pubkey_out[PGP_KEYS_PUBKEY_LEN]);
 int pgp_keys_sign_with_sig(const uint8_t *msg, size_t msg_len,
                             uint8_t sig_out[PGP_KEYS_SIG_LEN]);
 
-/**
- * @brief Destroy the sig slot key.  Used by TERMINATE DF flow (M3) +
- *        manual key replacement (M5).
- */
-int pgp_keys_erase_sig(void);
 
 /* ===== M5 — DEC (encryption) + AUT (authentication) keys ===== */
 
@@ -127,12 +122,10 @@ int pgp_keys_generate_dec(uint8_t pubkey_out[PGP_KEYS_PUBKEY_LEN]);
 int pgp_keys_read_dec_pubkey(uint8_t pubkey_out[PGP_KEYS_PUBKEY_LEN]);
 int pgp_keys_ecdh_dec(const uint8_t peer_pubkey[PGP_KEYS_PUBKEY_LEN],
                       uint8_t shared_out[PGP_KEYS_PUBKEY_LEN]);
-int pgp_keys_erase_dec(void);
 
 int pgp_keys_generate_aut(uint8_t pubkey_out[PGP_KEYS_PUBKEY_LEN]);
 int pgp_keys_read_aut_pubkey(uint8_t pubkey_out[PGP_KEYS_PUBKEY_LEN]);
 int pgp_keys_sign_with_aut(const uint8_t *msg, size_t msg_len,
                             uint8_t sig_out[PGP_KEYS_SIG_LEN]);
-int pgp_keys_erase_aut(void);
 
 #endif /* NIXTROPIC_OPENPGP_PGP_KEYS_H */

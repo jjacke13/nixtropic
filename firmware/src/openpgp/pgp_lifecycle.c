@@ -47,3 +47,23 @@ int pgp_lifecycle_activate(void)
     if (pgp_pin_bind_factory() != PGP_PIN_OK) return -2;
     return openpgp_state_activate() == 0 ? 0 : -2;
 }
+
+/* At most this many boot attempts per power cycle: a persistent failure
+ * must not re-run the wipe for every APDU a polling host sends. */
+#define PGP_BOOT_TRIES 3u
+
+static uint8_t s_boot_tries;
+
+void pgp_lifecycle_ensure(void)
+{
+    if (openpgp_state_loaded() || s_boot_tries >= PGP_BOOT_TRIES) return;
+    s_boot_tries++;
+    (void) pgp_lifecycle_boot();
+}
+
+#ifdef NIXTROPIC_HOST_TEST
+void pgp_lifecycle_test_reboot(void)
+{
+    s_boot_tries = 0;
+}
+#endif

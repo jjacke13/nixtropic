@@ -30,4 +30,15 @@ int pgp_lifecycle_terminate(void);
 /* 0 = OPERATIONAL; -1 = refused (not a clean TERMINATED); -2 = failed. */
 int pgp_lifecycle_activate(void);
 
+/* Boot on first use: the first APDU (or lt-rpc call) of a power cycle reads
+ * O3 (bootstrap on ABSENT); a failed boot is tried again by later callers,
+ * at most 3 times per power cycle.  A transient chip error must not push
+ * the user towards TERMINATE; an uncertain pair is never retried (the state
+ * stays loaded and reads ERROR until reboot or TERMINATE). */
+void pgp_lifecycle_ensure(void);
+
+#ifdef NIXTROPIC_HOST_TEST
+void pgp_lifecycle_test_reboot(void);
+#endif
+
 #endif /* NIXTROPIC_OPENPGP_PGP_LIFECYCLE_H */

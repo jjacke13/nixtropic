@@ -40,6 +40,7 @@ static void reboot(void)
 {
     openpgp_state_test_reboot();
     pgp_pin_test_reboot();
+    pgp_lifecycle_test_reboot();
     slots_test_reboot();
     fido_pin_test_reboot();
 }

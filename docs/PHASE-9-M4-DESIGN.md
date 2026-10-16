@@ -716,3 +716,13 @@ follows a fault before the M&D call or after the re-key (§3.3).
   single-fault sweep over bootstrap / TERMINATE / ACTIVATE / PUT DATA D3) and
   `test_openpgp_applet` (APDU semantics with stubbed key ops and touch).  71 mutants, all killed
   but one equivalent (CHANGE's `body_len <= old_len` check: `len_ok` refuses the same input).
+- Review r1, cpp-reviewer APPROVE with findings → fixed: the boot helper `pgp_lifecycle_ensure`
+  (at most 3 tries per power cycle, so a persistent failure does not re-run the wipe for every
+  polled APDU) is used by the applet **and** the lt-rpc PGP handlers; an extended-length APDU
+  (Lc 00 with data) is refused (it read as an empty body: PUT DATA D3 would have cleared the
+  RC); PSO:DEC body parser bounds; C4 values other than 00/01 → 6A80; INTERNAL AUTHENTICATE
+  in its own handler; dead `pgp_keys_erase_*` deleted; the CCID receive buffer (a VERIFY body
+  is a PIN) is zeroed after each message.  Kept, by design: a TERMINATE that fails after the
+  O3 clear leaves O3 ABSENT, so the next APDU bootstraps a fresh card (keys already gone; the
+  §5 table's "ABSENT → bootstrap"); TERMINATE without PW3 when PW3 reads ERROR (no new
+  capability: anyone can block PW3 with three wrong VERIFYs and then TERMINATE, §7.2.16).

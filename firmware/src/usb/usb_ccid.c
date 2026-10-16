@@ -387,6 +387,7 @@ void usb_ccid_task(void)
     s_processing = true;
     process_message(s_rx_buf, (size_t) len);
     s_processing = false;
+    memset(s_rx_buf, 0, len);       /* a VERIFY body is a PIN: do not keep it */
     if (epoch != s_epoch) {
         /* The bus was reset during the APDU: drop the stale answer. */
         apdu_dispatch_card_reset();      /* and whatever access it granted */

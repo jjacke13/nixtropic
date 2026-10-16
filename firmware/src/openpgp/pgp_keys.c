@@ -100,12 +100,6 @@ int pgp_keys_sign_with_sig(const uint8_t *msg, size_t msg_len,
     return PGP_KEYS_OK;
 }
 
-int pgp_keys_erase_sig(void)
-{
-    int rc = tropic_ecc_erase(PGP_KEYS_SIG_SLOT);
-    return (rc == 0) ? PGP_KEYS_OK : PGP_KEYS_CHIP_ERR;
-}
-
 /* ===== M5 — DEC slot (X25519, host-side compute, priv in R-mem) ===== */
 
 #include "ed25519-donna/ed25519.h"  /* curve25519_scalarmult{,_basepoint} */
@@ -173,13 +167,6 @@ int pgp_keys_ecdh_dec(const uint8_t peer_pubkey[PGP_KEYS_PUBKEY_LEN],
     return PGP_KEYS_OK;
 }
 
-int pgp_keys_erase_dec(void)
-{
-    uint8_t zero[32] = {0};
-    if (openpgp_state_dec_priv_set(zero) != 0) return PGP_KEYS_CHIP_ERR;
-    return PGP_KEYS_OK;
-}
-
 /* ===== M5 — AUT slot (chip-side Ed25519, full implementation) ===== */
 
 int pgp_keys_generate_aut(uint8_t pubkey_out[PGP_KEYS_PUBKEY_LEN])
@@ -229,10 +216,4 @@ int pgp_keys_sign_with_aut(const uint8_t *msg, size_t msg_len,
     if (rc < 0) return PGP_KEYS_CHIP_ERR;
     if (rc != (int) PGP_KEYS_SIG_LEN) return PGP_KEYS_CHIP_ERR;
     return PGP_KEYS_OK;
-}
-
-int pgp_keys_erase_aut(void)
-{
-    int rc = tropic_ecc_erase(PGP_KEYS_AUT_SLOT);
-    return (rc == 0) ? PGP_KEYS_OK : PGP_KEYS_CHIP_ERR;
 }

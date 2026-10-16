@@ -22,6 +22,7 @@
 #include "openpgp/openpgp_aid.h"
 #include "openpgp/openpgp_applet.h"
 #include "openpgp/openpgp_state.h"
+#include "openpgp/pgp_lifecycle.h"
 #include "openpgp/pgp_keys.h"
 #include "openpgp/pgp_pin.h"
 #include "tropic/tropic.h"
@@ -160,6 +161,7 @@ static void reboot(void)
 {
     openpgp_state_test_reboot();
     pgp_pin_test_reboot();
+    pgp_lifecycle_test_reboot();
     openpgp_applet_card_reset();
 }
 
@@ -376,6 +378,61 @@ static void test_boot_retry(void)
     CHECK(get_c4(c4) == 0x9000 && c4[4] == 3);                       /* retried */
 }
 
+/* cpp-reviewer step 4 (LOW 7): what clears and what must survive. */
+static void test_flag_edges(void)
+{
+    static const uint8_t zero = 0, two_v = 2;
+    fresh();
+    CHECK(verify(0x81, "123456") == 0x9000);
+    CHECK(two(0x24, 0x00, 0x81, "000000", "654321") == 0x63C2);    /* a wrong old PIN */
+    CHECK(cds() == 0x6982);                                          /* drops PW1 access too */
+    CHECK(verify(0x83, "12345678") == 0x9000 && verify(0x81, "000000") == 0x63C1);
+    CHECK(put(0x005B, "A", 1) == 0x9000);                           /* a wrong PW1 keeps PW3 */
+    CHECK(verify(0x81, "123456") == 0x9000 && verify(0x83, "00000000") == 0x63C2);
+    CHECK(cds() == 0x9000 && put(0x005B, "A", 1) == 0x6982);        /* a wrong PW3 keeps PW1 only */
+    CHECK(verify(0x83, "12345678") == 0x9000 && put(0x00C4, &two_v, 1) == 0x6A80);
+    CHECK(put(0x00C4, &zero, 1) == 0x9000 && verify(0x81, "123456") == 0x9000);
+    s_touch_ok = false;                                              /* C4 00: consumed before touch */
+    CHECK(cds() == 0x6982);
+    s_touch_ok = true;
+    CHECK(cds() == 0x6982 && verify(0x81, "123456") == 0x9000 && cds() == 0x9000);
+}
+
+/* cpp-reviewer step 4 (LOW 5, 6): APDU framing. */
+static void test_framing(void)
+{
+    static const uint8_t get_c4_le[5] = { 0x00, 0xCA, 0x00, 0xC4, 0x00 };   /* case 2, Le 00 */
+    static const uint8_t ext_d3[9] = { 0x00, 0xDA, 0x00, 0xD3, 0x00, 0x00, 0x02, 'a', 'b' };
+    static const uint8_t short_dec[5] = { 0xA6, 0x81, 0x00, 0x7F, 0x49 };
+    uint8_t c4[7];
+    fresh();
+    s_out_len = 0;
+    CHECK(openpgp_applet_dispatch(get_c4_le, sizeof get_c4_le, s_out, sizeof s_out, &s_out_len) == 0
+          && s_out_len == 9 && s_out[0] == 0x01 && s_out[7] == 0x90 && s_out[8] == 0x00);
+    CHECK(verify(0x83, "12345678") == 0x9000 && put(0x00D3, "rcrcrcrc", 8) == 0x9000);
+    s_out_len = 0;
+    CHECK(openpgp_applet_dispatch(ext_d3, sizeof ext_d3, s_out, sizeof s_out, &s_out_len) == 0
+          && s_out_len == 2 && s_out[0] == 0x67 && s_out[1] == 0x00);    /* not "clear the RC" */
+    CHECK(get_c4(c4) == 0x9000 && c4[5] == 3);
+    CHECK(verify(0x82, "123456") == 0x9000 && apdu(0x2A, 0x80, 0x86, short_dec, 5) == 0x6700);
+}
+
+/* cpp-reviewer step 4 (MED 2): a boot that keeps failing is tried at most
+ * three times per power cycle, not for every APDU a host polls with. */
+static void test_boot_bound(void)
+{
+    uint8_t old[256] = { 'P', 'G', '7', 'R', 0, 6, 1, 3, 3, 0xFF };
+    uint8_t c4[7];
+    mock_reset(1);
+    CHECK(tropic_rmem_write(33, old, sizeof old) == 0);
+    reboot();
+    unsigned r = mock_calls(MOCK_OP_RMEM_READ);
+    for (int i = 0; i < 6; ++i) CHECK(get_c4(c4) == 0x6F00);
+    CHECK(mock_calls(MOCK_OP_RMEM_READ) - r == 3u * 2u);             /* 3 boots × 2 copies */
+    CHECK(apdu(0xE6, 0x00, 0x00, NULL, 0) == 0x9000);               /* the way out still works */
+    CHECK(apdu(0x44, 0x00, 0x00, NULL, 0) == 0x9000 && get_c4(c4) == 0x9000);
+}
+
 int main(void)
 {
     test_defaults_and_status();
@@ -389,5 +446,8 @@ int main(void)
     test_terminate_activate();
     test_unreadable_state();
     test_boot_retry();
+    test_flag_edges();
+    test_framing();
+    test_boot_bound();
     return check_done("openpgp_applet");
 }

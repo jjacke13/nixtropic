@@ -32,6 +32,7 @@
 #include "fido_hid/credstore.h"
 #include "fido_hid/pin.h"
 #include "openpgp/openpgp_state.h"   /* Phase 8 M4.0 — PGP_FORCE_VERIFY + PGP_TOUCH RPCs */
+#include "openpgp/pgp_lifecycle.h"   /* O3 is read on first use (Phase 9 M4) */
 
 #include "stm32u5xx_hal.h"
 
@@ -268,6 +269,7 @@ static int handle_force_uv_set(const uint8_t *req, size_t req_len,
 static int handle_pgp_force_verify_get(const uint8_t *req, size_t req_len,
                                        uint8_t *resp, size_t resp_max)
 {
+    pgp_lifecycle_ensure();
     (void) req; (void) req_len;
     if (resp_max < 1u) return -1;
     resp[0] = (uint8_t) (openpgp_state_c4_multi() == 0u);   /* force = C4 byte 0 "00" */
@@ -277,6 +279,7 @@ static int handle_pgp_force_verify_get(const uint8_t *req, size_t req_len,
 static int handle_pgp_force_verify_set(const uint8_t *req, size_t req_len,
                                        uint8_t *resp, size_t resp_max)
 {
+    pgp_lifecycle_ensure();
     (void) resp; (void) resp_max;
     if (req_len < 1u) return -1;
     if (!pin_token_is_valid()) return -1;
@@ -288,6 +291,7 @@ static int handle_pgp_force_verify_set(const uint8_t *req, size_t req_len,
 static int handle_pgp_touch_get(const uint8_t *req, size_t req_len,
                                 uint8_t *resp, size_t resp_max)
 {
+    pgp_lifecycle_ensure();
     (void) req; (void) req_len;
     if (resp_max < 1u) return -1;
     resp[0] = openpgp_state_uif();
@@ -297,6 +301,7 @@ static int handle_pgp_touch_get(const uint8_t *req, size_t req_len,
 static int handle_pgp_touch_set(const uint8_t *req, size_t req_len,
                                 uint8_t *resp, size_t resp_max)
 {
+    pgp_lifecycle_ensure();
     (void) resp; (void) resp_max;
     if (req_len < 1u) return -1;
     if (!pin_token_is_valid()) return -1;

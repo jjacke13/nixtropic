@@ -13,11 +13,11 @@
  *   0xA4 SELECT                       §7.2.1   match on AID prefix
  *   0xCA GET DATA                     §7.2.6   DOs 4F/5E/65/6E/7A/C0-CD/5B/5F2D/5F35
  *   0xDA PUT DATA                     §7.2.8   writable DOs only (cardholder, fpr, lang…)
- *   0x20 VERIFY                       §7.2.2   PW1 / PW3 / RC
- *   0x24 CHANGE REFERENCE DATA        §7.2.3   single-attempt boundary (M6 H2 audit fix)
+ *   0x20 VERIFY                       §7.2.2   PW1.81 / PW1.82 / PW3, separate access (M4 D9)
+ *   0x24 CHANGE REFERENCE DATA        §7.2.3   split at the PIN length in its binding (M4)
  *   0x2C RESET RETRY COUNTER          §7.2.4   via RC or via PW3
- *   0xE6 TERMINATE DF                 §7.2.16  erases chip ECC slots (M6 H1 audit fix)
- *   0x44 ACTIVATE FILE                §7.2.17  recovery from TERMINATE
+ *   0xE6 TERMINATE DF                 §7.2.16  pgp_lifecycle wipe: keys, DEC key, PINs (M4)
+ *   0x44 ACTIVATE FILE                §7.2.17  only from a clean TERMINATED state (M4 D11)
  *   0x47 GENERATE ASYMMETRIC KEY PAIR §7.2.14  Ed25519 + X25519
  *   0x2A PSO                          §7.2.10  CDS (9E/9A sign), DEC (80/86 ECDH)
  *   0x88 INTERNAL AUTHENTICATE        §7.2.15  Ed25519 challenge-sign (SSH via gpg-agent)
@@ -46,8 +46,6 @@
 
 /* ===== Additional spec status words ===== */
 #define SW_TERMINATED          0x6285
-#define SW_PIN_BLOCKED_REMAIN0 0x63C0  /* + (remaining tries in lower nibble) */
-#define SW_PIN_FAIL_RETRY_0    0x63C0  /* 0x63CN = wrong PIN, N tries remain */
 
 /* ===== ISO 7816 INS bytes we recognise ===== */
 #define INS_SELECT         0xA4
@@ -227,8 +225,8 @@ static void build_pw_status(uint8_t out[7])
     out[6] = pin_attempts(OPENPGP_PIN_PW3);
 }
 
-/* Fingerprints (DO C5) — 60 B concatenated sig||dec||aut.  Returns
- * 0 OK, -1 on chip error (still writes zero buffer). */
+/* Fingerprints (DO C5) — 60 B concatenated sig||dec||aut (zeros when the
+ * state is unusable). */
 static void build_fingerprints(uint8_t out[60])
 {
     openpgp_state_fingerprint(0, &out[0]);
@@ -694,12 +692,18 @@ static int handle_put_data(uint16_t tag,
         if (body_len < 1u) {
             return emit_sw(SW_WRONG_LENGTH, out, out_max, out_len);
         }
-        rc = openpgp_state_set_c4_multi(body[0] != 0u ? 1u : 0u);
+        if (body[0] > 1u) {
+            return emit_sw(SW_INCORRECT_DATA, out, out_max, out_len);
+        }
+        rc = openpgp_state_set_c4_multi(body[0]);
         break;
     case 0x00D3:  /* Resetting Code (RC): empty body clears it */
         rc = pgp_pin_set_rc(body, body_len);
         return emit_sw(pin_sw(rc, OPENPGP_PIN_RC), out, out_max, out_len);
-    case 0x00D6:  /* UIF sig — aliases global touch */
+    /* UIF: one flag for all three keys, so D6, D7 and D8 each set it for
+     * every key, and "permanent" (02) via any of them is permanent for all
+     * (cleared only by TERMINATE). */
+    case 0x00D6:  /* UIF sig */
     case 0x00D7:  /* UIF dec */
     case 0x00D8:  /* UIF aut */
         if (body_len < 1u) {
@@ -872,6 +876,7 @@ static int parse_pso_dec_body(const uint8_t *body, size_t body_len,
     if (off + 2u > body_len) return -1;
     if (body[off] != 0x7Fu || body[off + 1u] != 0x49u) return -1;
     off += 2;
+    if (off >= body_len) return -1;
     size_t inner_len;
     if (body[off] < 0x80u)       { inner_len = body[off]; off += 1; }
     else if (body[off] == 0x81u) { if (body_len < off + 2u) return -1; inner_len = body[off + 1u]; off += 2; }
@@ -1034,6 +1039,41 @@ static int handle_activate_file(uint8_t p1, uint8_t p2,
     return emit_sw(sw, out, out_max, out_len);
 }
 
+/* INTERNAL AUTHENTICATE: P1=P2=0, body = challenge; Ed25519 with
+ * the aut key.  Needs PW1.82 (D9). */
+static int handle_internal_auth(uint8_t p1, uint8_t p2,
+                                const uint8_t *body, size_t body_len,
+                                uint8_t *out, size_t out_max, size_t *out_len)
+{
+    if (p1 != 0x00u || p2 != 0x00u) {
+        return emit_sw(SW_INCORRECT_P1P2, out, out_max, out_len);
+    }
+    if (!(s_auth & AUTH_82)) {
+        return emit_sw(SW_SECURITY_NOT_SATISFIED, out, out_max, out_len);
+    }
+    if (require_touch_if_enabled() != 0) {
+        return emit_sw(SW_SECURITY_NOT_SATISFIED, out, out_max, out_len);
+    }
+    if (body == NULL || body_len == 0u) {
+        return emit_sw(SW_WRONG_LENGTH, out, out_max, out_len);
+    }
+
+    uint8_t sig[PGP_KEYS_SIG_LEN];
+    int rc = pgp_keys_sign_with_aut(body, body_len, sig);
+    if (rc == PGP_KEYS_NO_KEY) {
+        return emit_sw(SW_REF_DATA_NOT_FOUND, out, out_max, out_len);
+    }
+    if (rc != PGP_KEYS_OK) {
+        return emit_sw(SW_UNKNOWN_ERROR, out, out_max, out_len);
+    }
+    if (out_max < PGP_KEYS_SIG_LEN + 2u) {
+        return emit_sw(SW_WRONG_LENGTH, out, out_max, out_len);
+    }
+    memcpy(out, sig, PGP_KEYS_SIG_LEN);
+    *out_len = PGP_KEYS_SIG_LEN;
+    return emit_sw(SW_OK, out, out_max, out_len);
+}
+
 /* ===== SELECT handler ===== */
 
 static int handle_select(uint8_t p1, uint8_t p2,
@@ -1101,19 +1141,18 @@ int openpgp_applet_dispatch(const uint8_t *in, size_t in_len,
             } else {
                 return emit_sw(SW_WRONG_LENGTH, out, out_max, out_len);
             }
-        } else if (in_len >= 5u + lc) {
+        } else if (lc == 0u && in_len > 5u) {
+            /* Lc 00 with data = an extended-length APDU, which this card
+             * does not announce: refuse, never read it as an empty body
+             * (PUT DATA D3 with an empty body clears the RC). */
+            return emit_sw(SW_WRONG_LENGTH, out, out_max, out_len);
+        } else {
             body = &in[5];
             body_len = lc;
         }
     }
 
-    /* The state is read once per power cycle (bootstrap on ABSENT); a boot
-     * that failed is tried again with the next APDU — a transient chip
-     * error must not push the user towards TERMINATE.  An uncertain pair
-     * is not retried: it stays ERROR until reboot or TERMINATE. */
-    if (!openpgp_state_loaded()) {
-        (void) pgp_lifecycle_boot();
-    }
+    pgp_lifecycle_ensure();             /* read once per power cycle, bounded retry */
     switch (openpgp_state_lifecycle()) {
     case PGP_LC_OPERATIONAL:
         break;
@@ -1165,39 +1204,8 @@ int openpgp_applet_dispatch(const uint8_t *in, size_t in_len,
     case INS_PSO:
         return handle_pso(p1, p2, body, body_len, out, out_max, out_len);
 
-    case INS_INTERNAL_AUT: {
-        /* INTERNAL AUTHENTICATE: P1=P2=0, body = challenge to sign.
-         * Returns Ed25519 signature using the aut-slot key.
-         * Gated on PW1.82 (decrypt/auth PIN).  Phase 5 FIDO has the
-         * same Ed25519 sign primitive — well-tested chip-side path. */
-        if (p1 != 0x00u || p2 != 0x00u) {
-            return emit_sw(SW_INCORRECT_P1P2, out, out_max, out_len);
-        }
-        if (!(s_auth & AUTH_82)) {
-            return emit_sw(SW_SECURITY_NOT_SATISFIED, out, out_max, out_len);
-        }
-        if (require_touch_if_enabled() != 0) {
-            return emit_sw(SW_SECURITY_NOT_SATISFIED, out, out_max, out_len);
-        }
-        if (body == NULL || body_len == 0u) {
-            return emit_sw(SW_WRONG_LENGTH, out, out_max, out_len);
-        }
-
-        uint8_t sig[PGP_KEYS_SIG_LEN];
-        int rc = pgp_keys_sign_with_aut(body, body_len, sig);
-        if (rc == PGP_KEYS_NO_KEY) {
-            return emit_sw(SW_REF_DATA_NOT_FOUND, out, out_max, out_len);
-        }
-        if (rc != PGP_KEYS_OK) {
-            return emit_sw(SW_UNKNOWN_ERROR, out, out_max, out_len);
-        }
-        if (out_max < PGP_KEYS_SIG_LEN + 2u) {
-            return emit_sw(SW_WRONG_LENGTH, out, out_max, out_len);
-        }
-        memcpy(out, sig, PGP_KEYS_SIG_LEN);
-        *out_len = PGP_KEYS_SIG_LEN;
-        return emit_sw(SW_OK, out, out_max, out_len);
-    }
+    case INS_INTERNAL_AUT:
+        return handle_internal_auth(p1, p2, body, body_len, out, out_max, out_len);
 
     default:
         return emit_sw(SW_INS_NOT_SUPPORTED, out, out_max, out_len);
