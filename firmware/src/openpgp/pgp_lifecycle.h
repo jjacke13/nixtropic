@@ -9,8 +9,8 @@
  *      (fresh s) → O3 OPERATIONAL; anything else → ERROR (TERMINATE is
  *      the way out).
  * terminate: wipe → O3 TERMINATED.
- * activate: only from a cleanly read TERMINATED O3 → factory PINs → O3
- *      OPERATIONAL.
+ * activate: only from a cleanly read TERMINATED O3 → clear the PIN bindings
+ *      again (a torn earlier ACTIVATE) → factory PINs → O3 OPERATIONAL.
  *
  * No automatic migration from the v0.2/M3 layout (Vaios, 2026-10-16; Jan
  * approved): an old PG7R record never reads as an NXR1 record, so O3 reads

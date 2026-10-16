@@ -96,9 +96,10 @@ on the host mock.
   reveals nothing about the PIN. Token revocation, key-agreement regeneration on a
   mismatch and the RAM `pinAuthBlocked` throttle stay.
 - **D11. ACTIVATE only from a cleanly read TERMINATED state.** Unknown or unreadable
-  OpenPGP state recovers through TERMINATE, which OpenPGP 3.4.1 §7.2.16 allows without
-  PW3 when PW3 is blocked or inaccessible (Q5, verified by Jan), and which destroys
-  first (D8).
+  OpenPGP state recovers through TERMINATE, which destroys first (D8): with PW3
+  verified, or without PW3 when PW3 itself is blocked or inaccessible (OpenPGP 3.4.1
+  §7.2.16; Q5, verified by Jan).  An unreadable O3 alone does not waive PW3: PW3 is a
+  separate record and may still work — VERIFY 83 first (Jan, step 4 r1).
 
 ---
 
@@ -430,8 +431,8 @@ them) → `kernel_clear` PW1, PW3, RC. Any failure stops it.
 | Event | Sequence | A fault leaves |
 |---|---|---|
 | Bootstrap (O3 ABSENT) | `pgp_wipe` → bind PW1 `123456`, PW3 `12345678` (fresh s) → init O3 OPERATIONAL | ABSENT → bootstrap again |
-| TERMINATE (PW3 verified; or without PW3 when PW3 is blocked or the state is unreadable, §7.2.16) | `pgp_wipe` → init O3 TERMINATED | ABSENT → bootstrap, or TERMINATED |
-| ACTIVATE (only when O3 reads OK and TERMINATED) | bind factory PINs → write O3 OPERATIONAL | TERMINATED (send ACTIVATE again) |
+| TERMINATE (PW3 verified; or without PW3 only when PW3 itself is blocked or unreadable, §7.2.16 — an unreadable O3 alone is no reason, Jan step 4) | `pgp_wipe` → init O3 TERMINATED | ABSENT → bootstrap, or TERMINATED |
+| ACTIVATE (only when O3 reads OK and TERMINATED) | clear the PIN bindings (a torn earlier ACTIVATE) → bind factory PINs → write O3 OPERATIONAL | TERMINATED (send ACTIVATE again) |
 | Old layout of either application | global migration (§2.6) → bootstrap | migration repeats from step 1 |
 | O3 ERROR / CORRUPT | refuse all but SELECT, VERIFY 83, TERMINATE | — |
 
@@ -449,7 +450,7 @@ TERMINATED state, which O3 read cleanly.
 | global/state ABSENT | checked wipe, then fresh | `pgp_wipe`, then bootstrap |
 | PIN ABSENT, guard says set | ERROR | ERROR |
 | `retire_pending` | settle, continue | settle, continue |
-| ERROR (read error) / CORRUPT | refuse all but Reset | refuse; TERMINATE without PW3 recovers |
+| ERROR (read error) / CORRUPT | refuse all but Reset | refuse; VERIFY 83 + TERMINATE recovers (without PW3 when PW3 is blocked or unreadable) |
 | uncertain write | refuse until reboot | refuse until reboot |
 | old layout | refuse; authenticatorReset (§2.6 dropped) | refuse; TERMINATE + ACTIVATE |
 | last-slot fault (§3.3) | PIN BLOCKED → Reset | PIN BLOCKED → RC/PW3 reset, TERMINATE |
@@ -708,7 +709,7 @@ follows a fault before the M&D call or after the re-key (§3.3).
   signature counter is written **before** signing: a counter that cannot be written means no
   signature; the counter never shows fewer signatures than were made.
 - ERROR (O3 unreadable, damaged, or uncertain): only SELECT, VERIFY 83, TERMINATE (answered
-  6F00 otherwise).  TERMINATE needs PW3 verified unless O3 is ERROR or PW3 is BLOCKED / ERROR.
+  6F00 otherwise).  TERMINATE needs PW3 verified unless PW3 is BLOCKED / ERROR (r1 had "or O3 ERROR": see below).
   The old PG7R record reads CORRUPT → ERROR → TERMINATE + ACTIVATE (release note).
 - lt-rpc PGP_FORCE_VERIFY keeps its wire meaning (1 = re-verify per signature) = C4 byte 0 `00`.
 - Host tests: `test_openpgp_state` (lifecycle, guards, old and masked layouts, read errors,
@@ -726,3 +727,23 @@ follows a fault before the M&D call or after the re-key (§3.3).
   O3 clear leaves O3 ABSENT, so the next APDU bootstraps a fresh card (keys already gone; the
   §5 table's "ABSENT → bootstrap"); TERMINATE without PW3 when PW3 reads ERROR (no new
   capability: anyone can block PW3 with three wrong VERIFYs and then TERMINATE, §7.2.16).
+- Review r1, Jan CHANGES REQUIRED (both reproduced with APDU probes) → fixed:
+  - **HIGH:** TERMINATE skipped PW3 whenever O3 was ERROR — e.g. a lost reply on the counter
+    write of a CDS made O3 uncertain while PW3 still worked, and an unauthenticated TERMINATE
+    then erased the keys.  Now only PW3 itself BLOCKED / unreadable waives it (§7.2.16 ties
+    the exception to PW3, not to the state); an unreadable O3 with a working PW3 needs VERIFY
+    83 first.  D11 and the §5 table narrowed accordingly.  The old layout still recovers:
+    its PW3 record is unreadable too.
+  - **MED:** an ACTIVATE torn inside the first factory binding left that binding CORRUPT
+    under a clean TERMINATED O3: ACTIVATE then refused (setup needs a readable record) and a
+    TERMINATED card serves nothing else — trapped.  ACTIVATE now clears the PIN bindings
+    first (retire + checked erase, needs no record; no key exists in a clean TERMINATED
+    state).  The state-level sweep had missed it because its recovery called TERMINATE
+    directly; `test_openpgp_applet` now sweeps one fault at every chip call of ACTIVATE,
+    TERMINATE, CDS, VERIFY, CHANGE, PUT DATA D3 / 5B and the bootstrap **through the APDU
+    entry point**, and recovers only with gpg's factory-reset sequence (wrong VERIFY 81/83
+    until blocked, TERMINATE, ACTIVATE): always a usable card with factory PINs and no key,
+    and never a key under a factory PIN.  Both bugs put back as mutants: killed.
+  - Confirmed by Jan: wipe order and barriers, ECC 30 erase when empty, M&D 16–30 inside
+    UAP 0–31 and outside FIDO 0–15, no irreversible chip operation, the RC guard, lazy boot
+    retry, counter before signing, C4 / failed-PW1 flag rules, PW3 rebinding PW1 over ABSENT.

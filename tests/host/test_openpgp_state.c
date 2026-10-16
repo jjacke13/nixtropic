@@ -247,6 +247,22 @@ static void test_terminate_activate(void)
     CHECK(pgp_lifecycle_activate() == -1 && openpgp_state_activate() != 0);
 }
 
+/* An ACTIVATE torn inside the first factory binding leaves PW1 damaged
+ * under a clean TERMINATED O3; the next ACTIVATE must still work — a
+ * TERMINATED card answers nothing else (Jan step 4 MED). */
+static void test_torn_activate(void)
+{
+    put_in_use();
+    CHECK(pgp_lifecycle_terminate() == 0);
+    mock_tear_nth(MOCK_OP_RMEM_WRITE, 1, -1, MOCK_DAMAGE_GARBLE);
+    CHECK(pgp_lifecycle_activate() != 0);
+    mock_disarm();
+    reboot();
+    CHECK(pgp_lifecycle_boot() == 0 && openpgp_state_lifecycle() == PGP_LC_TERMINATED);
+    CHECK(pgp_lifecycle_activate() == 0);
+    CHECK(v(PW1, "123456") == PGP_PIN_OK && v(PW3, "12345678") == PGP_PIN_OK);
+}
+
 /* The wipe's hard barriers (D8): a failed step stops it — no PIN is
  * cleared while the DEC key may remain, no TERMINATED over a live PIN. */
 static void test_wipe_barriers(void)
@@ -535,6 +551,7 @@ int main(void)
     test_lost_binding();
     test_terminate_activate();
     test_wipe_barriers();
+    test_torn_activate();
     test_old_layout();
     test_masked_old_layout();
     test_read_error();

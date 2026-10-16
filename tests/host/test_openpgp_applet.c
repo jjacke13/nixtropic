@@ -259,7 +259,11 @@ static void test_sig_counter_and_touch(void)
     CHECK(cds() == 0x6F00 && s_signs == s);
     mock_disarm();
     CHECK(apdu(0xCA, 0x00, 0xC4, NULL, 0) == 0x6F00 && cds() == 0x6F00);
-    CHECK(apdu(0xE6, 0x00, 0x00, NULL, 0) == 0x9000);        /* without PW3: state unreadable */
+    /* O3 unreadable but PW3 fine: TERMINATE still needs PW3 (Jan step 4 HIGH). */
+    mock_ecc_put(29);
+    CHECK(apdu(0xE6, 0x00, 0x00, NULL, 0) == 0x6982 && mock_ecc_present(29));
+    CHECK(verify(0x83, "12345678") == 0x9000 && apdu(0xE6, 0x00, 0x00, NULL, 0) == 0x9000);
+    CHECK(!mock_ecc_present(29));
     CHECK(apdu(0x44, 0x00, 0x00, NULL, 0) == 0x9000 && verify(0x81, "123456") == 0x9000);
 }
 
@@ -433,6 +437,142 @@ static void test_boot_bound(void)
     CHECK(apdu(0x44, 0x00, 0x00, NULL, 0) == 0x9000 && get_c4(c4) == 0x9000);
 }
 
+/* ---- single-fault sweep through the APDU entry point (Jan step 4) ----
+ *
+ * One fault at every chip call of one APDU, a reboot, and then only what a
+ * user can send: gpg's factory-reset sequence (wrong VERIFY 81 / 83 until
+ * blocked, TERMINATE, ACTIVATE).  It must always end in a usable card with
+ * factory PINs and no key; and no key may ever sit under a factory PIN. */
+
+static const uint8_t DEC_PAT[OPENPGP_DEC_PRIV_LEN] = { 0xD1, 0xEC, 0x0F, 0xFE, 1, 2, 3, 0x40 };
+
+static bool raw_contains(uint16_t slot, const uint8_t *pat, size_t n)
+{
+    uint8_t b[444];
+    size_t got = 0;
+    if (tropic_rmem_read(slot, b, sizeof b, &got) != 0) return false;
+    for (size_t i = 0; i + n <= got; ++i) {
+        if (memcmp(&b[i], pat, n) == 0) return true;
+    }
+    return false;
+}
+
+static bool keys_left(void)
+{
+    return mock_ecc_present(29) || mock_ecc_present(31)
+        || raw_contains(33, DEC_PAT, sizeof DEC_PAT) || raw_contains(43, DEC_PAT, sizeof DEC_PAT);
+}
+
+static bool gpg_factory_reset(void)
+{
+    reboot();
+    if (select_pgp() != 0x9000) return false;
+    for (int i = 0; i < 4; ++i) (void) verify(0x81, "@@@@@@@@");
+    for (int i = 0; i < 4; ++i) (void) verify(0x83, "@@@@@@@@");
+    uint16_t t = apdu(0xE6, 0x00, 0x00, NULL, 0);
+    if (t != 0x9000 && t != 0x6285) return false;           /* 6285: already terminated */
+    return apdu(0x44, 0x00, 0x00, NULL, 0) == 0x9000 && !keys_left()
+        && verify(0x81, "123456") == 0x9000 && verify(0x83, "12345678") == 0x9000;
+}
+
+enum fault { F_ERR, F_LOST, F_GARBLE, F_MASK, F_SILENT, F_COUNT };
+
+static void arm(mock_op_t op, unsigned n, enum fault f)
+{
+    switch (f) {
+    case F_ERR:    mock_fail_nth(op, n, -1, false); break;
+    case F_LOST:   mock_fail_nth(op, n, -1, true); break;
+    case F_GARBLE: mock_tear_nth(op, n, -1, MOCK_DAMAGE_GARBLE); break;
+    case F_MASK:   mock_tear_nth(op, n, -1, MOCK_DAMAGE_MASKED); break;
+    default:       mock_tear_nth(op, n, 0, MOCK_DAMAGE_GARBLE); break;   /* "OK", data left */
+    }
+}
+
+enum op { A_ACTIVATE, A_TERMINATE, A_CDS, A_VERIFY, A_CHANGE, A_SET_RC, A_PUT, A_BOOTSTRAP, A_COUNT };
+
+/* A card in use (own PINs, an RC, keys, the DEC key), then what the APDU needs. */
+static void before(enum op o)
+{
+    fresh();
+    CHECK(verify(0x83, "12345678") == 0x9000);
+    CHECK(two(0x24, 0x00, 0x83, "12345678", "admin-own-1") == 0x9000);
+    CHECK(two(0x24, 0x00, 0x81, "123456", "pw1-own") == 0x9000);
+    CHECK(verify(0x83, "admin-own-1") == 0x9000 && put(0x00D3, "rc-code-1", 9) == 0x9000);
+    CHECK(openpgp_state_dec_priv_set(DEC_PAT) == 0);
+    mock_ecc_put(29);
+    mock_ecc_put(31);
+    openpgp_applet_card_reset();
+    switch (o) {
+    case A_ACTIVATE:
+        CHECK(verify(0x83, "admin-own-1") == 0x9000 && apdu(0xE6, 0x00, 0x00, NULL, 0) == 0x9000);
+        break;
+    case A_TERMINATE: case A_SET_RC: case A_PUT:
+        CHECK(verify(0x83, "admin-own-1") == 0x9000);
+        break;
+    case A_CDS:
+        CHECK(verify(0x81, "pw1-own") == 0x9000);
+        break;
+    case A_BOOTSTRAP:                    /* O3 lost (both copies), keys and PINs stay */
+        CHECK(tropic_rmem_erase(33) == 0 && tropic_rmem_erase(43) == 0);
+        reboot();
+        break;
+    default:
+        break;
+    }
+}
+
+static uint16_t send(enum op o)
+{
+    switch (o) {
+    case A_ACTIVATE:  return apdu(0x44, 0x00, 0x00, NULL, 0);
+    case A_TERMINATE: return apdu(0xE6, 0x00, 0x00, NULL, 0);
+    case A_CDS:       return cds();
+    case A_VERIFY:    return verify(0x81, "pw1-own");
+    case A_CHANGE:    return two(0x24, 0x00, 0x81, "pw1-own", "pw1-new");
+    case A_SET_RC:    return put(0x00D3, "rc-code-2", 9);
+    case A_PUT:       return put(0x005B, "Alice", 5);
+    default:          return select_pgp();
+    }
+}
+
+static void test_apdu_sweep(void)
+{
+    static const mock_op_t ops[] = {
+        MOCK_OP_ECC_ERASE, MOCK_OP_RMEM_READ, MOCK_OP_RMEM_WRITE, MOCK_OP_RMEM_ERASE,
+        MOCK_OP_MAC_AND_DESTROY, MOCK_OP_RANDOM,
+    };
+    for (int o = 0; o < A_COUNT; ++o) {
+        for (size_t i = 0; i < sizeof ops / sizeof ops[0]; ++i) {
+            mock_op_t op = ops[i];
+            before((enum op) o);
+            unsigned c0 = mock_calls(op);
+            CHECK(send((enum op) o) == 0x9000);
+            unsigned calls = mock_calls(op) - c0;
+            bool rmem_mut = op == MOCK_OP_RMEM_WRITE || op == MOCK_OP_RMEM_ERASE;
+            for (unsigned n = 1; n <= calls; ++n) {
+                for (int f = 0; f < F_COUNT; ++f) {
+                    if (f >= F_GARBLE && !rmem_mut) continue;
+                    if (f == F_LOST && op == MOCK_OP_RMEM_READ) continue;
+                    before((enum op) o);
+                    arm(op, n, (enum fault) f);
+                    uint16_t sw = send((enum op) o);
+                    mock_disarm();
+                    reboot();
+                    bool good = select_pgp() == 0x9000;
+                    if (keys_left()) {          /* never a key under a factory PIN */
+                        good = good && verify(0x81, "123456") != 0x9000
+                                    && verify(0x83, "12345678") != 0x9000;
+                    }
+                    good = good && gpg_factory_reset();
+                    CHECK(good);
+                    if (!good) fprintf(stderr, "  apdu sweep op %d fault %d chip-op %d call %u: sw %04x\n",
+                                       o, f, op, n, sw);
+                }
+            }
+        }
+    }
+}
+
 int main(void)
 {
     test_defaults_and_status();
@@ -449,5 +589,6 @@ int main(void)
     test_flag_edges();
     test_framing();
     test_boot_bound();
+    test_apdu_sweep();
     return check_done("openpgp_applet");
 }

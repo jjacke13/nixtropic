@@ -42,8 +42,13 @@ int pgp_lifecycle_terminate(void)
 
 int pgp_lifecycle_activate(void)
 {
-    /* The wipe happened in the TERMINATE that wrote this clean record. */
+    /* The wipe happened in the TERMINATE that wrote this clean record, so
+     * no key exists.  Clear the PIN bindings again first: an earlier
+     * ACTIVATE torn inside a factory binding leaves it damaged, and setup
+     * refuses a damaged record — ACTIVATE would never succeed, and a
+     * TERMINATED card answers nothing else (Jan step 4 MED). */
     if (openpgp_state_lifecycle() != PGP_LC_TERMINATED) return -1;
+    if (pgp_pin_clear_all() != PGP_PIN_OK) return -2;
     if (pgp_pin_bind_factory() != PGP_PIN_OK) return -2;
     return openpgp_state_activate() == 0 ? 0 : -2;
 }

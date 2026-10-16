@@ -1008,11 +1008,12 @@ static int handle_terminate_df(uint8_t p1, uint8_t p2,
     if (p1 != 0x00u || p2 != 0x00u) {
         return emit_sw(SW_INCORRECT_P1P2, out, out_max, out_len);
     }
-    /* PW3 verified, or without PW3 when PW3 is blocked or the state cannot
-     * be read (§7.2.16; no secure messaging here).  Only destroys. */
+    /* PW3 verified, or without PW3 only when PW3 itself is blocked or
+     * cannot be read (§7.2.16; no secure messaging here).  An unreadable O3
+     * is no reason on its own: PW3 is a separate record and may still work
+     * — then VERIFY 83 first (Jan step 4 HIGH).  Only destroys. */
     pgp_pin_state_t pw3 = pgp_pin_status(OPENPGP_PIN_PW3, NULL, NULL);
-    if (!(s_auth & AUTH_83) && openpgp_state_lifecycle() != PGP_LC_ERROR
-        && pw3 != PGP_PIN_BLOCKED && pw3 != PGP_PIN_ERROR) {
+    if (!(s_auth & AUTH_83) && pw3 != PGP_PIN_BLOCKED && pw3 != PGP_PIN_ERROR) {
         return emit_sw(SW_SECURITY_NOT_SATISFIED, out, out_max, out_len);
     }
     s_auth = 0;
