@@ -384,3 +384,51 @@ Notes:
 
 **M4 design** `docs/PHASE-9-M4-DESIGN.md`: approved by Jan at r3 (8f3a743; r1 and r2
 CHANGES REQUIRED, mapped in §11/§12).  Implementation Fri 16 Oct.
+
+## 2026-10-16 — Phase 9 M4 PIN + persistent-state integrity ✅
+
+Design `docs/PHASE-9-M4-DESIGN.md` (approved before code; §13 = every implementation
+decision and review).  Commits bf9b20b..4f98656.
+- **Record pairs** (`tropic/rec_pair`): every persistent object in two R-mem slots, write
+  proven by read-back, newer copy wins and repairs the other; an empty read never proves
+  a fresh device (guards); an unproven write makes the object refuse until reboot.
+- **M&D kernel v2** (`tropic/pin_md_kernel`): A/B slot ranges, commit = record, then the
+  old range retired; k = HMAC(s, 2) out for M5; the binding is the only PIN state.
+- **FIDO** (O1 0/40, O2 41/42, M&D 0–15): checked reset wipe (keys → metadata → PIN →
+  fresh O1 → counter), dispatcher refuses all but GetInfo/Reset unless the state is
+  known-good, changePin per CTAP 2.1.
+- **OpenPGP** (O3 33/43, O4–O6 50–55, M&D 16–30): no software PIN check, PW1.81 /
+  PW1.82 / PW3 apart, DO C4 byte 0 with spec meaning (default 01 = PIN once per
+  plug-in), access cleared on card reset / other AID / PIN change, checked wipe before
+  any factory PIN, ACTIVATE only from a clean TERMINATED, TERMINATE without PW3 only
+  when PW3 itself is blocked or unreadable.  Legacy kernel and wrapper deleted.
+- **No migration** (Vaios): the old layout reads damaged and fails closed.
+- **Found on hardware, fixed:** USB now starts after the chip/FIDO boot (1ba7b86) and
+  CCID listens again right after processing (f05e63b): a pcscd that gave up on a late
+  answer (cold boot, or the FIDO reset at plug-in) had dropped the reader for good.
+
+Reviews: cpp-reviewer APPROVE every step; Jan APPROVE every step (step 4 after one
+CHANGES REQUIRED: TERMINATE waived PW3 on an unreadable O3; a torn ACTIVATE trapped the
+card — both fixed, with an APDU-level fault sweep).  Host: 14 suites, single-fault sweeps
+for every lifecycle path, ~130 mutants (all killed but equivalents).
+
+| Build | Test | Result |
+|---|---|---|
+| host | `nix build .#host-tests` (rec_pair, pin_md_kernel, fido_state, fido_pin_cmd, openpgp_state, openpgp_applet, …) | ✓ 14/14 |
+| release dc188e77 | old layout: GET DATA 6F00 → TERMINATE (no PW3) + ACTIVATE → factory | ✓ |
+| release / debug | `validate_fido_m3.py` (FIDO reset at plug-in included) | ✓ 60/60 both |
+| release / debug | `validate-openpgp` | ✓ 16/16 both |
+| release / debug | `tools/validate-openpgp-m4.sh` (81/82, C4 00, CHANGE, RC + RESET RETRY COUNTER) | ✓ 29/29 both |
+| release | `validate-pin-md.sh --destroy-my-pin` | ✓ |
+| release | `gpg --card-status`: Signature PIN not forced, retries 3 0 3 | ✓ |
+
+Measured: an OpenPGP VERIFY ≈ 1.4 s (3 rounds: two record-pair writes dominate).
+Sizes: release 221 908 B, debug 227 792 B.
+
+**Release note for v0.3.0 (must say):** after flashing, run a FIDO reset
+(`fido2-token -R <dev>` within 10 s of plugging in, touch) and an OpenPGP factory reset
+(tested raw: SELECT, `00 E6 00 00`, `00 44 00 00`, e.g. with `opensc-tool -s`; gpg's
+`factory-reset` sends the same but was not tried against the old layout, where GET DATA
+answers 6F00).
+Until then FIDO answers only GetInfo/Reset and OpenPGP only SELECT / VERIFY 83 /
+TERMINATE.  All FIDO credentials, OpenPGP keys and PINs are lost (no migration).

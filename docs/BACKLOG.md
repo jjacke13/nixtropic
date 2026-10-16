@@ -15,7 +15,7 @@ didn't make them blocking.
 
 Landed in commits leading up to `561e040` (schema PG7R).  `pin_md_kernel`
 extracted to `firmware/src/tropic/pin_md_kernel.{c,h}`; OpenPGP wrappers
-live in `firmware/src/openpgp/openpgp_pin_md.{c,h}` using M&D slots 8-16
+live in `firmware/src/openpgp/pgp_pin.{c,h}` on the M&D kernel v2 (Phase 9 M4; was openpgp_pin_md, slots 8-16)
 and R-mem slots 50/51/52 (per-PIN state).  `pgp_pin.c` VERIFY routes
 through M&D first.  Bootstrap path wipes M&D state on schema bump to
 avoid PIN brick.  Acceptance verified by `tools/validate-pin-md.sh`.
@@ -265,6 +265,17 @@ endpoint is busy (Jan, M3).
 credMgmt and 32 slots; `tools/validate_fido_m3.py` replaces them (M6 cleanup).
 
 ---
+
+### 6.9 Phase 9 M4 follow-ups
+
+- A host that never reads a stale CCID answer still stalls CCID (Jan, f05e63b); libccid
+  does read it.  Revisit if another PC/SC stack shows it.
+- FIDO boot after a transient chip error: FIDO refuses until power-up (OpenPGP retries
+  its boot up to 3 times per power cycle).
+- OpenPGP VERIFY ≈ 1.4 s: record-pair writes dominate.  Moving the signature counter to
+  a chip monotonic counter removes one O3 write per signature.
+- `validate-openpgp.sh` needs `pcsc_scan`: run it as `nix run .#validate-openpgp` (the
+  dev shell lacks it).
 
 ## 7. Performance / flash budget
 
