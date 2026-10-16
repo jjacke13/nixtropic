@@ -95,7 +95,7 @@ static uint8_t  s_tx_buf[CCID_MAX_MSG_LEN];
 static uint16_t s_tx_len;
 static uint8_t  s_rhport;
 /* Length of a received bulk-OUT message waiting for usb_ccid_task()
- * (0 = none).  RX is re-armed only after it is answered, so s_rx_buf
+ * (0 = none).  RX is re-armed only after it is processed, so s_rx_buf
  * stays stable meanwhile. */
 static volatile uint32_t s_rx_pending;
 /* Set while usb_ccid_task() runs an APDU (it may wait for touch and pump
@@ -354,8 +354,7 @@ static bool ccid_xfer_cb(uint8_t rhport, uint8_t ep_addr,
             usbd_edpt_xfer(rhport, USB_CCID_EP_OUT, s_rx_buf, sizeof s_rx_buf);
         }
     } else if (ep_addr == USB_CCID_EP_IN) {
-        s_tx_len = 0;
-        usbd_edpt_xfer(rhport, USB_CCID_EP_OUT, s_rx_buf, sizeof s_rx_buf);
+        s_tx_len = 0;                          /* RX was re-armed after processing */
     }
 
     return true;
@@ -379,7 +378,9 @@ const usbd_class_driver_t usb_ccid_driver = {
 void usb_ccid_task(void)
 {
     uint32_t len = s_rx_pending;
-    if (len == 0u || user_presence_is_awaiting()) {
+    /* Also wait while the previous answer is still on the IN endpoint: its
+     * buffer must not change, and the host reads it before the next one. */
+    if (len == 0u || user_presence_is_awaiting() || usbd_edpt_busy(s_rhport, USB_CCID_EP_IN)) {
         return;
     }
     s_rx_pending = 0;
@@ -393,11 +394,15 @@ void usb_ccid_task(void)
         apdu_dispatch_card_reset();      /* and whatever access it granted */
         s_tx_len = 0;
         if (s_itf_num == 0xFFu) return;        /* not configured again */
-    } else if (s_tx_len > 0u
-               && usbd_edpt_xfer(s_rhport, USB_CCID_EP_IN, s_tx_buf, s_tx_len)) {
-        return;                     /* RX re-armed when the IN completes */
+    } else if (s_tx_len == 0u
+               || !usbd_edpt_xfer(s_rhport, USB_CCID_EP_IN, s_tx_buf, s_tx_len)) {
+        s_tx_len = 0;               /* nothing to send (malformed) or TX refused */
     }
-    /* Nothing to send (malformed) or TX refused: listen again. */
-    s_tx_len = 0;
+    /* Listen again now, not after the host read the answer (Phase 9 M4 HIL):
+     * a host that gave up on a late answer (pcscd during a long FIDO wipe or
+     * a touch wait) writes its next request instead of reading — with RX
+     * still closed both sides waited forever and pcscd dropped the reader.
+     * The next request is processed once the old answer was read; the host
+     * discards that stale answer by its bSeq (libccid). */
     usbd_edpt_xfer(s_rhport, USB_CCID_EP_OUT, s_rx_buf, sizeof s_rx_buf);
 }
