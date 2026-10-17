@@ -4,7 +4,7 @@ Contract: `docs/PHASE-9-PLAN.md` §7. Builds on `docs/PHASE-9-M4-DESIGN.md` (rec
 kernel v2, D4 "change keeps s", D8 "destruction before defaults"). PIN hashes are already
 gone (M4 D6), so M5 is **only** the OpenPGP decryption key.
 
-r2 (2026-10-17): Jan's r1 review (CHANGES REQUIRED, J1–J5) resolved — see §8.
+r2 (2026-10-17): Jan's r1 review (CHANGES REQUIRED, J1–J5) resolved — see §8. **APPROVED by Jan at r2** (4fb6419), with two wording notes and one implementation note — §9.
 
 ## 0. What is wrong today (code facts)
 
@@ -101,7 +101,7 @@ own; only the record pair does.
 | PSO:DEC, no key | `6A88` (OpenPGP §7.6) | — |
 | PSO:DEC, tag fails (damage) | `6F00`, output wiped, `auth_drop(81\|82)`, nothing rewritten | — |
 | READ PUBLIC KEY | `dec_pub` | no write |
-| PW1 reset (RC or PW3) | **preflight**: authorization (RC verified, or 83 set), new-PIN length, lifecycle OPERATIONAL, PW1 not ERROR — any refusal answers and touches nothing → `auth_drop(81\|82)` → if a DEC key exists: `dec_destroy` (checked; **failure stops here**, no reset) → `pgp_pin_reset_pw1` | old PIN + old key; old PIN + key destroyed (retry the reset); new PIN + key destroyed |
+| PW1 reset (RC or PW3) | **preflight**: new-PIN syntax and length first (before any RC attempt), then authorization (RC verified, or 83 set), lifecycle OPERATIONAL, PW1 not ERROR — a refusal destroys no DEC key and binds no new PW1 (an RC attempt is spent, and a status read may settle or repair records, as in M4) → `auth_drop(81\|82)` → if a DEC key exists: `dec_destroy` (checked; **failure stops here**, no reset) → `pgp_pin_reset_pw1` | old PIN + old key; old PIN + key destroyed (retry the reset); new PIN + key destroyed |
 | PW1 blocked | nothing: s is unreachable, the wrap is cryptographically dead; a reset destroys it formally | — |
 | TERMINATE / bootstrap | `pgp_wipe` already erases both O3 copies (M4 §5) | M4 rows |
 | ACTIVATE | O3 OPERATIONAL defaults = no DEC key | M4 row |
@@ -126,8 +126,8 @@ key's binding with PSO:CDS right after generating.
 - PSO:DEC checks `(s_auth & AUTH_82) && s_kek_ok`; GENERATE DEC checks
   `(s_auth & AUTH_83) && s_kek_ok`.
 - `pgp_pin_verify` gains `uint8_t out_k[32]` (nullable), passed to the kernel.
-- `pgp_pin_reset_pw1_check(pin, len)`: the refusals of `pgp_pin_reset_pw1` without side
-  effects (length, lifecycle, PW1 state), for the preflight; the applet's PW3 path gets
+- `pgp_pin_reset_pw1_check(pin, len)`: the refusals of `pgp_pin_reset_pw1` without destroying or
+  binding anything (length, lifecycle, PW1 state), for the preflight; the applet's PW3 path gets
   the same length check the RC path already has.
 
 `pgp_keys.c`: `generate_dec(kek, pub_out)`, `read_dec_pubkey(pub_out)`,
@@ -196,3 +196,16 @@ key's binding with PSO:CDS right after generating.
 | J3 MED | Cache contract incomplete (replacement, failures, wipes). | §3 rows per event, replacement decision with reason, E10 wipes on every exit. |
 | J4 MED | Fault column omitted inherited exceptions. | §3 preamble + VERIFY / CHANGE rows; host test 6 covers them. |
 | J5 LOW | AAD does not prove freshness. | E3 narrowed, residual §6, host test 9. |
+
+## 9. Review r2 (Jan, 2026-10-17, APPROVE for implementation)
+
+- J1–J5 resolved. The PLAN §7.3 (81 or 82 for GENERATE) and §7.4 (key replacement keeps
+  the KEK) revisions are accepted; no 81 → 82 upgrade (OpenPGP 3.4.1 §7.2.2 p53).
+- Wording (applied): the reset preflight cannot be side-effect free — an RC verify spends
+  an attempt and a status read may settle or repair records. The promise is narrower: no
+  DEC destruction and no new PW1 binding before every check passed; syntax and length are
+  checked before the RC attempt.
+- **Implementation note:** the auth-only `gcm_compute_tag` returns `RETURN_WARN` (1)
+  **with** a valid tag (`aesgcm.c:477`, `aesgcm.h:195-215`). Treat that mode as
+  expected, reject real errors, compare all 16 tag bytes in constant time, then decrypt
+  the same buffered bytes with a fresh message / CTR initialisation.
