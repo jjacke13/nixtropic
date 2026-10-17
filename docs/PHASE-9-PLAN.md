@@ -335,3 +335,10 @@ verifier, PIN or private key.
 - **libtropic 4.2.0** (Vaios, 2026-10-17): look into moving the firmware from libtropic
   3.2.1 to 4.2.0 (renamed APIs, e.g. `lt_sh0*`, `TR01_KEY_GENERATED/STORED`; the fw-update
   tool reworked for `lt_do_mutable_fw_update`).  Separate from the chip FW update.
+- **Chip firmware: latest version + compatibility** (Vaios, 2026-10-17): (a) check whether
+  our TROPIC01 can move to the latest public app FW (2.2.0 as of Jan's check, 17 Oct;
+  re-check then) — one-way, only with the controlled update procedure above; the dongle
+  runs 2.0.0 today (`nix run .#chip-fw-version`).  (b) Find and write down which chip FW
+  versions our firmware works with (each libtropic version supports a range; our code
+  uses app FW 2.x behaviour) — the basis for the runtime minimum chip-FW check under
+  "Device identity".
