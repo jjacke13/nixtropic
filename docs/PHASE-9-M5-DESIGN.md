@@ -209,3 +209,22 @@ key's binding with PSO:CDS right after generating.
   **with** a valid tag (`aesgcm.c:477`, `aesgcm.h:195-215`). Treat that mode as
   expected, reject real errors, compare all 16 tag bytes in constant time, then decrypt
   the same buffered bytes with a fresh message / CTR initialisation.
+
+## 10. Implementation (2026-10-17)
+
+- `2583b6f`: O3 schema 2, `pgp_dec.{c,h}`, `pgp_pin_verify(…, out_k)`,
+  `pgp_pin_reset_pw1_check`, applet `auth_grant` / `auth_drop` (the KEK is valid iff
+  81 or 82 is set — no separate "KEK ok" flag), host tests, fixture script, docs.
+  Mutants: 17 run, 14 killed, 3 equivalent (donna clamps the scalar itself; before a
+  tag match nothing was decrypted; a flip of bit 0 is cleared by clamping).
+- Review: Jan APPROVE (one LOW: zero the output before the NULL checks — fixed).
+  cpp-reviewer CHANGES REQUIRED, all test gaps: nonce freshness, preflight vs PW1
+  ERROR, no outside vector for the format, GENERATE failure not dropping the
+  session, a mislabelled `dec_ok` case, no PIN scan — fixed with a golden record
+  made with Python `cryptography` (KEK, AAD, GCM pinned), nonce test, PW1-ERROR and
+  GENERATE-failure applet tests, PIN / SHA-256(PIN) scan; its six surviving mutants
+  re-run: all six killed. Code: `RETURN_WARN` is the only accepted auth-only answer,
+  AAD object/schema come from `openpgp_state.h`, `PIN_MD_KERNEL_K_LEN ==
+  PGP_DEC_KEY_LEN` asserted.
+- Release note: clients that GENERATE the DEC key with PW3 only (no PW1 verify) now get
+  `6982`; gpg is unaffected (it verifies PW1 first).

@@ -700,6 +700,36 @@ static void test_m5_reset_preflight(void)
     CHECK(verify(0x82, "123456") == 0x9000 && dec() == 0x9000);
 }
 
+/* Preflight: a PW1 binding in ERROR (uncertain after a failed write) refuses
+ * the reset BEFORE the key is destroyed (J2, cpp-reviewer 2). */
+static void test_m5_reset_refused_pw1_error(void)
+{
+    fresh();
+    mock_fail_nth(MOCK_OP_RMEM_WRITE, 1, -1, false);
+    CHECK(verify(0x82, "123456") != 0x9000);
+    mock_disarm();
+    CHECK(pgp_pin_status(OPENPGP_PIN_PW1, NULL, NULL) == PGP_PIN_ERROR);
+    CHECK(verify(0x83, "12345678") == 0x9000);
+    CHECK(apdu(0x2C, 0x02, 0x81, "abcdef", 6) == 0x6F00 && read_dec_pub() == 0x9000);
+    reboot();
+    CHECK(select_pgp() == 0x9000 && verify(0x82, "123456") == 0x9000 && dec() == 0x9000);
+}
+
+/* A failed GENERATE DEC ends the PW1 session (§3, cpp-reviewer 4). */
+static void test_m5_generate_failure_drops(void)
+{
+    static const mock_op_t ops[] = { MOCK_OP_RANDOM, MOCK_OP_RMEM_WRITE };
+    for (size_t i = 0; i < 2; ++i) {
+        fresh();
+        CHECK(verify(0x83, "12345678") == 0x9000 && verify(0x81, "123456") == 0x9000
+              && verify(0x82, "123456") == 0x9000 && !kek_zero());
+        mock_fail_nth(ops[i], 1, -1, false);
+        CHECK(gen_dec() == 0x6F00);
+        mock_disarm();
+        CHECK(kek_zero() && dec() != 0x9000 && cds() != 0x9000);   /* O3 may be uncertain: ERROR */
+    }
+}
+
 /* A damaged wrap: 6F00, nothing usable, the PW1 session ends (§3). */
 static void test_m5_damaged_wrap(void)
 {
@@ -736,6 +766,8 @@ int main(void)
     test_m5_kek_lifetime();
     test_m5_change_keeps_reset_destroys();
     test_m5_reset_preflight();
+    test_m5_reset_refused_pw1_error();
+    test_m5_generate_failure_drops();
     test_m5_damaged_wrap();
     test_m5_single_auth_path();
     test_defaults_and_status();

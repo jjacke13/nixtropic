@@ -477,7 +477,7 @@ static void test_state_fields(void)
         rec_pair_t o3 = REC_PAIR(33, 43, 3, 2);
         rec[46] = 0x39;
         if (i == 0) rec[OFF_PUB] = 1;                    /* public key, no wrap */
-        if (i == 1) rec[OFF_PUB + 31] = 1, rec[OFF_PUB + 32] = 1;   /* nonce only */
+        if (i == 1) rec[OFF_PUB + 32] = 1;               /* nonce, no public key */
         if (i == 2) rec[OFF_PUB + 44] = 1;               /* wrap, no public key */
         if (i == 3) rec[O3_LEN - 1] = 1;                 /* tag, no public key */
         fresh_chip();

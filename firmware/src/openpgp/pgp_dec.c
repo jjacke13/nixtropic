@@ -12,13 +12,15 @@
 #include "hmac.h"
 #include "memzero.h"
 #include "openpgp_state.h"
+#include "tropic/pin_md_kernel.h"
 #include "tropic/tropic.h"
 
 #define AAD_LEN  (4u + 2u + OPENPGP_DEC_PUB_LEN)
 
 static const char KEK_LABEL[] = "nixtropic/openpgp/dec-kek/v1";
 
-_Static_assert(OPENPGP_DEC_PUB_LEN == PGP_DEC_KEY_LEN && OPENPGP_DEC_CT_LEN == PGP_DEC_KEY_LEN,
+_Static_assert(OPENPGP_DEC_PUB_LEN == PGP_DEC_KEY_LEN && OPENPGP_DEC_CT_LEN == PGP_DEC_KEY_LEN
+               && PIN_MD_KERNEL_K_LEN == PGP_DEC_KEY_LEN,
                "DEC record sizes");
 
 void pgp_dec_kek(const uint8_t k[PGP_DEC_KEY_LEN], uint8_t kek[PGP_DEC_KEY_LEN])
@@ -33,8 +35,8 @@ static void aad_of(const uint8_t pub[OPENPGP_DEC_PUB_LEN], uint8_t aad[AAD_LEN])
     aad[1] = 'X';
     aad[2] = 'D';
     aad[3] = 'W';
-    aad[4] = 3u;      /* O3 */
-    aad[5] = 2u;      /* O3 schema 2 */
+    aad[4] = OPENPGP_STATE_O3_OBJ;
+    aad[5] = OPENPGP_STATE_O3_SCHEMA;
     memcpy(&aad[6], pub, OPENPGP_DEC_PUB_LEN);
 }
 
@@ -86,7 +88,7 @@ static int open_wrap(const uint8_t kek[PGP_DEC_KEY_LEN], const openpgp_dec_rec_t
         goto out;
     }
     t = gcm_compute_tag(tag, sizeof tag, &ctx);
-    if (t != RETURN_GOOD && t != RETURN_WARN) goto out;
+    if (t != RETURN_WARN) goto out;              /* auth-only: the only valid answer */
     if (!tag_equal(tag, rec->tag, sizeof tag)) {
         rc = PGP_DEC_BAD_WRAP;
         goto out;
@@ -141,8 +143,9 @@ int pgp_dec_ecdh(const uint8_t kek[PGP_DEC_KEY_LEN], const uint8_t peer[PGP_DEC_
     uint8_t priv[PGP_DEC_KEY_LEN];
     openpgp_dec_rec_t rec;
     int rc;
-    if (kek == NULL || peer == NULL || shared_out == NULL) return PGP_DEC_BAD_PARAM;
-    memzero(shared_out, PGP_DEC_KEY_LEN);
+    if (shared_out == NULL) return PGP_DEC_BAD_PARAM;
+    memzero(shared_out, PGP_DEC_KEY_LEN);                /* zero on every failure (Jan) */
+    if (kek == NULL || peer == NULL) return PGP_DEC_BAD_PARAM;
     if (openpgp_state_dec_get(&rec) != 0) {
         rc = PGP_DEC_NO_KEY;
     } else {

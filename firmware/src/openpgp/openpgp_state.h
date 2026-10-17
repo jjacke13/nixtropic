@@ -45,6 +45,10 @@
 #define OPENPGP_FPR_LEN          20u
 #define OPENPGP_GENTIME_LEN       4u
 #define OPENPGP_SIG_COUNTER_LEN   3u
+/* O3 record identity (rec_pair.h); the DEC wrap binds both (pgp_dec.c AAD). */
+#define OPENPGP_STATE_O3_OBJ     3u
+#define OPENPGP_STATE_O3_SCHEMA  2u   /* M5: DEC key wrapped (schema 1 = M4, reads as damaged) */
+
 #define OPENPGP_DEC_PUB_LEN      32u
 #define OPENPGP_DEC_NONCE_LEN    12u
 #define OPENPGP_DEC_CT_LEN       32u

@@ -11,8 +11,8 @@
 
 #define O3_SLOT_A   33u
 #define O3_SLOT_B   43u
-#define O3_OBJ       3u
-#define O3_SCHEMA    2u   /* M5: DEC key wrapped (schema 1 = M4, reads as damaged) */
+#define O3_OBJ      OPENPGP_STATE_O3_OBJ
+#define O3_SCHEMA   OPENPGP_STATE_O3_SCHEMA
 
 #define OFF_LC          0u
 #define OFF_RC_SET      1u

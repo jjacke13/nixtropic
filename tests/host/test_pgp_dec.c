@@ -21,11 +21,44 @@
 #include "openpgp/pgp_dec.h"
 #include "openpgp/pgp_lifecycle.h"
 #include "openpgp/pgp_pin.h"
+#include "sha2.h"
 #include "tropic/tropic.h"
 
 static const uint8_t K1[32] = { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16 };
 static const uint8_t K2[32] = { 2, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16 };
 static const uint8_t PEER_PRIV[32] = { 0x70, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x40 };
+
+/* Golden record, made once outside this code (Python `cryptography`:
+ * HMAC-SHA256, X25519, AESGCM) — pins the stored format of O3 schema 2:
+ * k = 01..20, KEK = HMAC(k, "nixtropic/openpgp/dec-kek/v1"), priv = clamp(40..5f),
+ * nonce = a0..ab, AAD = "NXDW" | 3 | 2 | pub. */
+static const uint8_t G_K[32] = {
+    0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
+    0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f,
+    0x20
+};
+static const uint8_t G_KEK[32] = {
+    0x22, 0x1a, 0xc6, 0xe2, 0x00, 0xd8, 0xe8, 0x8f, 0x68, 0x86, 0xff, 0xe4, 0x8d, 0x39, 0xd9,
+    0x10, 0x2e, 0xfa, 0xef, 0x68, 0x22, 0x93, 0xe3, 0x45, 0x3f, 0x7a, 0xc8, 0x0d, 0xb9, 0x0b, 0xb1,
+    0x47
+};
+static const uint8_t G_PUB[32] = {
+    0x79, 0xa6, 0x31, 0xee, 0xde, 0x1b, 0xf9, 0xc9, 0x8f, 0x12, 0x03, 0x2c, 0xde, 0xad, 0xd0,
+    0xe7, 0xa0, 0x79, 0x39, 0x8f, 0xc7, 0x86, 0xb8, 0x8c, 0xc8, 0x46, 0xec, 0x89, 0xaf, 0x85, 0xa5,
+    0x1a
+};
+static const uint8_t G_NONCE[12] = {
+    0xa0, 0xa1, 0xa2, 0xa3, 0xa4, 0xa5, 0xa6, 0xa7, 0xa8, 0xa9, 0xaa, 0xab
+};
+static const uint8_t G_CT[32] = {
+    0x9c, 0xd0, 0x25, 0xb8, 0x85, 0x39, 0x31, 0x9f, 0x4f, 0xa0, 0x58, 0x0c, 0xdd, 0x49, 0x4d,
+    0x9d, 0x16, 0x8f, 0x94, 0x3b, 0xb3, 0xbe, 0xc0, 0x7a, 0xcb, 0xf5, 0x85, 0xf0, 0x65, 0x0f, 0x1e,
+    0xf4
+};
+static const uint8_t G_TAG[16] = {
+    0x19, 0x4c, 0x44, 0x73, 0x39, 0x94, 0x5f, 0x1c, 0x65, 0xd0, 0x71, 0x68, 0x22, 0x4d, 0xfa,
+    0x46
+};
 
 static void boot(void)
 {
@@ -95,6 +128,11 @@ static void test_round_trip(void)
     CHECK(pgp_dec_generate(kek, pub2) == PGP_DEC_OK && memcmp(pub2, pub, 32) != 0);
     CHECK(ecdh_matches(kek, pub2));
     CHECK(pgp_dec_generate(NULL, pub2) == PGP_DEC_BAD_PARAM);
+    uint8_t out[32];
+    memset(out, 0xEE, sizeof out);
+    CHECK(pgp_dec_ecdh(NULL, pub, out) == PGP_DEC_BAD_PARAM && all_zero(out, 32));
+    memset(out, 0xEE, sizeof out);
+    CHECK(pgp_dec_ecdh(kek, NULL, out) == PGP_DEC_BAD_PARAM && all_zero(out, 32));
 }
 
 static void test_wrong_kek_and_tamper(void)
@@ -163,6 +201,51 @@ static void test_no_plaintext_at_rest(void)
         }
     }
     CHECK(scanned > 400u);                       /* O3 both copies at least */
+    /* Nor a PIN or its SHA-256 (§5.7; factory PINs bound by the boot). */
+    static const char *pins[] = { "123456", "12345678" };
+    for (size_t p = 0; p < 2; ++p) {
+        uint8_t h[32];
+        sha256_Raw((const uint8_t *) pins[p], strlen(pins[p]), h);
+        for (uint16_t s = 0; s < 512; ++s) {
+            size_t n = 0;
+            if (tropic_rmem_read(s, b, sizeof b, &n) != 0) continue;
+            for (size_t i = 0; i + 32u <= n; ++i) CHECK(memcmp(&b[i], h, 32) != 0);
+            for (size_t i = 0; i + strlen(pins[p]) <= n; ++i) {
+                CHECK(memcmp(&b[i], pins[p], strlen(pins[p])) != 0);
+            }
+        }
+    }
+}
+
+/* The stored format is pinned by an outside vector (cpp-reviewer 3): the
+ * KEK label, the AAD and the GCM direction cannot drift without a red test. */
+static void test_golden_record(void)
+{
+    uint8_t kek[32], pub[32];
+    openpgp_dec_rec_t r;
+    pgp_dec_kek(G_K, kek);
+    CHECK(memcmp(kek, G_KEK, 32) == 0);
+    boot();
+    memcpy(r.pub, G_PUB, 32);
+    memcpy(r.nonce, G_NONCE, 12);
+    memcpy(r.ct, G_CT, 32);
+    memcpy(r.tag, G_TAG, 16);
+    CHECK(openpgp_state_dec_set(&r) == 0);
+    CHECK(pgp_dec_read_pubkey(pub) == PGP_DEC_OK && memcmp(pub, G_PUB, 32) == 0);
+    CHECK(ecdh_matches(G_KEK, G_PUB));
+}
+
+/* A fresh nonce per seal (E1, cpp-reviewer 1): non-zero, never repeated. */
+static void test_nonce_fresh(void)
+{
+    uint8_t kek[32], pub[32], zero[12] = { 0 };
+    openpgp_dec_rec_t a, b;
+    boot();
+    pgp_dec_kek(K1, kek);
+    CHECK(pgp_dec_generate(kek, pub) == PGP_DEC_OK && openpgp_state_dec_get(&a) == 0);
+    CHECK(pgp_dec_generate(kek, pub) == PGP_DEC_OK && openpgp_state_dec_get(&b) == 0);
+    CHECK(memcmp(a.nonce, zero, 12) != 0 && memcmp(b.nonce, zero, 12) != 0);
+    CHECK(memcmp(a.nonce, b.nonce, 12) != 0);
 }
 
 /* J5 residual: a complete older record sealed under the same KEK opens. */
@@ -185,5 +268,7 @@ int main(void)
     test_generate_faults();
     test_no_plaintext_at_rest();
     test_replay_residual();
+    test_golden_record();
+    test_nonce_fresh();
     return check_done("pgp_dec");
 }
