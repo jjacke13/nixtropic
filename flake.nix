@@ -11,6 +11,7 @@
                                   (recovery / factory-reset image)
       packages.lt-util            Official TROPIC01 CLI for chip access
       packages.fw-update-chip     Host tool for updating TROPIC01 chip firmware
+      packages.docs               The documentation site (MkDocs Material)
       devShells.default           ARM toolchain + flashing/debug utilities
       apps.flash-stock            DFU-flash the stock firmware
       apps.flash-open[-debug]     DFU-flash the open firmware (release / debug)
@@ -22,8 +23,8 @@
       nixosModules.tropic         udev rules + pcsc-lite + libccid Info.plist
                                   patch so the dongle is usable without sudo
 
-    See README.md for the daily-driver setup recipe and PROJECT.md for
-    the architecture deep dive.
+    See README.md for the overview and docs/ (published at
+    https://jjacke13.github.io/nixtropic) for setup and architecture.
   '';
 
   inputs = {
@@ -223,6 +224,17 @@
           echo "release surface ok" > $out
         '';
 
+        # The docs site (MkDocs Material), published to GitHub Pages by
+        # .github/workflows/docs.yml.  --strict: a broken link fails.
+        # Preview: nix shell nixpkgs#python3Packages.mkdocs-material -c mkdocs serve
+        docs = pkgs.runCommand "nixtropic-docs" {
+          nativeBuildInputs = [ (pkgs.python3.withPackages (p: [ p.mkdocs-material ])) ];
+        } ''
+          cp ${./mkdocs.yml} mkdocs.yml
+          cp -r ${./docs} docs
+          python -m mkdocs build --strict --site-dir $out
+        '';
+
         devShell = import ./nix/dev-shell.nix { inherit pkgs; };
 
       in
@@ -232,13 +244,13 @@
           stock-firmware = stockFirmware;  # convenience alias
           inherit open-firmware open-firmware-debug;
           inherit fw-update-chip;
-          inherit host-tests;
+          inherit host-tests docs;
           default = stockFirmware;
         };
 
         devShells.default = devShell;
 
-        checks = { inherit host-tests release-surface; };
+        checks = { inherit host-tests release-surface docs; };
 
         inherit apps;
 

@@ -1,0 +1,99 @@
+site_name: nixtropic
+site_description: Open firmware that turns the Tropic Square TS1302 devkit into a FIDO2 + OpenPGP security key backed by the TROPIC01 secure element.
+site_url: https://jjacke13.github.io/nixtropic/
+repo_url: https://github.com/jjacke13/nixtropic
+repo_name: jjacke13/nixtropic
+edit_uri: edit/main/docs/
+copyright: MIT licensed · nixtropic is a development release, not a production security key
+
+# With --strict every one of these fails the build.
+validation:
+  omitted_files: warn
+  absolute_links: warn
+  unrecognized_links: warn
+  anchors: warn
+
+# The history folder is the frozen record (plans, design docs, research).
+# Its relative links point at files that moved, so it is browsed on GitHub.
+exclude_docs: |
+  history/
+
+theme:
+  name: material
+  font: false # system fonts, no requests to Google Fonts
+  logo: assets/logo.svg
+  favicon: assets/logo.svg
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.top
+    - navigation.footer
+    - navigation.indexes
+    - toc.follow
+    - search.highlight
+    - content.code.copy
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: blue grey
+      accent: teal
+      toggle:
+        icon: material/weather-night
+        name: Dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: blue grey
+      accent: teal
+      toggle:
+        icon: material/weather-sunny
+        name: Light mode
+  icon:
+    repo: fontawesome/brands/github
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - def_list
+  - footnotes
+  - md_in_html
+  - tables
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.highlight
+  - pymdownx.inlinehilite
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+
+nav:
+  - Home: index.md
+  - Get started:
+      - Flashing: flashing.md
+      - Linux setup: linux-setup.md
+      - Card setup: card-setup.md
+  - Using it:
+      - WebAuthn notes: webauthn.md
+      - Recovery: recovery.md
+  - Technical:
+      - Architecture: architecture.md
+      - Hardware: hardware.md
+      - Design decisions: design.md
+      - Security model: security.md
+      - Testing: testing.md
+      - Glossary: glossary.md
+      - References: references.md
+  - Project:
+      - Status: status.md
+      - Changelog: changelog.md
+      - Roadmap: roadmap.md
+      - Backlog: backlog.md
+      - Contributing: contributing.md
+      - History: https://github.com/jjacke13/nixtropic/tree/main/docs/history
