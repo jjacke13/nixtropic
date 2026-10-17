@@ -325,3 +325,13 @@ verifier, PIN or private key.
   ECC_Key_Store (Ed25519 seed or P-256 scalar into an empty slot; ECC_Key_Read reports
   origin generated vs stored — API 1.4 Tables 29–30), DEC wrapped as in M5.  Gives an off-card backup of the
   decryption key; trade-off: an imported key is not chip-generated (BACKLOG 4.5).
+- **PIN-bound signing design (C2), two parts decided for Phase 10** (Vaios, 2026-10-17):
+  the chip's sign command checks only which pairing key opened the session (by design,
+  every public app FW 1.0.0–2.2.0), so signing becomes PIN-bound indirectly: SH1 gets
+  the signing rights, SH0 loses them, SH1's private key is wrapped under the PW1 KEK.
+  (a) While a signature runs, the unwrapped SH1 key sits in STM32 RAM — protect it with
+  RDP / TrustZone.  (b) A PIN reset must not burn the 4 write-once pairing-key slots
+  (fresh s would orphan a wrapped SH1 key) — needs its own design and Jan's review.
+- **libtropic 4.2.0** (Vaios, 2026-10-17): look into moving the firmware from libtropic
+  3.2.1 to 4.2.0 (renamed APIs, e.g. `lt_sh0*`, `TR01_KEY_GENERATED/STORED`; the fw-update
+  tool reworked for `lt_do_mutable_fw_update`).  Separate from the chip FW update.
