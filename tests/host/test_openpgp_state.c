@@ -31,10 +31,24 @@
 #define PW3 OPENPGP_PIN_PW3
 #define RC  OPENPGP_PIN_RC
 
-static const uint8_t DEC_PAT[OPENPGP_DEC_PRIV_LEN] = {
+#define O3_LEN   214u   /* schema 2 (M5) */
+#define OFF_PUB  122u
+
+static const uint8_t DEC_PAT[OPENPGP_DEC_PUB_LEN] = {
     0xD1, 0xEC, 0x0F, 0xFE, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12,
     13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 0x40,
 };
+
+/* A stored DEC key: DEC_PAT as public key, patterned wrap. */
+static openpgp_dec_rec_t dec_rec(void)
+{
+    openpgp_dec_rec_t r;
+    memcpy(r.pub, DEC_PAT, sizeof r.pub);
+    memset(r.nonce, 0xA1, sizeof r.nonce);
+    memset(r.ct, 0xC7, sizeof r.ct);
+    memset(r.tag, 0x7A, sizeof r.tag);
+    return r;
+}
 
 static void reboot(void)
 {
@@ -53,7 +67,7 @@ static void fresh_chip(void)
 
 static int v(int which, const char *pin)
 {
-    return pgp_pin_verify(which, (const uint8_t *) pin, strlen(pin));
+    return pgp_pin_verify(which, (const uint8_t *) pin, strlen(pin), NULL);
 }
 
 static int chg(int which, const char *a, const char *b)
@@ -102,7 +116,8 @@ static void put_in_use(void)
 {
     fresh_chip();
     CHECK(pgp_lifecycle_boot() == 0);
-    CHECK(openpgp_state_dec_priv_set(DEC_PAT) == 0);
+    openpgp_dec_rec_t r = dec_rec();
+    CHECK(openpgp_state_dec_set(&r) == 0);
     mock_ecc_put(29);
     mock_ecc_put(31);
     CHECK(chg(PW1, "123456", "pw1-own") == PGP_PIN_OK);
@@ -134,10 +149,10 @@ static void test_first_boot(void)
     CHECK(st(PW1, &att, &len) == PGP_PIN_ACTIVE && att == 3 && len == 6);
     CHECK(st(PW3, &att, &len) == PGP_PIN_ACTIVE && att == 3 && len == 8);
     CHECK(st(RC, &att, &len) == PGP_PIN_NOT_SET && att == 0 && len == 0);
-    uint8_t k[OPENPGP_DEC_PRIV_LEN];
-    CHECK(openpgp_state_dec_priv_get(k) == -1);              /* none yet */
-    CHECK(openpgp_state_dec_priv_set(DEC_PAT) == 0 && openpgp_state_dec_priv_get(k) == 0
-          && memcmp(k, DEC_PAT, sizeof k) == 0);
+    openpgp_dec_rec_t got, want = dec_rec();
+    CHECK(openpgp_state_dec_get(&got) == -1);                /* none yet */
+    CHECK(openpgp_state_dec_set(&want) == 0 && openpgp_state_dec_get(&got) == 0
+          && memcmp(&got, &want, sizeof got) == 0);
     openpgp_state_lang(lang);
     CHECK(openpgp_state_c4_multi() == 1 && openpgp_state_uif() == 1 && openpgp_state_sex() == 0x39
           && lang[0] == 'e' && lang[1] == 'n' && openpgp_state_name(name) == 0);
@@ -347,6 +362,96 @@ static void test_uncertain_o3(void)
     CHECK(set_rc("rc-code-9") == PGP_PIN_OK && v(RC, "rc-code-9") == PGP_PIN_OK);
 }
 
+/* M5 §2: the DEC key record — stored in both copies, survives a reboot,
+ * destroyed in one commit together with its fingerprint and time. */
+static void test_dec_record(void)
+{
+    static const uint8_t FPR[OPENPGP_FPR_LEN] = { 0xF1, 0xF2, 0xF3 };
+    static const uint8_t GT[OPENPGP_GENTIME_LEN] = { 0x65, 0x00, 0x00, 0x01 };
+    openpgp_dec_rec_t got, want = dec_rec(), zero_pub = dec_rec(), zero_wrap = dec_rec();
+    uint8_t f[OPENPGP_FPR_LEN], g[OPENPGP_GENTIME_LEN];
+    fresh_chip();
+    CHECK(pgp_lifecycle_boot() == 0);
+    memset(zero_pub.pub, 0, sizeof zero_pub.pub);
+    memset(zero_wrap.ct, 0, sizeof zero_wrap.ct);
+    memset(zero_wrap.tag, 0, sizeof zero_wrap.tag);
+    unsigned m = mock_mutations();
+    CHECK(openpgp_state_dec_set(&zero_pub) == -1 && openpgp_state_dec_set(&zero_wrap) == -1
+          && openpgp_state_dec_set(NULL) == -1 && mock_mutations() == m);
+    CHECK(openpgp_state_dec_destroy() == 0 && mock_mutations() == m);   /* nothing to zero */
+    CHECK(openpgp_state_dec_set(&want) == 0);
+    CHECK(openpgp_state_set_fingerprint(0, FPR) == 0 && openpgp_state_set_fingerprint(1, FPR) == 0
+          && openpgp_state_set_gentime(1, GT) == 0);
+    CHECK(raw_contains(33, DEC_PAT, sizeof DEC_PAT) && raw_contains(43, DEC_PAT, sizeof DEC_PAT));
+    reboot();
+    CHECK(pgp_lifecycle_boot() == 0 && openpgp_state_dec_get(&got) == 0
+          && memcmp(&got, &want, sizeof got) == 0);
+    m = mock_mutations();
+    CHECK(openpgp_state_dec_destroy() == 0 && mock_mutations() > m);
+    CHECK(openpgp_state_dec_get(&got) == -1);
+    for (size_t i = 0; i < sizeof got; ++i) CHECK(((const uint8_t *) &got)[i] == 0);
+    CHECK(!raw_contains(33, DEC_PAT, sizeof DEC_PAT) && !raw_contains(43, DEC_PAT, sizeof DEC_PAT));
+    openpgp_state_fingerprint(1, f);
+    openpgp_state_gentime(1, g);
+    CHECK(f[0] == 0 && f[1] == 0 && f[2] == 0 && g[0] == 0 && g[3] == 0);
+    openpgp_state_fingerprint(0, f);
+    CHECK(memcmp(f, FPR, sizeof f) == 0);                    /* SIG untouched */
+    reboot();
+    CHECK(pgp_lifecycle_boot() == 0 && openpgp_state_dec_get(&got) == -1);
+    /* A fingerprint alone (no key) is zeroed too, so gpg sees "no key". */
+    CHECK(openpgp_state_set_fingerprint(1, FPR) == 0 && openpgp_state_dec_destroy() == 0);
+    openpgp_state_fingerprint(1, f);
+    CHECK(f[0] == 0);
+    /* A failed commit leaves the key, and the state refuses until reboot. */
+    CHECK(openpgp_state_dec_set(&want) == 0);
+    mock_fail_nth(MOCK_OP_RMEM_WRITE, 1, -1, false);
+    CHECK(openpgp_state_dec_destroy() != 0 && openpgp_state_dec_get(&got) == -1);
+    mock_disarm();
+    reboot();
+    CHECK(pgp_lifecycle_boot() == 0 && openpgp_state_dec_get(&got) == 0);
+}
+
+/* M5: k comes out of a correct PW1 verify only; every other return zeroes it,
+ * the early refusals included; a PIN change keeps it (same s, D4). */
+static void test_verify_k(void)
+{
+    uint8_t k[32], k2[32], zero[32] = { 0 };
+    fresh_chip();
+    CHECK(pgp_lifecycle_boot() == 0);
+    CHECK(pgp_pin_verify(PW1, (const uint8_t *) "123456", 6, k) == PGP_PIN_OK
+          && memcmp(k, zero, 32) != 0);
+    memset(k2, 0xEE, sizeof k2);
+    CHECK(pgp_pin_verify(PW1, (const uint8_t *) "12345", 5, k2) == PGP_PIN_BAD_LEN
+          && memcmp(k2, zero, 32) == 0);
+    memset(k2, 0xEE, sizeof k2);
+    CHECK(pgp_pin_verify(RC, (const uint8_t *) "rc-code-1", 9, k2) == PGP_PIN_UNSET
+          && memcmp(k2, zero, 32) == 0);
+    memset(k2, 0xEE, sizeof k2);
+    CHECK(pgp_pin_verify(PW1, (const uint8_t *) "000000", 6, k2) == PGP_PIN_WRONG
+          && memcmp(k2, zero, 32) == 0);
+    CHECK(chg(PW1, "123456", "pw1-new") == PGP_PIN_OK);
+    CHECK(pgp_pin_verify(PW1, (const uint8_t *) "pw1-new", 7, k2) == PGP_PIN_OK
+          && memcmp(k, k2, 32) == 0);
+    CHECK(pgp_pin_reset_pw1((const uint8_t *) "reset-1", 7) == PGP_PIN_OK);
+    CHECK(pgp_pin_verify(PW1, (const uint8_t *) "reset-1", 7, k2) == PGP_PIN_OK
+          && memcmp(k, k2, 32) != 0);                        /* fresh s, new k */
+}
+
+/* E9: an M4 (schema 1) O3 reads as damaged: ERROR, TERMINATE + ACTIVATE recover. */
+static void test_schema1_o3(void)
+{
+    uint8_t rec[154] = { 1, 0, 1, 1 };
+    rec_pair_t o3 = REC_PAIR(33, 43, 3, 1);
+    rec[46] = 0x39;
+    fresh_chip();
+    CHECK(pgp_lifecycle_boot() == 0);                        /* M4-style PIN bindings */
+    CHECK(rec_pair_init(&o3, rec, sizeof rec) == REC_OK);
+    reboot();
+    CHECK(pgp_lifecycle_boot() != 0 && openpgp_state_lifecycle() == PGP_LC_ERROR);
+    CHECK(pgp_lifecycle_terminate() == 0 && pgp_lifecycle_activate() == 0);
+    CHECK(v(PW1, "123456") == PGP_PIN_OK && openpgp_state_lifecycle() == PGP_LC_OPERATIONAL);
+}
+
 static void test_state_fields(void)
 {
     static const uint8_t bad[][4] = {
@@ -358,10 +463,23 @@ static void test_state_fields(void)
     };
     uint8_t name[OPENPGP_NAME_MAX];
     for (size_t i = 0; i < sizeof bad / sizeof bad[0]; ++i) {
-        uint8_t rec[154] = { 0 };
-        rec_pair_t o3 = REC_PAIR(33, 43, 3, 1);
+        uint8_t rec[O3_LEN] = { 0 };
+        rec_pair_t o3 = REC_PAIR(33, 43, 3, 2);
         memcpy(rec, bad[i], 4);
         rec[46] = 0x39;
+        fresh_chip();
+        CHECK(rec_pair_init(&o3, rec, sizeof rec) == REC_OK);
+        CHECK(pgp_lifecycle_boot() != 0 && openpgp_state_lifecycle() == PGP_LC_ERROR);
+    }
+    /* The DEC key: public key and wrap are both zero or both set (M5 §2). */
+    for (int i = 0; i < 4; ++i) {
+        uint8_t rec[O3_LEN] = { 1, 0, 1, 1 };
+        rec_pair_t o3 = REC_PAIR(33, 43, 3, 2);
+        rec[46] = 0x39;
+        if (i == 0) rec[OFF_PUB] = 1;                    /* public key, no wrap */
+        if (i == 1) rec[OFF_PUB + 31] = 1, rec[OFF_PUB + 32] = 1;   /* nonce only */
+        if (i == 2) rec[OFF_PUB + 44] = 1;               /* wrap, no public key */
+        if (i == 3) rec[O3_LEN - 1] = 1;                 /* tag, no public key */
         fresh_chip();
         CHECK(rec_pair_init(&o3, rec, sizeof rec) == REC_OK);
         CHECK(pgp_lifecycle_boot() != 0 && openpgp_state_lifecycle() == PGP_LC_ERROR);
@@ -556,6 +674,9 @@ int main(void)
     test_masked_old_layout();
     test_read_error();
     test_uncertain_o3();
+    test_dec_record();
+    test_verify_k();
+    test_schema1_o3();
     test_state_fields();
     test_fido_untouched();
     test_both_resets_either_order();

@@ -36,6 +36,7 @@
 #include "pgp_lifecycle.h"
 #include "pgp_pin.h"
 #include "pgp_keys.h"
+#include "pgp_dec.h"
 #include "ccid/ccid_proto.h"
 #include "fido_hid/user_presence.h"   /* Phase 8 M3 — SW1 gate for UIF */
 #include "memzero.h"   /* M6 audit M1 — zeroize ECDH shared secret on stack */
@@ -523,11 +524,44 @@ static int handle_get_data(uint16_t tag, uint8_t *out, size_t out_max, size_t *o
 #define AUTH_81  0x01u
 #define AUTH_82  0x02u
 #define AUTH_83  0x04u
+#define AUTH_PW1 (AUTH_81 | AUTH_82)
+#define AUTH_ALL (AUTH_81 | AUTH_82 | AUTH_83)
 static uint8_t s_auth;
+
+/* M5 (design E5, §4): the DEC KEK from the PW1 binding.  81 and 82 are the
+ * same PIN (same s, same k), so the KEK is valid exactly while 81 or 82 is
+ * set — GENERATE DEC may use it after either (gpg verifies 81 on a fresh
+ * card, J1), PSO:DEC still needs 82.  Only auth_grant / auth_drop change
+ * s_auth, so the KEK can never outlive the flags. */
+static uint8_t s_kek[PGP_DEC_KEY_LEN];
+_Static_assert(PGP_DEC_OK == PGP_KEYS_OK && PGP_DEC_NO_KEY == PGP_KEYS_NO_KEY,
+               "handle_generate maps pgp_dec results with the PGP_KEYS_* codes");
+
+static void auth_drop(uint8_t mask)
+{
+    s_auth &= (uint8_t) ~mask;
+    if ((s_auth & AUTH_PW1) == 0u) memzero(s_kek, sizeof s_kek);
+}
+
+/* `k` is read only for a PW1 flag. */
+static void auth_grant(uint8_t flag, const uint8_t k[PGP_DEC_KEY_LEN])
+{
+    if ((flag & AUTH_PW1) != 0u) pgp_dec_kek(k, s_kek);
+    s_auth |= flag;
+}
+
+#ifdef NIXTROPIC_HOST_TEST
+int openpgp_applet_test_kek_zero(void)
+{
+    uint8_t acc = 0;
+    for (size_t i = 0; i < sizeof s_kek; ++i) acc |= s_kek[i];
+    return acc == 0u;
+}
+#endif
 
 void openpgp_applet_card_reset(void)
 {
-    s_auth = 0;
+    auth_drop(AUTH_ALL);
 }
 
 static uint8_t auth_flag(uint8_t p2)
@@ -580,19 +614,21 @@ static int handle_verify(uint8_t p1, uint8_t p2,
     int which = pin_of(flag);
     if (p1 == 0xFFu) {                  /* §7.2.2: reset this access status */
         if (body_len != 0u) return emit_sw(SW_WRONG_LENGTH, out, out_max, out_len);
-        s_auth &= (uint8_t) ~flag;
+        auth_drop(flag);
         return emit_sw(SW_OK, out, out_max, out_len);
     }
     if (body_len == 0u) {               /* status: verified, or 63CX */
         uint16_t sw = (s_auth & flag) ? SW_OK : retries_sw(which);
         return emit_sw(sw, out, out_max, out_len);
     }
-    int rc = pgp_pin_verify(which, body, body_len);
+    uint8_t k[PGP_DEC_KEY_LEN] = { 0 };
+    int rc = pgp_pin_verify(which, body, body_len, which == OPENPGP_PIN_PW1 ? k : NULL);
     if (rc == PGP_PIN_OK) {
-        s_auth |= flag;                 /* this P2 only */
+        auth_grant(flag, k);            /* this P2 only (+ the KEK for 81 / 82) */
     } else {
-        s_auth &= (uint8_t) ~flags_of(which);
+        auth_drop(flags_of(which));
     }
+    memzero(k, sizeof k);
     return emit_sw(pin_sw(rc, which), out, out_max, out_len);
 }
 
@@ -614,7 +650,7 @@ static int handle_change_ref(uint8_t p1, uint8_t p2,
     if (body == NULL || body_len <= old_len) {
         return emit_sw(SW_WRONG_LENGTH, out, out_max, out_len);
     }
-    s_auth &= (uint8_t) ~flags_of(which);
+    auth_drop(flags_of(which));
     int rc = pgp_pin_change(which, body, old_len, body + old_len, body_len - old_len);
     return emit_sw(pin_sw(rc, which), out, out_max, out_len);
 }
@@ -628,9 +664,9 @@ static int handle_reset_rc(uint8_t p1, uint8_t p2,
     }
     const uint8_t *pw1 = body;
     size_t pw1_len = body_len;
+    uint8_t rc_len = 0;
     if (p1 == 0x00u) {
         /* Body = RC || new PW1, split at the RC's length. */
-        uint8_t rc_len = 0;
         pgp_pin_state_t st = pgp_pin_status(OPENPGP_PIN_RC, NULL, &rc_len);
         if (st == PGP_PIN_NOT_SET) {
             return emit_sw(SW_CONDITIONS_NOT_SATISFIED, out, out_max, out_len);
@@ -641,18 +677,29 @@ static int handle_reset_rc(uint8_t p1, uint8_t p2,
             || body_len - rc_len > OPENPGP_PIN_MAX_LEN) {
             return emit_sw(SW_WRONG_LENGTH, out, out_max, out_len);   /* no RC attempt */
         }
-        int rc = pgp_pin_verify(OPENPGP_PIN_RC, body, rc_len);
-        if (rc != PGP_PIN_OK) {
-            return emit_sw(pin_sw(rc, OPENPGP_PIN_RC), out, out_max, out_len);
-        }
         pw1 = body + rc_len;
         pw1_len = body_len - rc_len;
     } else if (!(s_auth & AUTH_83)) {
         return emit_sw(SW_SECURITY_NOT_SATISFIED, out, out_max, out_len);
     }
-    /* A new PW1 with a fresh s: the "k changed" event M5 hooks into. */
-    s_auth &= (uint8_t) ~flags_of(OPENPGP_PIN_PW1);
-    int rc = pgp_pin_reset_pw1(pw1, pw1_len);
+    /* M5 preflight (J2): every refusal of the reset itself comes before the
+     * RC attempt and long before the DEC key is destroyed. */
+    int rc = pgp_pin_reset_pw1_check(pw1, pw1_len);
+    if (rc != PGP_PIN_OK) return emit_sw(pin_sw(rc, OPENPGP_PIN_PW1), out, out_max, out_len);
+    if (p1 == 0x00u) {
+        rc = pgp_pin_verify(OPENPGP_PIN_RC, body, rc_len, NULL);
+        if (rc != PGP_PIN_OK) {
+            return emit_sw(pin_sw(rc, OPENPGP_PIN_RC), out, out_max, out_len);
+        }
+    }
+    /* A new PW1 with a fresh s = a new k: the wrapped DEC key could never
+     * be opened again.  Destroy it first, checked (E8, D8): a failure stops
+     * the reset, the old PIN stays. */
+    auth_drop(AUTH_PW1);
+    if (openpgp_state_dec_destroy() != 0) {
+        return emit_sw(SW_UNKNOWN_ERROR, out, out_max, out_len);
+    }
+    rc = pgp_pin_reset_pw1(pw1, pw1_len);
     return emit_sw(pin_sw(rc, OPENPGP_PIN_PW1), out, out_max, out_len);
 }
 
@@ -806,9 +853,17 @@ static int handle_generate(uint8_t p1, uint8_t p2,
                       : pgp_keys_read_sig_pubkey(pubkey);
         break;
 
-    case 0xB8u:  /* Decryption key (M5 stub: chip-side Ed25519) */
-        rc = generate ? pgp_keys_generate_dec(pubkey)
-                      : pgp_keys_read_dec_pubkey(pubkey);
+    case 0xB8u:  /* Decryption key: X25519, wrapped under the PW1 KEK (M5) */
+        if (!generate) {
+            rc = pgp_dec_read_pubkey(pubkey);
+            break;
+        }
+        /* PW3 and a verified PW1 (81 or 82): the KEK to seal under (E6). */
+        if ((s_auth & AUTH_PW1) == 0u) {
+            return emit_sw(SW_SECURITY_NOT_SATISFIED, out, out_max, out_len);
+        }
+        rc = pgp_dec_generate(s_kek, pubkey);
+        if (rc != PGP_DEC_OK) auth_drop(AUTH_PW1);       /* any failure (§3) */
         break;
 
     case 0xA4u:  /* Authentication key (M5: chip-side Ed25519, full) */
@@ -937,11 +992,14 @@ static int handle_pso(uint8_t p1, uint8_t p2,
         }
 
         uint8_t shared[PGP_KEYS_PUBKEY_LEN];
-        int rc = pgp_keys_ecdh_dec(peer, shared);
-        if (rc == PGP_KEYS_NO_KEY) {
+        int rc = pgp_dec_ecdh(s_kek, peer, shared);      /* 82 set ⇒ KEK valid (E5) */
+        if (rc == PGP_DEC_NO_KEY) {
             return emit_sw(SW_REF_DATA_NOT_FOUND, out, out_max, out_len);
         }
-        if (rc != PGP_KEYS_OK) {
+        if (rc != PGP_DEC_OK) {
+            /* A wrap that fails its tag, or a crypto error: nothing usable,
+             * fail closed — the PW1 session ends with it (§3). */
+            auth_drop(AUTH_PW1);
             return emit_sw(SW_UNKNOWN_ERROR, out, out_max, out_len);
         }
         if (out_max < PGP_KEYS_PUBKEY_LEN + 2u) {
@@ -970,7 +1028,7 @@ static int handle_pso(uint8_t p1, uint8_t p2,
         return emit_sw(SW_SECURITY_NOT_SATISFIED, out, out_max, out_len);
     }
     if (openpgp_state_c4_multi() == 0u) {
-        s_auth &= (uint8_t) ~AUTH_81;
+        auth_drop(AUTH_81);
     }
     if (require_touch_if_enabled() != 0) {
         return emit_sw(SW_SECURITY_NOT_SATISFIED, out, out_max, out_len);
@@ -1016,7 +1074,7 @@ static int handle_terminate_df(uint8_t p1, uint8_t p2,
     if (!(s_auth & AUTH_83) && pw3 != PGP_PIN_BLOCKED && pw3 != PGP_PIN_ERROR) {
         return emit_sw(SW_SECURITY_NOT_SATISFIED, out, out_max, out_len);
     }
-    s_auth = 0;
+    auth_drop(AUTH_ALL);
     /* Keys, the DEC key (both O3 copies) and every PIN, checked, in that
      * order (D8); a failure stops it and TERMINATE can be sent again. */
     int rc = pgp_lifecycle_terminate();
@@ -1034,7 +1092,7 @@ static int handle_activate_file(uint8_t p1, uint8_t p2,
     if (openpgp_state_lifecycle() == PGP_LC_OPERATIONAL) {
         return emit_sw(SW_OK, out, out_max, out_len);
     }
-    s_auth = 0;
+    auth_drop(AUTH_ALL);
     int rc = pgp_lifecycle_activate();
     uint16_t sw = rc == 0 ? SW_OK : rc == -1 ? SW_CONDITIONS_NOT_SATISFIED : SW_UNKNOWN_ERROR;
     return emit_sw(sw, out, out_max, out_len);
@@ -1096,7 +1154,7 @@ static int handle_select(uint8_t p1, uint8_t p2,
                memcmp(aid, OPENPGP_AID_PREFIX, OPENPGP_AID_PREFIX_LEN) == 0) {
         /* Partial match on RID prefix — accept. */
     } else {
-        s_auth = 0;                     /* another application: access status reset (D9) */
+        auth_drop(AUTH_ALL);            /* another application: access status reset (D9) */
         return emit_sw(SW_FILE_NOT_FOUND, out, out_max, out_len);
     }
 

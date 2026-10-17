@@ -62,4 +62,10 @@ int openpgp_applet_dispatch(const uint8_t *in, size_t in_len,
  * (Phase 9 M4, D9). */
 void openpgp_applet_card_reset(void);
 
+#ifdef NIXTROPIC_HOST_TEST
+/* 1 when the cached DEC KEK is all zero (M5 E5: it must be whenever
+ * neither PW1.81 nor PW1.82 is set). */
+int openpgp_applet_test_kek_zero(void);
+#endif
+
 #endif /* NIXTROPIC_OPENPGP_APPLET_H */

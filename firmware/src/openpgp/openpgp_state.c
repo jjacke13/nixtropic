@@ -12,7 +12,7 @@
 #define O3_SLOT_A   33u
 #define O3_SLOT_B   43u
 #define O3_OBJ       3u
-#define O3_SCHEMA    1u
+#define O3_SCHEMA    2u   /* M5: DEC key wrapped (schema 1 = M4, reads as damaged) */
 
 #define OFF_LC          0u
 #define OFF_RC_SET      1u
@@ -25,11 +25,16 @@
 #define OFF_FPR        47u
 #define OFF_GENTIME   107u
 #define OFF_SIGCNT    119u
-#define OFF_DEC       122u
-#define O3_LEN        154u
+#define OFF_DEC_PUB   122u
+#define OFF_DEC_NONCE 154u
+#define OFF_DEC_CT    166u
+#define OFF_DEC_TAG   198u
+#define O3_LEN        214u
 
 _Static_assert(OFF_NAME + OPENPGP_NAME_MAX == OFF_LANG, "O3 layout");
-_Static_assert(OFF_DEC + OPENPGP_DEC_PRIV_LEN == O3_LEN, "O3 layout");
+_Static_assert(OFF_DEC_NONCE == OFF_DEC_PUB + OPENPGP_DEC_PUB_LEN && OFF_DEC_CT == OFF_DEC_NONCE + OPENPGP_DEC_NONCE_LEN
+               && OFF_DEC_TAG == OFF_DEC_CT + OPENPGP_DEC_CT_LEN && OFF_DEC_TAG + OPENPGP_DEC_TAG_LEN == O3_LEN,
+               "O3 layout");
 _Static_assert(O3_LEN <= REC_PAYLOAD_MAX, "O3 fits a record");
 
 #define SEX_NA  0x39u   /* ISO 5218 "not applicable" */
@@ -48,13 +53,30 @@ static bool sex_ok(uint8_t v)
     return v == 0x31u || v == 0x32u || v == SEX_NA;
 }
 
+static bool all_zero(const uint8_t *b, size_t n)
+{
+    uint8_t acc = 0;
+    for (size_t i = 0; i < n; ++i) acc |= b[i];
+    return acc == 0u;
+}
+
+/* A DEC key is a public key AND a wrap (ciphertext + tag); no key is all
+ * of them zero, nonce included (M5 §2). */
+static bool dec_ok(const uint8_t *b)
+{
+    bool no_pub = all_zero(&b[OFF_DEC_PUB], OPENPGP_DEC_PUB_LEN);
+    bool no_seal = all_zero(&b[OFF_DEC_CT], OPENPGP_DEC_CT_LEN + OPENPGP_DEC_TAG_LEN);
+    return no_pub ? (no_seal && all_zero(&b[OFF_DEC_NONCE], OPENPGP_DEC_NONCE_LEN)) : !no_seal;
+}
+
 /* Out-of-range fields are damage, never a state. */
 static bool fields_ok(const uint8_t *b)
 {
     return (b[OFF_LC] == PGP_LC_OPERATIONAL || b[OFF_LC] == PGP_LC_TERMINATED)
         && b[OFF_RC_SET] <= 1u && b[OFF_C4] <= 1u && b[OFF_UIF] <= 2u
         && b[OFF_NAME_LEN] <= OPENPGP_NAME_MAX
-        && (b[OFF_LC] == PGP_LC_TERMINATED || sex_ok(b[OFF_SEX]));
+        && (b[OFF_LC] == PGP_LC_TERMINATED || sex_ok(b[OFF_SEX]))
+        && dec_ok(b);
 }
 
 static void defaults(uint8_t out[O3_LEN], pgp_lifecycle_t lc)
@@ -214,14 +236,17 @@ void openpgp_state_sig_counter(uint8_t out[OPENPGP_SIG_COUNTER_LEN])
     copy_out(out, OFF_SIGCNT, OPENPGP_SIG_COUNTER_LEN);
 }
 
-int openpgp_state_dec_priv_get(uint8_t out[OPENPGP_DEC_PRIV_LEN])
+int openpgp_state_dec_get(openpgp_dec_rec_t *out)
 {
-    static const uint8_t zero[OPENPGP_DEC_PRIV_LEN];
-    copy_out(out, OFF_DEC, OPENPGP_DEC_PRIV_LEN);
-    if (!usable() || memcmp(out, zero, OPENPGP_DEC_PRIV_LEN) == 0) {
-        memzero(out, OPENPGP_DEC_PRIV_LEN);
+    if (out == NULL) return -1;
+    if (!usable() || all_zero(&s_cur[OFF_DEC_PUB], OPENPGP_DEC_PUB_LEN)) {
+        memzero(out, sizeof *out);
         return -1;
     }
+    memcpy(out->pub, &s_cur[OFF_DEC_PUB], OPENPGP_DEC_PUB_LEN);
+    memcpy(out->nonce, &s_cur[OFF_DEC_NONCE], OPENPGP_DEC_NONCE_LEN);
+    memcpy(out->ct, &s_cur[OFF_DEC_CT], OPENPGP_DEC_CT_LEN);
+    memcpy(out->tag, &s_cur[OFF_DEC_TAG], OPENPGP_DEC_TAG_LEN);
     return 0;
 }
 
@@ -307,9 +332,35 @@ int openpgp_state_sig_counter_increment(void)
     return commit(next);
 }
 
-int openpgp_state_dec_priv_set(const uint8_t key[OPENPGP_DEC_PRIV_LEN])
+int openpgp_state_dec_set(const openpgp_dec_rec_t *rec)
 {
-    return key != NULL ? set_bytes(OFF_DEC, key, OPENPGP_DEC_PRIV_LEN) : -1;
+    uint8_t next[O3_LEN];
+    if (rec == NULL || all_zero(rec->pub, sizeof rec->pub)
+        || (all_zero(rec->ct, sizeof rec->ct) && all_zero(rec->tag, sizeof rec->tag))) {
+        return -1;
+    }
+    edit(next);
+    memcpy(&next[OFF_DEC_PUB], rec->pub, OPENPGP_DEC_PUB_LEN);
+    memcpy(&next[OFF_DEC_NONCE], rec->nonce, OPENPGP_DEC_NONCE_LEN);
+    memcpy(&next[OFF_DEC_CT], rec->ct, OPENPGP_DEC_CT_LEN);
+    memcpy(&next[OFF_DEC_TAG], rec->tag, OPENPGP_DEC_TAG_LEN);
+    return commit(next);
+}
+
+int openpgp_state_dec_destroy(void)
+{
+    const size_t fpr = OFF_FPR + OPENPGP_FPR_LEN, gt = OFF_GENTIME + OPENPGP_GENTIME_LEN;
+    uint8_t next[O3_LEN];
+    if (!usable()) return -1;
+    if (all_zero(&s_cur[OFF_DEC_PUB], O3_LEN - OFF_DEC_PUB)
+        && all_zero(&s_cur[fpr], OPENPGP_FPR_LEN) && all_zero(&s_cur[gt], OPENPGP_GENTIME_LEN)) {
+        return 0;                                    /* nothing to zero: no write */
+    }
+    edit(next);
+    memset(&next[OFF_DEC_PUB], 0, O3_LEN - OFF_DEC_PUB);
+    memset(&next[fpr], 0, OPENPGP_FPR_LEN);          /* DO C8 */
+    memset(&next[gt], 0, OPENPGP_GENTIME_LEN);       /* DO CF */
+    return commit(next);
 }
 
 #ifdef NIXTROPIC_HOST_TEST

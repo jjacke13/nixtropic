@@ -21,8 +21,8 @@
  *     + TROPIC01.md line 32).  X25519 priv lives in OpenPGP state O3
  *     (R-mem 33/43, encrypted by L3 session); STM32 does
  *     curve25519_donna scalarmult in software via trezor-crypto.
- *     Future work hardens this further with M&D-KEK gating
- *     (see docs/BACKLOG.md §1.2).
+ *     Since Phase 9 M5 it is stored AES-GCM-wrapped under a KEK
+ *     from the PW1 M&D binding (pgp_dec.h).
  *
  * Pubkeys are read on demand from the chip / R-mem; no caching in
  * flash/RAM (avoids stale-data bugs at the cost of a few ms per
@@ -97,31 +97,8 @@ int pgp_keys_sign_with_sig(const uint8_t *msg, size_t msg_len,
 
 /* ===== M5 — DEC (encryption) + AUT (authentication) keys ===== */
 
-/* M5 dec slot — X25519 (Curve25519 ECDH), host-side compute.
- *
- * TROPIC01 doesn't expose ECDH at the user-key level (confirmed by
- * libtropic API audit + TropicSquare's own docs; see TROPIC01.md
- * line 32 "no exposed ECDH").  X25519 hardware exists on-die but is
- * wired exclusively to the L3 secure-channel Noise handshake.
- *
- * Following the Trezor Safe 7 pattern: priv lives in R-mem (chip-
- * persistent), STM32 does curve25519_donna scalarmult in software
- * via trezor_crypto's curve25519-donna (linked for libtropic L3).
- *
- * Trust model M5 ship: priv key plain in R-mem, readable by anyone
- * with SH0 + L3 session — same trust level as PIN hashes today.
- * Acceptable for daily-driver since SH0 is the dev public key and a
- * wire-level attacker can't establish L3 without the chip.
- *
- * M6 audit + close hardens: wraps dec priv with M&D-gated KEK derived
- * from PW1, mirroring Trezor's PIN-encrypted-seed design.  Same M&D
- * framework that hardens PW1/PW3/RC retry counters (see
- * docs/BACKLOG.md §1.1). */
-
-int pgp_keys_generate_dec(uint8_t pubkey_out[PGP_KEYS_PUBKEY_LEN]);
-int pgp_keys_read_dec_pubkey(uint8_t pubkey_out[PGP_KEYS_PUBKEY_LEN]);
-int pgp_keys_ecdh_dec(const uint8_t peer_pubkey[PGP_KEYS_PUBKEY_LEN],
-                      uint8_t shared_out[PGP_KEYS_PUBKEY_LEN]);
+/* DEC key (X25519): computed on the STM32 and stored wrapped under the PW1
+ * KEK since Phase 9 M5 — see pgp_dec.h. */
 
 int pgp_keys_generate_aut(uint8_t pubkey_out[PGP_KEYS_PUBKEY_LEN]);
 int pgp_keys_read_aut_pubkey(uint8_t pubkey_out[PGP_KEYS_PUBKEY_LEN]);

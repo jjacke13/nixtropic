@@ -234,6 +234,7 @@ set(APP_SOURCES
     src/openpgp/openpgp_applet.c
     src/openpgp/pgp_pin.c
     src/openpgp/pgp_keys.c
+    src/openpgp/pgp_dec.c
     src/openpgp/pgp_lifecycle.c
     src/fido_hid/ctaphid.c
     src/fido_hid/cbor.c

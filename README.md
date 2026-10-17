@@ -23,7 +23,7 @@ The full daily-driver feature set works end-to-end on real hardware:
 
 - 🔐 **FIDO2 / WebAuthn** — register + login via `webauthn.io`; hardware PIN protection; user-presence button (SW1) gates every operation
 - ✍️ **GPG signing** — `git commit -S` works; private key never leaves the TROPIC01 chip
-- 🔓 **GPG decryption** — `gpg --encrypt -r self … | gpg --decrypt` round-trip works
+- 🔓 **GPG decryption** — `gpg --encrypt -r self … | gpg --decrypt` round-trip works; the X25519 key is stored encrypted under a PIN-derived key (a PIN reset destroys it)
 - 🔑 **SSH via gpg-agent** — ssh to remote host with the authentication key only inside the chip
 - 🛡️ **Hardware-backed PIN** — FIDO PIN retry counter via TROPIC01's MAC-and-Destroy primitive: each wrong PIN mutates one of 8 dedicated chip slots; the original `master_secret` is reconstructible only via a correct PIN.  After 8 wrong attempts without a correct in between, the chip refuses further verifications until `authenticatorReset`.  Firmware-reflash attackers cannot bypass — the state mutation is chip-enforced.
 - 🟢 **Anti-passive-attack factory reset** — CTAP2.1 authenticatorReset is gated on (a) within 10 s of power-on AND (b) a fresh SW1 press if any state exists, so an attacker who briefly snatches the dongle can't wipe it just by replugging

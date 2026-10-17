@@ -10,8 +10,6 @@
 #include <string.h>
 
 #include "tropic/tropic.h"
-#include "openpgp_state.h"   /* openpgp_state_dec_priv_get/set */
-#include "ed25519-donna/ed25519.h"   /* ed25519_publickey() + curve25519_scalarmult */
 #include "memzero.h"
 
 /* Ed25519 = curve 0 in tropic_ecc_generate.  P-256 = 1; that's not
@@ -22,7 +20,7 @@
  * this via SW so we can see what libtropic actually complains about.
  * Will get tidied to a proper return-channel after we know the bug. */
 int pgp_keys_last_chip_rc = 0;
-int pgp_keys_last_chip_stage = 0;  /* 1=generate, 2=pubkey_read, 3=erase, 6=dec_priv store */
+int pgp_keys_last_chip_stage = 0;  /* 1=generate, 2=pubkey_read, 3=erase */
 
 int pgp_keys_generate_sig(uint8_t pubkey_out[PGP_KEYS_PUBKEY_LEN])
 {
@@ -97,73 +95,6 @@ int pgp_keys_sign_with_sig(const uint8_t *msg, size_t msg_len,
     if (rc != (int) PGP_KEYS_SIG_LEN) {
         return PGP_KEYS_CHIP_ERR;
     }
-    return PGP_KEYS_OK;
-}
-
-/* ===== M5 — DEC slot (X25519, host-side compute, priv in R-mem) ===== */
-
-#include "ed25519-donna/ed25519.h"  /* curve25519_scalarmult{,_basepoint} */
-
-int pgp_keys_generate_dec(uint8_t pubkey_out[PGP_KEYS_PUBKEY_LEN])
-{
-    if (pubkey_out == NULL) return PGP_KEYS_BAD_PARAM;
-
-    /* 32 random bytes from chip TRNG, then RFC 7748 §5 X25519 clamping. */
-    uint8_t priv[32];
-    int rc = tropic_random(priv, sizeof priv);
-    if (rc != 0) {
-        memzero(priv, sizeof priv);
-        return PGP_KEYS_CHIP_ERR;
-    }
-    priv[0]  &= 248u;
-    priv[31] &= 127u;
-    priv[31] |=  64u;
-
-    /* Derive pubkey = priv * BASEPOINT (curve25519_donna_basepoint). */
-    curve25519_scalarmult_basepoint(pubkey_out, priv);
-
-    /* Persist the clamped priv to R-mem.  Trust model: readable by
-     * anyone with SH0 + L3.  M6 wraps this with M&D-gated KEK. */
-    rc = openpgp_state_dec_priv_set(priv);
-    memzero(priv, sizeof priv);
-    if (rc != 0) {
-        pgp_keys_last_chip_rc = rc;
-        pgp_keys_last_chip_stage = 6;
-        return PGP_KEYS_CHIP_ERR;
-    }
-    return PGP_KEYS_OK;
-}
-
-/* Derive the X25519 public key from the stored private key.  Used both
- * by READ PUBLIC KEY (P1=81) and indirectly by ECDH paths. */
-int pgp_keys_read_dec_pubkey(uint8_t pubkey_out[PGP_KEYS_PUBKEY_LEN])
-{
-    if (pubkey_out == NULL) return PGP_KEYS_BAD_PARAM;
-
-    uint8_t priv[32];
-    if (openpgp_state_dec_priv_get(priv) != 0) {      /* none (all zero) */
-        return PGP_KEYS_NO_KEY;
-    }
-
-    curve25519_scalarmult_basepoint(pubkey_out, priv);
-    memzero(priv, sizeof priv);
-    return PGP_KEYS_OK;
-}
-
-/* Perform X25519 ECDH: shared = dec_priv * peer_pubkey.
- * Used by PSO:DEC (Decipher) APDU handler. */
-int pgp_keys_ecdh_dec(const uint8_t peer_pubkey[PGP_KEYS_PUBKEY_LEN],
-                      uint8_t shared_out[PGP_KEYS_PUBKEY_LEN])
-{
-    if (peer_pubkey == NULL || shared_out == NULL) return PGP_KEYS_BAD_PARAM;
-
-    uint8_t priv[32];
-    if (openpgp_state_dec_priv_get(priv) != 0) {      /* none (all zero) */
-        return PGP_KEYS_NO_KEY;
-    }
-
-    curve25519_scalarmult(shared_out, priv, peer_pubkey);
-    memzero(priv, sizeof priv);
     return PGP_KEYS_OK;
 }
 

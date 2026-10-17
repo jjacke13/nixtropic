@@ -306,7 +306,15 @@ gpg --card-edit
 gpg --card-status     # verify keys are bound
 ```
 
-The private keys never leave the chip.
+The signature and authentication private keys are generated and used inside the
+TROPIC01 and never leave it. The decryption key cannot live in a TROPIC01 key slot
+(the chip offers no X25519 for user keys): it is generated and used on the STM32 and
+stored in the chip's data memory **encrypted under a key derived from your PIN (PW1)**,
+so the stored copy is useless without the PIN.
+
+- Changing PW1 (`passwd`) keeps the decryption key.
+- Resetting PW1 with the Reset Code or the Admin PIN (unblock) **destroys the decryption
+  key**: mail encrypted to it can no longer be decrypted. Generate a new one afterwards.
 
 ---
 

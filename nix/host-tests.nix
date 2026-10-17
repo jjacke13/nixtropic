@@ -41,6 +41,19 @@ stdenv.mkDerivation {
       P256="$P256 $o"
     done
 
+    # AES-256-GCM (AES_VAR as in the firmware) + X25519 for the M5 DEC wrap.
+    DEC=""
+    for f in aes/aescrypt aes/aeskey aes/aestab aes/aesgcm aes/gf128mul \
+             ed25519-donna/ed25519 ed25519-donna/curve25519-donna-32bit \
+             ed25519-donna/curve25519-donna-helpers ed25519-donna/curve25519-donna-scalarmult-base \
+             ed25519-donna/ed25519-donna-impl-base ed25519-donna/ed25519-donna-basepoint-table \
+             ed25519-donna/ed25519-donna-32bit-tables ed25519-donna/modm-donna-32bit; do
+      o=dec_$(echo $f | tr / _).o
+      $CC -std=gnu11 $SAN -w $INC -ffunction-sections -fdata-sections -DAES_VAR -DUSE_PRECOMPUTED_CP=0 \
+        -Ded25519_verify=trezor_crypto_ed25519_verify -c ${trezor}/$f.c -o $o
+      DEC="$DEC $o"
+    done
+
     $CC $STRICT $SAN $INC tests/host/test_cbor.c firmware/src/fido_hid/cbor.c -o test_cbor
     $CC $STRICT $SAN $INC tests/host/test_ctap2_parse.c firmware/src/fido_hid/ctap2_parse.c \
       firmware/src/fido_hid/cbor.c -o test_ctap2_parse
@@ -55,10 +68,16 @@ stdenv.mkDerivation {
       $PGP firmware/src/fido_hid/fido_state.c firmware/src/fido_hid/pin_md.c firmware/src/fido_hid/slots.c \
       firmware/src/tropic/pin_md_kernel.c firmware/src/tropic/rec_pair.c \
       hmac.o sha2.o memzero.o -o test_openpgp_state
-    $CC $STRICT $SAN $INC -DNIXTROPIC_HOST_TEST tests/host/test_openpgp_applet.c tests/host/mock_tropic.c \
-      firmware/src/openpgp/openpgp_applet.c firmware/src/openpgp/openpgp_aid.c $PGP \
+    $CC $STRICT $SAN $INC -DNIXTROPIC_HOST_TEST -ffunction-sections -Wl,--gc-sections \
+      tests/host/test_openpgp_applet.c tests/host/mock_tropic.c \
+      firmware/src/openpgp/openpgp_applet.c firmware/src/openpgp/openpgp_aid.c firmware/src/openpgp/pgp_dec.c $PGP \
       firmware/src/tropic/pin_md_kernel.c firmware/src/tropic/rec_pair.c \
-      hmac.o sha2.o memzero.o -o test_openpgp_applet
+      $DEC hmac.o sha2.o memzero.o -o test_openpgp_applet
+    $CC $STRICT $SAN $INC -DNIXTROPIC_HOST_TEST -ffunction-sections -Wl,--gc-sections \
+      tests/host/test_pgp_dec.c tests/host/mock_tropic.c \
+      firmware/src/openpgp/pgp_dec.c $PGP \
+      firmware/src/tropic/pin_md_kernel.c firmware/src/tropic/rec_pair.c \
+      $DEC hmac.o sha2.o memzero.o -o test_pgp_dec
     $CC $STRICT $SAN $INC tests/host/test_pin_md_kernel.c tests/host/mock_tropic.c \
       firmware/src/tropic/pin_md_kernel.c firmware/src/tropic/rec_pair.c \
       hmac.o sha2.o memzero.o -o test_pin_md_kernel
@@ -89,6 +108,7 @@ stdenv.mkDerivation {
     ./test_trezor_rng
     ./test_openpgp_state
     ./test_openpgp_applet
+    ./test_pgp_dec
     ./test_pin_md_kernel
     ./test_fido_state
     ./test_fido_pin_cmd

@@ -58,13 +58,6 @@ int pgp_keys_sign_with_aut(const uint8_t *m, size_t n, uint8_t sig[PGP_KEYS_SIG_
     return fake_sig(sig);
 }
 
-int pgp_keys_ecdh_dec(const uint8_t peer[PGP_KEYS_PUBKEY_LEN], uint8_t out[PGP_KEYS_PUBKEY_LEN])
-{
-    (void) peer;
-    memset(out, 0x33, PGP_KEYS_PUBKEY_LEN);
-    return PGP_KEYS_OK;
-}
-
 static int fake_pub(uint8_t pub[PGP_KEYS_PUBKEY_LEN])
 {
     memset(pub, 1, PGP_KEYS_PUBKEY_LEN);
@@ -72,10 +65,8 @@ static int fake_pub(uint8_t pub[PGP_KEYS_PUBKEY_LEN])
 }
 
 int pgp_keys_generate_sig(uint8_t p[PGP_KEYS_PUBKEY_LEN]) { return fake_pub(p); }
-int pgp_keys_generate_dec(uint8_t p[PGP_KEYS_PUBKEY_LEN]) { return fake_pub(p); }
 int pgp_keys_generate_aut(uint8_t p[PGP_KEYS_PUBKEY_LEN]) { return fake_pub(p); }
 int pgp_keys_read_sig_pubkey(uint8_t p[PGP_KEYS_PUBKEY_LEN]) { return fake_pub(p); }
-int pgp_keys_read_dec_pubkey(uint8_t p[PGP_KEYS_PUBKEY_LEN]) { return fake_pub(p); }
 int pgp_keys_read_aut_pubkey(uint8_t p[PGP_KEYS_PUBKEY_LEN]) { return fake_pub(p); }
 
 /* ---- APDU helpers ---- */
@@ -165,12 +156,29 @@ static void reboot(void)
     openpgp_applet_card_reset();
 }
 
+static uint16_t gen_dec(void)
+{
+    static const uint8_t crt[2] = { 0xB8, 0x00 };
+    return apdu(0x47, 0x80, 0x00, crt, sizeof crt);
+}
+
+static uint16_t read_dec_pub(void)
+{
+    static const uint8_t crt[2] = { 0xB8, 0x00 };
+    return apdu(0x47, 0x81, 0x00, crt, sizeof crt);
+}
+
+/* A factory card with a DEC key (M5: generated under the PW1 KEK), no
+ * access status left. */
 static void fresh(void)
 {
     mock_reset(1);
     reboot();
     s_touch_ok = true;
     CHECK(select_pgp() == 0x9000);
+    CHECK(verify(0x83, "12345678") == 0x9000 && verify(0x82, "123456") == 0x9000
+          && gen_dec() == 0x9000);
+    openpgp_applet_card_reset();
 }
 
 /* ---- tests ---- */
@@ -444,23 +452,22 @@ static void test_boot_bound(void)
  * blocked, TERMINATE, ACTIVATE).  It must always end in a usable card with
  * factory PINs and no key; and no key may ever sit under a factory PIN. */
 
-static const uint8_t DEC_PAT[OPENPGP_DEC_PRIV_LEN] = { 0xD1, 0xEC, 0x0F, 0xFE, 1, 2, 3, 0x40 };
-
-static bool raw_contains(uint16_t slot, const uint8_t *pat, size_t n)
+/* A DEC key in an O3 copy: an O3 record (NXR1, obj 3) whose public key
+ * field (payload 122..153, after the 12-byte header) is not zero. */
+static bool dec_in(uint16_t slot)
 {
     uint8_t b[444];
     size_t got = 0;
-    if (tropic_rmem_read(slot, b, sizeof b, &got) != 0) return false;
-    for (size_t i = 0; i + n <= got; ++i) {
-        if (memcmp(&b[i], pat, n) == 0) return true;
-    }
-    return false;
+    if (tropic_rmem_read(slot, b, sizeof b, &got) != 0 || got < 12u + 154u) return false;
+    if (memcmp(b, "NXR1", 4) != 0 || b[4] != 3u) return false;
+    uint8_t acc = 0;
+    for (size_t i = 12u + 122u; i < 12u + 154u; ++i) acc |= b[i];
+    return acc != 0u;
 }
 
 static bool keys_left(void)
 {
-    return mock_ecc_present(29) || mock_ecc_present(31)
-        || raw_contains(33, DEC_PAT, sizeof DEC_PAT) || raw_contains(43, DEC_PAT, sizeof DEC_PAT);
+    return mock_ecc_present(29) || mock_ecc_present(31) || dec_in(33) || dec_in(43);
 }
 
 static bool gpg_factory_reset(void)
@@ -488,7 +495,8 @@ static void arm(mock_op_t op, unsigned n, enum fault f)
     }
 }
 
-enum op { A_ACTIVATE, A_TERMINATE, A_CDS, A_VERIFY, A_CHANGE, A_SET_RC, A_PUT, A_BOOTSTRAP, A_COUNT };
+enum op { A_ACTIVATE, A_TERMINATE, A_CDS, A_VERIFY, A_CHANGE, A_SET_RC, A_PUT,
+           A_GEN_DEC, A_RESET_RC, A_RESET_PW3, A_BOOTSTRAP, A_COUNT };
 
 /* A card in use (own PINs, an RC, keys, the DEC key), then what the APDU needs. */
 static void before(enum op o)
@@ -498,7 +506,6 @@ static void before(enum op o)
     CHECK(two(0x24, 0x00, 0x83, "12345678", "admin-own-1") == 0x9000);
     CHECK(two(0x24, 0x00, 0x81, "123456", "pw1-own") == 0x9000);
     CHECK(verify(0x83, "admin-own-1") == 0x9000 && put(0x00D3, "rc-code-1", 9) == 0x9000);
-    CHECK(openpgp_state_dec_priv_set(DEC_PAT) == 0);
     mock_ecc_put(29);
     mock_ecc_put(31);
     openpgp_applet_card_reset();
@@ -506,8 +513,11 @@ static void before(enum op o)
     case A_ACTIVATE:
         CHECK(verify(0x83, "admin-own-1") == 0x9000 && apdu(0xE6, 0x00, 0x00, NULL, 0) == 0x9000);
         break;
-    case A_TERMINATE: case A_SET_RC: case A_PUT:
+    case A_TERMINATE: case A_SET_RC: case A_PUT: case A_RESET_PW3:
         CHECK(verify(0x83, "admin-own-1") == 0x9000);
+        break;
+    case A_GEN_DEC:
+        CHECK(verify(0x83, "admin-own-1") == 0x9000 && verify(0x82, "pw1-own") == 0x9000);
         break;
     case A_CDS:
         CHECK(verify(0x81, "pw1-own") == 0x9000);
@@ -531,8 +541,24 @@ static uint16_t send(enum op o)
     case A_CHANGE:    return two(0x24, 0x00, 0x81, "pw1-own", "pw1-new");
     case A_SET_RC:    return put(0x00D3, "rc-code-2", 9);
     case A_PUT:       return put(0x005B, "Alice", 5);
+    case A_GEN_DEC:   return gen_dec();
+    case A_RESET_RC:  return two(0x2C, 0x00, 0x81, "rc-code-1", "newpin1");
+    case A_RESET_PW3: return apdu(0x2C, 0x02, 0x81, "newpin1", 7);
     default:          return select_pgp();
     }
+}
+
+/* M5 after one fault: a key never lives under a fresh s (a reset's new PIN
+ * sees no key), and a stored key opens under the PIN it was sealed for. */
+static bool m5_ok(enum op o)
+{
+    if ((o == A_RESET_RC || o == A_RESET_PW3) && verify(0x82, "newpin1") == 0x9000) {
+        return read_dec_pub() == 0x6A88;
+    }
+    bool pw1 = (o == A_CHANGE && verify(0x82, "pw1-new") == 0x9000)
+            || verify(0x82, "pw1-own") == 0x9000;
+    if (!pw1) return true;                      /* no usable PW1: nothing to open */
+    return read_dec_pub() != 0x9000 || dec() == 0x9000;
 }
 
 static void test_apdu_sweep(void)
@@ -558,7 +584,7 @@ static void test_apdu_sweep(void)
                     uint16_t sw = send((enum op) o);
                     mock_disarm();
                     reboot();
-                    bool good = select_pgp() == 0x9000;
+                    bool good = select_pgp() == 0x9000 && m5_ok((enum op) o);
                     if (keys_left()) {          /* never a key under a factory PIN */
                         good = good && verify(0x81, "123456") != 0x9000
                                     && verify(0x83, "12345678") != 0x9000;
@@ -573,8 +599,145 @@ static void test_apdu_sweep(void)
     }
 }
 
+/* ---- M5: the DEC key wrapped under the PW1 KEK (docs/PHASE-9-M5-DESIGN.md) ---- */
+
+static bool kek_zero(void)
+{
+    return openpgp_applet_test_kek_zero() != 0;
+}
+
+/* gpg on a fresh card verifies 81, never 82, before generating (J1). */
+static void test_m5_fresh_card_gpg_order(void)
+{
+    mock_reset(1);
+    reboot();
+    s_touch_ok = true;
+    CHECK(select_pgp() == 0x9000 && read_dec_pub() == 0x6A88);
+    CHECK(verify(0x83, "12345678") == 0x9000 && gen_dec() == 0x6982);   /* PW3 alone: no KEK */
+    CHECK(read_dec_pub() == 0x6A88 && kek_zero());
+    CHECK(verify(0x81, "123456") == 0x9000 && !kek_zero() && gen_dec() == 0x9000);
+    CHECK(read_dec_pub() == 0x9000 && dec() == 0x6982);                /* 81 is never 82 */
+    CHECK(verify(0x82, "123456") == 0x9000 && dec() == 0x9000 && s_out_len == 32 + 2);
+    openpgp_applet_card_reset();
+    CHECK(kek_zero() && read_dec_pub() == 0x9000);                      /* public key: no PIN */
+}
+
+/* The KEK lives exactly while 81 or 82 is set (E5, §3); PW3 events leave it. */
+static void test_m5_kek_lifetime(void)
+{
+    static const uint8_t other_aid[] = { 0xA0, 0x00, 0x00, 0x03, 0x08 };
+    static const uint8_t zero = 0;
+    fresh();
+    CHECK(kek_zero());
+    CHECK(verify(0x81, "123456") == 0x9000 && verify(0x82, "123456") == 0x9000);
+    CHECK(apdu(0x20, 0xFF, 0x81, NULL, 0) == 0x9000 && !kek_zero() && dec() == 0x9000);
+    CHECK(apdu(0x20, 0xFF, 0x82, NULL, 0) == 0x9000 && kek_zero());
+    CHECK(verify(0x82, "123456") == 0x9000 && verify(0x83, "12345678") == 0x9000);
+    CHECK(verify(0x83, "00000000") == 0x63C2 && !kek_zero() && dec() == 0x9000);   /* wrong 83 */
+    CHECK(verify(0x83, "12345678") == 0x9000 && apdu(0x20, 0xFF, 0x83, NULL, 0) == 0x9000);
+    CHECK(!kek_zero() && dec() == 0x9000);
+    CHECK(verify(0x82, "000000") == 0x63C2 && kek_zero());                         /* wrong PW1 */
+    CHECK(verify(0x82, "123456") == 0x9000);
+    openpgp_applet_card_reset();
+    CHECK(kek_zero());
+    CHECK(verify(0x82, "123456") == 0x9000);
+    CHECK(apdu(0xA4, 0x04, 0x00, other_aid, sizeof other_aid) == 0x6A82 && kek_zero());
+    CHECK(select_pgp() == 0x9000 && verify(0x82, "123456") == 0x9000);
+    CHECK(two(0x24, 0x00, 0x81, "123456", "pw1-new") == 0x9000 && kek_zero());   /* change */
+    /* C4 00: the CDS that consumes 81 ends the KEK when 82 is not set. */
+    CHECK(verify(0x83, "12345678") == 0x9000 && put(0x00C4, &zero, 1) == 0x9000);
+    CHECK(verify(0x81, "pw1-new") == 0x9000 && !kek_zero() && cds() == 0x9000 && kek_zero());
+    CHECK(gen_dec() == 0x6982);
+    /* TERMINATE / ACTIVATE. */
+    CHECK(verify(0x82, "pw1-new") == 0x9000 && apdu(0xE6, 0x00, 0x00, NULL, 0) == 0x9000);
+    CHECK(kek_zero() && apdu(0x44, 0x00, 0x00, NULL, 0) == 0x9000 && kek_zero());
+    CHECK(read_dec_pub() == 0x6A88);                                 /* the key went with it */
+}
+
+/* A PW1 change keeps decryption (same s, E7); a reset destroys the key (E8). */
+static void test_m5_change_keeps_reset_destroys(void)
+{
+    uint8_t pub[64];
+    fresh();
+    CHECK(read_dec_pub() == 0x9000);
+    memcpy(pub, s_out, s_out_len < sizeof pub ? s_out_len : sizeof pub);
+    CHECK(two(0x24, 0x00, 0x81, "123456", "pw1-new") == 0x9000);
+    CHECK(verify(0x82, "pw1-new") == 0x9000 && dec() == 0x9000);
+    CHECK(read_dec_pub() == 0x9000 && memcmp(pub, s_out, 16) == 0);
+    /* Reset by PW3. */
+    CHECK(verify(0x83, "12345678") == 0x9000 && apdu(0x2C, 0x02, 0x81, "abcdef", 6) == 0x9000);
+    CHECK(kek_zero() && read_dec_pub() == 0x6A88);
+    CHECK(verify(0x82, "abcdef") == 0x9000 && dec() == 0x6A88);
+    /* A new key under the new PIN works; reset by RC destroys it too. */
+    CHECK(gen_dec() == 0x9000 && dec() == 0x9000);
+    CHECK(put(0x00D3, "rcrcrcrc", 8) == 0x9000);
+    CHECK(two(0x2C, 0x00, 0x81, "rcrcrcrc", "newpin") == 0x9000 && read_dec_pub() == 0x6A88);
+    CHECK(verify(0x82, "newpin") == 0x9000 && dec() == 0x6A88);
+}
+
+/* J2: every refusal of the reset comes before the destroy. */
+static void test_m5_reset_preflight(void)
+{
+    char long_pin[66];
+    memset(long_pin, 'p', sizeof long_pin - 1);
+    long_pin[sizeof long_pin - 1] = '\0';
+    fresh();
+    CHECK(apdu(0x2C, 0x02, 0x81, "abcdef", 6) == 0x6982 && read_dec_pub() == 0x9000);
+    CHECK(verify(0x83, "12345678") == 0x9000);
+    CHECK(apdu(0x2C, 0x02, 0x81, "a", 1) == 0x6700 && read_dec_pub() == 0x9000);
+    CHECK(apdu(0x2C, 0x02, 0x81, long_pin, 65) == 0x6700 && read_dec_pub() == 0x9000);
+    CHECK(put(0x00D3, "rcrcrcrc", 8) == 0x9000);
+    CHECK(two(0x2C, 0x00, 0x81, "rcrcrcrc", "12345") == 0x6700 && read_dec_pub() == 0x9000);
+    CHECK(two(0x2C, 0x00, 0x81, "xxxxxxxx", "newpin") == 0x63C2 && read_dec_pub() == 0x9000);
+    CHECK(verify(0x82, "123456") == 0x9000 && dec() == 0x9000);
+    /* The destroy fails: the reset stops, the old PIN and the key stay. */
+    CHECK(verify(0x83, "12345678") == 0x9000);
+    mock_fail_nth(MOCK_OP_RMEM_WRITE, 1, -1, false);
+    CHECK(apdu(0x2C, 0x02, 0x81, "abcdef", 6) == 0x6F00);
+    mock_disarm();
+    reboot();
+    CHECK(select_pgp() == 0x9000 && read_dec_pub() == 0x9000);
+    CHECK(verify(0x82, "123456") == 0x9000 && dec() == 0x9000);
+}
+
+/* A damaged wrap: 6F00, nothing usable, the PW1 session ends (§3). */
+static void test_m5_damaged_wrap(void)
+{
+    openpgp_dec_rec_t r;
+    fresh();
+    CHECK(openpgp_state_dec_get(&r) == 0);
+    r.ct[0] ^= 1u;
+    CHECK(openpgp_state_dec_set(&r) == 0);
+    CHECK(verify(0x81, "123456") == 0x9000 && verify(0x82, "123456") == 0x9000);
+    CHECK(dec() == 0x6F00 && s_out_len == 2 && kek_zero());   /* SW only */
+    CHECK(cds() == 0x6982 && dec() == 0x6982);
+}
+
+/* Only auth_grant / auth_drop touch the access status (design §4). */
+static void test_m5_single_auth_path(void)
+{
+    FILE *f = fopen("firmware/src/openpgp/openpgp_applet.c", "r");
+    char line[512];
+    unsigned and_eq = 0, or_eq = 0, assign = 0;
+    CHECK(f != NULL);
+    if (f == NULL) return;
+    while (fgets(line, sizeof line, f) != NULL) {
+        if (strstr(line, "s_auth &=") != NULL) and_eq++;
+        if (strstr(line, "s_auth |=") != NULL) or_eq++;
+        if (strstr(line, "s_auth = ") != NULL) assign++;
+    }
+    fclose(f);
+    CHECK(and_eq == 1 && or_eq == 1 && assign == 0);
+}
+
 int main(void)
 {
+    test_m5_fresh_card_gpg_order();
+    test_m5_kek_lifetime();
+    test_m5_change_keeps_reset_destroys();
+    test_m5_reset_preflight();
+    test_m5_damaged_wrap();
+    test_m5_single_auth_path();
     test_defaults_and_status();
     test_81_82_apart();
     test_clearing_events();

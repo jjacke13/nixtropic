@@ -51,7 +51,9 @@ typedef enum {
 /* `attempts` / `pin_len` (nullable) are 0 unless ACTIVE or BLOCKED. */
 pgp_pin_state_t pgp_pin_status(int which, uint8_t *attempts, uint8_t *pin_len);
 
-int pgp_pin_verify(int which, const uint8_t *pin, size_t len);
+/* `out_k` (nullable, 32 B): the binding's k = HMAC(s, 0x02) on PGP_PIN_OK, zero
+ * otherwise — the M5 KEK source (pgp_dec.h). */
+int pgp_pin_verify(int which, const uint8_t *pin, size_t len, uint8_t out_k[32]);
 
 /* CHANGE REFERENCE DATA for PW1 / PW3: old PIN checked (attempt counted),
  * then the new one bound with the same s (k survives, D4). */
@@ -61,6 +63,10 @@ int pgp_pin_change(int which, const uint8_t *old_pin, size_t old_len,
 /* New PW1 binding with a fresh s (RESET RETRY COUNTER; the caller has
  * checked RC or PW3). */
 int pgp_pin_reset_pw1(const uint8_t *pin, size_t len);
+/* The refusals of pgp_pin_reset_pw1 (length, lifecycle, PW1 in ERROR) without
+ * binding anything: the M5 preflight before the DEC key is destroyed.  A
+ * status read may settle or repair the binding (M4). */
+int pgp_pin_reset_pw1_check(const uint8_t *pin, size_t len);
 
 /* PUT DATA D3 (the caller has checked PW3): len 0 clears RC; otherwise RC
  * is cleared, then set: clear O6 → rc_set 0 → setup → rc_set 1. */

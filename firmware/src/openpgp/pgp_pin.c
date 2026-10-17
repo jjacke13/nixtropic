@@ -89,10 +89,11 @@ static int map_rc(int rc, int correct)
     return rc == PMD_ERR_BLOCKED ? PGP_PIN_BLK : PGP_PIN_ERR;
 }
 
-int pgp_pin_verify(int which, const uint8_t *pin, size_t len)
+int pgp_pin_verify(int which, const uint8_t *pin, size_t len, uint8_t out_k[PIN_MD_KERNEL_K_LEN])
 {
     uint8_t mat[MAT_LEN];
     int correct = 0;
+    if (out_k != NULL) memzero(out_k, PIN_MD_KERNEL_K_LEN);   /* every early return too */
     if (!which_ok(which) || !len_ok(which, pin, len)) return PGP_PIN_BAD_LEN;
     if (which == OPENPGP_PIN_RC) {
         if (openpgp_state_lifecycle() != PGP_LC_OPERATIONAL) return PGP_PIN_ERR;
@@ -102,7 +103,7 @@ int pgp_pin_verify(int which, const uint8_t *pin, size_t len)
      * guard says the PIN exists: only a TERMINATED card has none, and the
      * applet serves no VERIFY there). */
     material(pin, len, mat);
-    int rc = pin_md_kernel_verify(&LAYOUT[which], mat, &correct, NULL);
+    int rc = pin_md_kernel_verify(&LAYOUT[which], mat, &correct, out_k);
     memzero(mat, sizeof mat);
     return map_rc(rc, correct);
 }
@@ -131,6 +132,14 @@ static int bind(int which, const uint8_t *pin, size_t len)
     int rc = pin_md_kernel_setup(&LAYOUT[which], mat, (uint8_t) len, NULL);
     memzero(mat, sizeof mat);
     return rc == PMD_OK ? PGP_PIN_OK : PGP_PIN_ERR;
+}
+
+int pgp_pin_reset_pw1_check(const uint8_t *pin, size_t len)
+{
+    if (!len_ok(OPENPGP_PIN_PW1, pin, len)) return PGP_PIN_BAD_LEN;
+    if (openpgp_state_lifecycle() != PGP_LC_OPERATIONAL) return PGP_PIN_ERR;
+    /* setup needs a readable binding to replace (M4): ERROR is refused there. */
+    return pgp_pin_status(OPENPGP_PIN_PW1, NULL, NULL) == PGP_PIN_ERROR ? PGP_PIN_ERR : PGP_PIN_OK;
 }
 
 int pgp_pin_reset_pw1(const uint8_t *pin, size_t len)
