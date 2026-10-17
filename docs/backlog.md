@@ -1,8 +1,10 @@
 # Backlog
 
-Open work items beyond the current ship state.  Items are grouped by
+Open work items beyond the current release.  Items are grouped by
 theme; ordering within a section is rough priority (highest first) but
-most items are independent.
+most items are independent.  The larger Phase 10 themes are on the
+[roadmap](roadmap.md).  Section numbers are referenced from code comments,
+so they stay stable; finished items stay with their outcome.
 
 ---
 
@@ -13,18 +15,17 @@ didn't make them blocking.
 
 ### 1.1 M&D-backed PIN counters for OpenPGP PW1 / PW3 / RC — ✅ DONE (Phase 8 M4)
 
-Landed in commits leading up to `561e040` (schema PG7R).  `pin_md_kernel`
-extracted to `firmware/src/tropic/pin_md_kernel.{c,h}`; OpenPGP wrappers
-live in `firmware/src/openpgp/pgp_pin.{c,h}` on the M&D kernel v2 (Phase 9 M4; was openpgp_pin_md, slots 8-16)
-and R-mem slots 50/51/52 (per-PIN state).  `pgp_pin.c` VERIFY routes
-through M&D first.  Bootstrap path wipes M&D state on schema bump to
-avoid PIN brick.  Acceptance verified by `tools/validate-pin-md.sh`.
+Phase 8 moved the OpenPGP PIN counters onto MAC-and-Destroy (`561e040`). Phase 9 M4
+replaced that layout: all PINs are now M&D kernel v2 bindings in mirrored record pairs,
+with no software PIN check (current layout in
+[architecture](architecture.md#persistent-state)). Hardware check:
+`tools/validate-pin-md.sh`.
 
 ### 1.2 M&D-KEK wrap for X25519 dec priv key — ✅ DONE (Phase 9 M5)
 
 Done differently from the sketch below: KEK = HMAC(k, label), k from the PW1 M&D
 binding; AES-256-GCM; KEK cached while PW1 is verified.  See
-`docs/PHASE-9-M5-DESIGN.md`.  Original note (historical):
+[security model](security.md#the-openpgp-decryption-key).  Original note (historical):
 
 The X25519 dec key for `gpg --decrypt` lives in R-mem slot 1 byte
 180-211 (Trezor Safe 7 pattern).  Anyone with SH0 + L3 session can
@@ -69,10 +70,10 @@ manual rule.
 
 ### 2.3 ES256 (P-256) credentials — DONE (Phase 9 M3b, 2026-10-15)
 
-GetInfo announces EdDSA only since Phase 9 M3, so sites that offer only
-ES256/RS256 (e.g. webauthn.me's default) do not see the key.  TROPIC01
-signs P-256 ECDSA on chip; needs COSE EC2 keys, DER signatures, the alg in the
-slot metadata, and the credential cap shared with EdDSA.
+Done: GetInfo lists EdDSA and ES256, and MakeCredential takes the first the site
+offers. P-256 keys are generated and used inside TROPIC01 (COSE EC2 keys, DER
+signatures, the algorithm stored in the slot metadata, one shared 29-credential cap).
+RS256 stays unsupported.
 
 ### 2.4 Claim FIDO_2_1
 
@@ -193,11 +194,13 @@ release get a pid.codes allocation (free for open hardware), then
 submit upstream PR to libccid to add the new VID:PID to its
 known-readers list — eliminates the runtime Info.plist patch.
 
-### 5.3 TROPIC01 TRNG SP 800-90B compliance
+### 5.3 TROPIC01 TRNG SP 800-90B compliance — vendor claim found (v0.3.0)
 
-Before any public production / security claims, verify TRNG entropy
-against SP 800-90B.  Tropic Square App Note `ODN_TR01_app_008`
-documents the chip's TRNG architecture.
+The datasheet and `ODN_TR01_app_008` state NIST SP 800-90B and AIS 31
+compliance for the chip's two TRNGs.  That is a vendor claim, not a
+certification of this device or of nixtropic's entropy path; reopen only
+for an independent assessment.  The RNGTEST_DIS erratum (2026-09-10) is
+unresolved, see the [security model](security.md#part-status-and-errata).
 
 ### 5.4 Rust CLI
 
@@ -236,14 +239,14 @@ device; TinyUSB clears the CDC TX FIFO when the interface opens, so only
 the later init log reaches `/dev/ttyACM0`.  Debug build only.  Fix if
 ever needed: print the banner from `tud_mount_cb`, or after boot.
 
-### 6.5 README / docs still describe the v0.2 composite layout (M6)
+### 6.5 README / docs still describe the v0.2 composite layout — ✅ DONE (v0.3.0)
 
-README and docs/UBUNTU mention the CDC + lt-rpc interfaces as if always
-present in places, and Force-UV was toggled with `lt_rpc.py`, which the
-release build no longer has (M3: `fido2-token -S -u` / `-D -u`).  Rewrite in
-Phase 9 M6 with CARD-SETUP.md.
+README and docs/UBUNTU.md mentioned the CDC + lt-rpc interfaces as if always
+present, and Force-UV was toggled with `lt_rpc.py`, which the release build
+no longer has (M3: `fido2-token -S -u` / `-D -u`).  Fixed: the documentation
+was rewritten for v0.3.0 ([card setup](card-setup.md), [flashing](flashing.md)).
 
-### 6.6 Requests interleave during a touch wait — ✅ DONE (Phase 9 M3, PROJECT.md decision 18)
+### 6.6 Requests interleave during a touch wait — ✅ DONE (Phase 9 M3, design decision 18)
 
 `user_presence_check()` pumps `tud_task()` while it waits for SW1.  CTAPHID
 refuses other FIDO requests then, but a CCID APDU is processed right away,
@@ -283,13 +286,9 @@ credMgmt and 32 slots; `tools/validate_fido_m3.py` replaces them (M6 cleanup).
 
 ## 7. Performance / flash budget
 
-Current release `firmware.bin` = 220 628 B / 256 KB (84.2 %) after Phase 9 M3
-(was 218 856 B text post-Phase-8)
-(M&D PIN counters + global touch + credProps + udev rule landed).
-~37 KB headroom.
+v0.3.0 release `firmware.bin` = 223 188 B / 256 KB (85 %), about 39 KB of headroom
+(the M5 decryption-key wrap cost about 1.3 KB).
 
-§1.2 M&D-KEK wrap for X25519 dec priv key: ~3-5 KB (shares framework
-with the already-landed §1.1 wrappers).
 PIV applet (§4.4): ~15-25 KB (also fits).
 Attestation slot (§4.5): ~1 KB.
 
