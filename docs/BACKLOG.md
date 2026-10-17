@@ -20,7 +20,11 @@ and R-mem slots 50/51/52 (per-PIN state).  `pgp_pin.c` VERIFY routes
 through M&D first.  Bootstrap path wipes M&D state on schema bump to
 avoid PIN brick.  Acceptance verified by `tools/validate-pin-md.sh`.
 
-### 1.2 M&D-KEK wrap for X25519 dec priv key
+### 1.2 M&D-KEK wrap for X25519 dec priv key — ✅ DONE (Phase 9 M5)
+
+Done differently from the sketch below: KEK = HMAC(k, label), k from the PW1 M&D
+binding; AES-256-GCM; KEK cached while PW1 is verified.  See
+`docs/PHASE-9-M5-DESIGN.md`.  Original note (historical):
 
 The X25519 dec key for `gpg --decrypt` lives in R-mem slot 1 byte
 180-211 (Trezor Safe 7 pattern).  Anyone with SH0 + L3 session can

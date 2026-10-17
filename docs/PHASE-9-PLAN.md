@@ -310,5 +310,15 @@ verifier, PIN or private key.
 - libtropic v4 + chip FW 2.1/2.2 with the controlled update procedure (both banks,
   start/final version checks, maintenance disable per the LFI advisory); check
   RNGTEST_DIS applicability first.
-- M5 if it did not make the gate; per-device pairing keys; ES256; non-resident
+- Per-device pairing keys; non-resident
   (wrapped) credentials.
+- **DEC key that survives a PIN reset** (Vaios, 2026-10-17): M5 locks the decryption key
+  under the PW1 KEK because, with the public dev pairing key, the PIN is the only secret
+  an attacker lacks — so a RESET RETRY COUNTER (RC or PW3) must destroy it, unlike a
+  YubiKey.  With our own pairing key, lock it with a chip-held secret instead (keeping
+  the PIN gate in front), so an admin reset keeps the key.  Needs Jan's facts on which
+  chip primitive can hold that secret.
+- **OpenPGP key import (gpg `keytocard`)**: not implemented today — gpg sends PUT DATA
+  odd (`DB 3F FF`, extended header list `4D`), the applet answers `6D00`.  SIG/AUT via
+  the chip's ECC key store, DEC wrapped as in M5.  Gives an off-card backup of the
+  decryption key; trade-off: an imported key is not chip-generated (BACKLOG 4.5).
