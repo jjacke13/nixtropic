@@ -316,9 +316,12 @@ verifier, PIN or private key.
   under the PW1 KEK because, with the public dev pairing key, the PIN is the only secret
   an attacker lacks — so a RESET RETRY COUNTER (RC or PW3) must destroy it, unlike a
   YubiKey.  With our own pairing key, lock it with a chip-held secret instead (keeping
-  the PIN gate in front), so an admin reset keeps the key.  Needs Jan's facts on which
-  chip primitive can hold that secret.
+  the PIN gate in front), so an admin reset keeps the key.  Chip facts (Jan, 2026-10-17):
+  no user-slot ECDH in any public app FW (1.0.0–2.2.0) or SDK 3/4; R-mem reads can be
+  limited to chosen pairing slots by UAP, but per 128-slot group (O3 shares group 0–127
+  with FIDO) — needs a separate region; an authorized read still exports to STM32 RAM.
 - **OpenPGP key import (gpg `keytocard`)**: not implemented today — gpg sends PUT DATA
   odd (`DB 3F FF`, extended header list `4D`), the applet answers `6D00`.  SIG/AUT via
-  the chip's ECC key store, DEC wrapped as in M5.  Gives an off-card backup of the
+  ECC_Key_Store (Ed25519 seed or P-256 scalar into an empty slot; ECC_Key_Read reports
+  origin generated vs stored — API 1.4 Tables 29–30), DEC wrapped as in M5.  Gives an off-card backup of the
   decryption key; trade-off: an imported key is not chip-generated (BACKLOG 4.5).
