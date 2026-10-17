@@ -2,7 +2,7 @@
  * TS1302 board pinout — single source of truth for pin/peripheral
  * mapping.
  *
- * Per research/stm32u535-inventory.md §10.1 and PROJECT.md §4 hardware
+ * Per docs/history/research/stm32u535-inventory.md §10.1 and docs/hardware.md
  * essentials.  Authoritative reference for: LED (PA9), SW1
  * user-presence button (PH3), TROPIC01 power switch (PA0), TROPIC01
  * GPO ready signal (PB0), TROPIC01 SPI1 (PA4/5/6/7 = NSS/SCK/MISO/MOSI),

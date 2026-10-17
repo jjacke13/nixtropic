@@ -10,7 +10,7 @@
  *   - TROPIC01 R-mem slot (idx + 1)                    — metadata (256 B)
  *
  * FIDO global state = object O1, a mirrored record pair in R-mem slots 0
- * and 40 (Phase 9 M4, docs/PHASE-9-M4-DESIGN.md §2, §4): allocation
+ * and 40 (Phase 9 M4, docs/history/PHASE-9-M4-DESIGN.md §2, §4): allocation
  * bitmap, Force-UV flag, and the `pin_bound` guard of the PIN binding O2.
  * No PIN state lives here any more (pin_md.c, kernel v2).
  *
@@ -48,7 +48,7 @@
 #define SLOTS_MAX                    32u
 /* Phase 7 M1 — FIDO allocator cap.  TROPIC01 has 32 ECC slots total
  * (verified via libtropic enum TR01_ECC_SLOT_0..TR01_ECC_SLOT_31 and
- * research/tropic01-inventory.md).  Phase 7 reserves slots 29/30/31
+ * docs/history/research/tropic01-inventory.md).  Phase 7 reserves slots 29/30/31
  * for OpenPGP sig/dec/aut keys; FIDO credential allocation refuses
  * indices ≥ FIDO_SLOTS_MAX. */
 #define FIDO_SLOTS_MAX               29u
@@ -232,7 +232,7 @@ int slots_set_pin_bound(int bound, int force_uv_on);
  *
  * Persisted in O1 (Phase 9 M4).
  *
- * Semantics (docs/PHASE-6-PLAN.md §4.4):
+ * Semantics (docs/history/PHASE-6-PLAN.md §4.4):
  *   0 = honour RP's `userVerification` hint (Phase 5 behaviour).
  *   1 = always require pinAuth on MakeCred/GetAssertion, regardless
  *       of RP hint.  GetInfo also advertises `options.alwaysUv=true`

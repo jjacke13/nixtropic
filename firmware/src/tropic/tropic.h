@@ -211,7 +211,7 @@ int tropic_mcounter_get(uint8_t idx, uint32_t *out_value);
 
 /**
  * @brief Execute one MAC-and-Destroy probe on slot `idx` (0..127).
- *        See docs/PHASE-5-M4-DESIGN.md for semantics — a slot must be
+ *        See docs/history/PHASE-5-M4-DESIGN.md for semantics — a slot must be
  *        called 3 times during init (init/consume/re-init), and exactly
  *        once on a wrong-PIN attempt (consume → permanently destroyed).
  *

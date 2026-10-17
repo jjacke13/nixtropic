@@ -11,7 +11,7 @@ let firmware = openFirmware; in
 # flash-and-validate) only write to the STM32U535 (firmware app slot
 # 0x08000000) — never to the TROPIC01 chip.  The exception is
 # fw-update-chip: it rewrites the TROPIC01's own firmware (one-way —
-# anti-downgrade), so Phase 9 does not run it (PHASE-9-PLAN.md §0
+# anti-downgrade), so Phase 9 does not run it (docs/history/PHASE-9-PLAN.md §0
 # rule 1).
 
 let

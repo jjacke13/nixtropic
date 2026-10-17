@@ -9,7 +9,7 @@
  * config).  Excluded by design: HAL_UART (USB CDC is the console);
  * HAL_PCD (TinyUSB owns USB).
  *
- * Per research/stm32u535-inventory.md §10.3: TS1302 has an 8 MHz HSE
+ * Per docs/history/research/stm32u535-inventory.md §10.3: TS1302 has an 8 MHz HSE
  * crystal X1.  HSI48 + CRS auto-trim provides the USB peripheral
  * kernel clock (see platform/clock.c).
  *

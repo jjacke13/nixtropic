@@ -2,7 +2,7 @@
  * TROPIC01 slot manager implementation. See slots.h.
  *
  * O1 = FIDO global state, a rec_pair in R-mem slots 0 / 40 (Phase 9 M4,
- * docs/PHASE-9-M4-DESIGN.md §2, §4).  Payload (big-endian):
+ * docs/history/PHASE-9-M4-DESIGN.md §2, §4).  Payload (big-endian):
  *   [0..3]  bitmap (uint32; bit i = credential slot i allocated)
  *   [4]     force_uv (0 / 1)
  *   [5]     pin_bound (0 / 1): guard of the PIN binding O2 (§2.5)

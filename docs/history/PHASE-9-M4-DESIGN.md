@@ -1,5 +1,10 @@
 # Phase 9 M4 — Design: PIN + persistent-state integrity
 
+> **Historical record, frozen at v0.3.0.** Kept for the reasoning and the evidence it
+> contains. Facts and procedures here may be outdated or wrong: do not follow
+> instructions from this file. Current documentation: <https://jjacke13.github.io/nixtropic/>
+> (known corrections: <https://jjacke13.github.io/nixtropic/hardware/#corrections-to-earlier-documentation>).
+
 Status: **APPROVED** by Jan at r3 (8f3a743, 2026-10-15). r1 (09fe256) and r2 (ffb1471):
 CHANGES REQUIRED both times; §11 maps every finding to its change. Contract:
 `PHASE-9-PLAN.md` §6 (items 1–7) plus the M4 inputs from the M3 reviews (§5 end).

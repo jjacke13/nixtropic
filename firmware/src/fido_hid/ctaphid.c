@@ -409,7 +409,7 @@ static void handle_init_packet(uint32_t cid, const uint8_t *pkt)
         return;
     }
 
-    /* Phase 6 M1 — M3 reentrancy defense (docs/PHASE-6-PLAN.md §3 row
+    /* Phase 6 M1 — M3 reentrancy defense (docs/history/PHASE-6-PLAN.md §3 row
      * M3): while user_presence_check is awaiting touch, the CBOR
      * dispatcher cannot accept any new transaction.  pin.c / pin_token.c
      * state (token, s_eph_priv) is not reentrant; ECC keypair gen on

@@ -75,7 +75,7 @@ fi
 gpgconf --kill scdaemon >/dev/null 2>&1 || true
 sleep 1
 if ! gpg --card-status >/dev/null 2>&1; then
-  red "✗ gpg --card-status failed.  Check README §5 bring-up sequence."
+  red "✗ gpg --card-status failed.  See docs/linux-setup.md (After a replug)."
   exit 1
 fi
 green "✓ Dongle visible to gpg-agent"

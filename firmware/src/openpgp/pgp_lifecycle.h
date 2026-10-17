@@ -1,5 +1,5 @@
 /*
- * OpenPGP lifecycle (Phase 9 M4, docs/PHASE-9-M4-DESIGN.md §5, D8, D11).
+ * OpenPGP lifecycle (Phase 9 M4, docs/history/PHASE-9-M4-DESIGN.md §5, D8, D11).
  *
  * wipe (hard barriers, any failure stops it): erase ECC 29, 30, 31 →
  *      checked erase of both O3 copies (the DEC key is inside) → retire

@@ -1,6 +1,6 @@
 /*
  * OpenPGP PINs PW1 / PW3 / RC on the M&D kernel v2 (Phase 9 M4,
- * docs/PHASE-9-M4-DESIGN.md §5).
+ * docs/history/PHASE-9-M4-DESIGN.md §5).
  *
  * Each PIN is one kernel binding (tropic/pin_md_kernel.h), 3 rounds:
  *   PW1  O4 R-mem 50 / 53, M&D ranges 16..18 / 19..21

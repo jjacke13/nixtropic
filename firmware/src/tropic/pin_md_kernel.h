@@ -1,5 +1,5 @@
 /*
- * MAC-and-Destroy PIN kernel v2 (Phase 9 M4, docs/PHASE-9-M4-DESIGN.md §3).
+ * MAC-and-Destroy PIN kernel v2 (Phase 9 M4, docs/history/PHASE-9-M4-DESIGN.md §3).
  *
  * One PIN = one binding record in a rec_pair (rec_pair.h) plus one or two
  * M&D slot ranges (A/B).  The record is the only PIN state: no software

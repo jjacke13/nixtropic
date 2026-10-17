@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Phase 9 M3 hardware validation — FIDO2 fixes, permission tokens,
-authenticatorConfig, touch-wait dispatch (docs/PHASE-9-M3-WORKPLAN.md §3).
+authenticatorConfig, touch-wait dispatch (docs/history/PHASE-9-M3-WORKPLAN.md §3).
 
 DESTRUCTIVE (FIDO only): starts with authenticatorReset, which wipes every
 FIDO credential and the FIDO PIN; then sets the PIN from tools/fixture.env

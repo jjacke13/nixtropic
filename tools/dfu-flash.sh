@@ -55,5 +55,5 @@ if [ "$rc" -eq 74 ] && awk '
 fi
 
 echo "✗ Flash FAILED (dfu-util exit $rc).  The dongle is most likely still in"
-echo "  DFU mode; it is safe to retry.  See docs/RECOVERY.md."
+echo "  DFU mode; it is safe to retry.  See docs/recovery.md."
 exit 1

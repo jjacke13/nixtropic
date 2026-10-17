@@ -11,7 +11,7 @@
  *                       in `gpg --card-status`.  Cosmetic-only.  Phase 8
  *                       may swap to 0xFF00..0xFFFE for the spec-defined
  *                       "unmanaged S/N range" label.  See
- *                       docs/PHASE-8-BACKLOG.md §4.2.)
+ *                       docs/backlog.md §4.2.)
  *   00 00 00 01         Serial number (placeholder)
  *   00 00               RFU
  *

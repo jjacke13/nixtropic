@@ -599,7 +599,7 @@ static void test_apdu_sweep(void)
     }
 }
 
-/* ---- M5: the DEC key wrapped under the PW1 KEK (docs/PHASE-9-M5-DESIGN.md) ---- */
+/* ---- M5: the DEC key wrapped under the PW1 KEK (docs/history/PHASE-9-M5-DESIGN.md) ---- */
 
 static bool kek_zero(void)
 {

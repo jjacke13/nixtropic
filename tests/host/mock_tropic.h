@@ -5,7 +5,7 @@
  * slot/state stores) run as ordinary host programs, with fault injection:
  * a chosen call can fail before the chip acts (clean error) or after it
  * (the chip executed, the answer was lost: the ambiguous case of guard
- * rail 5 in docs/PHASE-9-PLAN.md).
+ * rail 5 in docs/history/PHASE-9-PLAN.md).
  *
  * Only the wrapper functions some test needs are implemented; a test that
  * links a module using another one fails to link, which is the reminder to

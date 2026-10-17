@@ -1,5 +1,10 @@
 # Phase 9 M5 — Design: the DEC key wrapped under k
 
+> **Historical record, frozen at v0.3.0.** Kept for the reasoning and the evidence it
+> contains. Facts and procedures here may be outdated or wrong: do not follow
+> instructions from this file. Current documentation: <https://jjacke13.github.io/nixtropic/>
+> (known corrections: <https://jjacke13.github.io/nixtropic/hardware/#corrections-to-earlier-documentation>).
+
 Contract: `docs/PHASE-9-PLAN.md` §7. Builds on `docs/PHASE-9-M4-DESIGN.md` (record pairs,
 kernel v2, D4 "change keeps s", D8 "destruction before defaults"). PIN hashes are already
 gone (M4 D6), so M5 is **only** the OpenPGP decryption key.

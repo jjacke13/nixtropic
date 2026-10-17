@@ -1,5 +1,10 @@
 # TROPIC01 — Reference Notes
 
+> **Historical record, frozen at v0.3.0.** Kept for the reasoning and the evidence it
+> contains. Facts and procedures here may be outdated or wrong: do not follow
+> instructions from this file. Current documentation: <https://jjacke13.github.io/nixtropic/>
+> (known corrections: <https://jjacke13.github.io/nixtropic/hardware/#corrections-to-earlier-documentation>).
+
 _Captured 2026-05-09 from the libtropic SDK headers and docs (github.com/tropicsquare/libtropic, tropicsquare.github.io/libtropic/latest)._
 
 ---
@@ -98,6 +103,8 @@ Mental model:
 
 Why it's strong: even desoldering and dumping the chip can't recover destroyed slots — they're zeroed in storage. With **128 slots** you can pick generous attempt budgets. Each `data_out` / `data_in` is 32 bytes.
 
+> **Corrected (v0.3.0):** MAC-and-Destroy does not zero a slot. Each call replaces the slot’s state deterministically from its input, and the output mixes the old and new state (PIN application note §3.2, Appendix A). Whether a PIN was right is decided by the host protocol, not the chip.
+
 ### R-memory
 
 "R" = **rewritable**. A flash region exposed as a slot-keyed key-value store — your app's tamper-resistant scratchpad.
@@ -112,6 +119,8 @@ Use it for: encrypted blobs, hashes, recovery seeds, app config that must surviv
 
 Three operations: `init(value)` (set initial), `update()` (increment by 1, irreversibly), `get()` (read). You cannot rewind. Note the L3 result `mcounter done at 0` — once a counter hits zero (init high and decrement?), it's exhausted. Worth verifying behavior in practice.
 
+> **Corrected (v0.3.0):** `update()` **decrements**; the counter stops at 0, and `init()` can set it again at any time (API Tables 34–36), so a counter is not a lifetime anti-rollback fuse.
+
 Use cases: anti-rollback (refuse FW < counter), rate-limiting (N operations per chip lifetime), nonce ratcheting for protocols.
 
 ### R-config
@@ -121,6 +130,8 @@ Use cases: anti-rollback (refuse FW < counter), rate-limiting (N operations per 
 Each "config object" addresses one capability: e.g. "who can sign with ECC slot 5", "who can write R-mem slot quartile 2", "who can call MAC-and-Destroy". The "who" is one of the 4 pairing-key indices (`SH0PUB..SH3PUB`) — so you can have e.g. an "admin" pairing key with full rights and a "user" pairing key restricted to signing only.
 
 ⚠️ **Critical erratum** (`OI_TR01_ERR_2026010800`): writing R-config without erasing first puts the chip into permanent **Alarm Mode** = brick. Always: erase → write whole config.
+
+> **Corrected (v0.3.0):** the full procedure is: read the whole configuration into a mirror, change it, explicit checked erase, write the whole mirror, regular reboot, read back (CONFIG §4.2). An erase alone sets every bit to 1, not the factory settings. Ordinary Alarm Mode from a sensor clears on power cycle; the erratum case is permanent.
 
 ### I-config
 

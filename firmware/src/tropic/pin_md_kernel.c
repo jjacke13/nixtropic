@@ -1,6 +1,6 @@
 /*
  * MAC-and-Destroy PIN kernel v2.  See pin_md_kernel.h and
- * docs/PHASE-9-M4-DESIGN.md §3.
+ * docs/history/PHASE-9-M4-DESIGN.md §3.
  *
  * Binding record payload (§3.1):
  *   range u8 | retire_pending u8 | next_slot u8 | pin_len u8 | tag[32] | ci[rounds][32]

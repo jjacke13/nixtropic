@@ -7,7 +7,7 @@
  *
  * Drive cadence: 1 ms SysTick callback (see led_systick_tick).
  *
- * Covert-channel constraint (docs/PHASE-6-PLAN.md §3 row M2): LED state
+ * Covert-channel constraint (docs/history/PHASE-6-PLAN.md §3 row M2): LED state
  * MUST NOT change inside any PIN, AES, or HMAC code path.  Only
  * protocol-boundary events drive transitions.  cpp-reviewer audit (M4)
  * scans for that invariant.

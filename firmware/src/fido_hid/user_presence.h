@@ -4,10 +4,10 @@
  * Phase 6 M1: replaces the stub-true `user_presence_check` from Phase 4.
  * SW1 is the only tactile button on the TS1302 dongle, wired to STM32
  * pin PH3.  PH3 is also the BOOT0 strap, sampled by silicon only at
- * reset — so runtime use as a plain GPIO is safe (PROJECT.md §2 #3
+ * reset — so runtime use as a plain GPIO is safe (docs/design.md decision 3
  * amendment 2026-05-11).
  *
- * Threat-model defenses (docs/PHASE-6-PLAN.md §3 + §4.1):
+ * Threat-model defenses (docs/history/PHASE-6-PLAN.md §3 + §4.1):
  *   - C1: function returns UP_FAIL immediately if SW1 is held at entry.
  *         Only a fresh release→press transition counts as consent.
  *   - H5: sign-canary `up_result_t` return type — a single-instruction

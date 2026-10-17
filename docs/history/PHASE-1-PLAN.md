@@ -1,5 +1,10 @@
 # Phase 1 Plan — TROPIC01 L2 round-trip on STM32U535 over USB CDC
 
+> **Historical record, frozen at v0.3.0.** Kept for the reasoning and the evidence it
+> contains. Facts and procedures here may be outdated or wrong: do not follow
+> instructions from this file. Current documentation: <https://jjacke13.github.io/nixtropic/>
+> (known corrections: <https://jjacke13.github.io/nixtropic/hardware/#corrections-to-earlier-documentation>).
+
 > **Audience:** AI coding agents (Claude, Codex, etc.) and the user (Vaios) reviewing before implementation begins.
 > **Status:** v3 — **all decisions locked**, ready to begin Group A on user "go".
 > **Goal of this document:** decompose Phase 1 (per `PROJECT.md` §6) into sub-tasks concrete enough to execute, with hardware-in-the-loop pass criteria.

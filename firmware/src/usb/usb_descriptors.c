@@ -18,7 +18,7 @@
  *
  * VID/PID = 0xCAFE:0x4001 (TinyUSB demo range).  A pid.codes
  * allocation is a Phase 8 publishing task — see
- * docs/PHASE-8-BACKLOG.md §5.2.
+ * docs/backlog.md §5.2.
  *
  * Two SEPARATE HID interfaces (rather than dual-collection) so each
  * surfaces as its own /dev/hidraw* and so libfido2's enumeration sees

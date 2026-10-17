@@ -1,12 +1,12 @@
 /*
- * OpenPGP persistent state O3 (Phase 9 M4, docs/PHASE-9-M4-DESIGN.md §5).
+ * OpenPGP persistent state O3 (Phase 9 M4, docs/history/PHASE-9-M4-DESIGN.md §5).
  *
  * One record pair (tropic/rec_pair.h), R-mem slots 33 / 43, cached in RAM
  * after it was read; every change is written through (both copies) and
  * only then taken into RAM.  O3 holds the lifecycle, the RC guard, the DOs,
  * the signature counter, DO C4 byte 0, UIF and the DEC key — its public
  * key and the private key WRAPPED under the PW1 KEK (Phase 9 M5,
- * docs/PHASE-9-M5-DESIGN.md §2; the wrap itself is pgp_dec.c).  No PIN
+ * docs/history/PHASE-9-M5-DESIGN.md §2; the wrap itself is pgp_dec.c).  No PIN
  * hashes, retry mirrors or PIN lengths: the PIN bindings O4/O5/O6
  * (pgp_pin.h) are the only PIN state (D5, D6).
  *

@@ -4,7 +4,7 @@
  *
  * Today exactly one applet exists (OpenPGP card, see firmware/src/
  * openpgp/openpgp_applet.c).  The dispatcher is structured to accept
- * a second applet (e.g. PIV — see docs/BACKLOG.md §4.4) by routing on
+ * a second applet (e.g. PIV — see docs/backlog.md §4.4) by routing on
  * the SELECT'd AID; the routing-table machinery just isn't wired yet
  * because there's only one applet.
  *

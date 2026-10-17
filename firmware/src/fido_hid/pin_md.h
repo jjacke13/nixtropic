@@ -1,5 +1,5 @@
 /*
- * FIDO PIN state on the M&D kernel v2 (Phase 9 M4, docs/PHASE-9-M4-DESIGN.md
+ * FIDO PIN state on the M&D kernel v2 (Phase 9 M4, docs/history/PHASE-9-M4-DESIGN.md
  * §4).  The PIN is object O2: a kernel binding (8 rounds, M&D ranges A 0..7
  * and B 8..15) whose record lives in R-mem 41 / 42.  The binding IS the PIN
  * state: no stored hash, no software counter (D5, D6).  O1's `pin_bound`

@@ -1,6 +1,6 @@
 /*
  * Host tests for the wrapped OpenPGP DEC key (Phase 9 M5,
- * docs/PHASE-9-M5-DESIGN.md): pgp_dec.c on openpgp_state.c against the
+ * docs/history/PHASE-9-M5-DESIGN.md): pgp_dec.c on openpgp_state.c against the
  * mock chip.
  *
  * Covers: AES-256-GCM known answer (the vendored code as built here), the

@@ -1,5 +1,10 @@
 # STM32U535 + TS1302 Inventory
 
+> **Historical record, frozen at v0.3.0.** Kept for the reasoning and the evidence it
+> contains. Facts and procedures here may be outdated or wrong: do not follow
+> instructions from this file. Current documentation: <https://jjacke13.github.io/nixtropic/>
+> (known corrections: <https://jjacke13.github.io/nixtropic/hardware/#corrections-to-earlier-documentation>).
+
 _Captured 2026-05-09. Target: TS1302 USB devkit by Tropic Square. MCU: STM32U535CCTx (LQFP-48). Purpose: ground a Phase-0 firmware design that replaces stock USB-CDC-ACM passthrough with USB HID (FIDO2) + USB CCID (OpenPGP card) composite._
 
 Sources cited inline as `[<short>:<location>]`:
@@ -8,7 +13,9 @@ Sources cited inline as `[<short>:<location>]`:
 - **TS-FW** = `tropicsquare/tropic01-stm32u5-usb-devkit-fw` (master branch; ts1302 tag for shipped FW).
 - **lt-port** = `libtropic/hal/stm32/stm32u5xx/libtropic_port_stm32u5xx.{c,h}` (master).
 
-> **Headline finding (read this before everything else):** the **STM32U535 has NO AES, NO PKA, NO SAES, NO MCE, NO BHK, NO SFI**. The "U5 family security" marketing applies to U575/U585; on U535 the only crypto blocks are **HASH (SHA-1, SHA-2/SHA-256)** and **TRNG**. All AES, ECDSA, EdDSA must run in software (or be delegated to TROPIC01). The big U5 security toolkit referenced in many STM AppNotes (BHK / MCE / SAES / OBKey) — none of it is on this die. See [DS14217 §3, Table 2, p17–18] and §3.34, 3.35 (only RNG + HASH peripherals listed).
+> **Headline finding (read this before everything else):** the **STM32U535 has NO AES, NO PKA, NO SAES, NO MCE, NO BHK-consuming SAES engine**. The "U5 family security" marketing applies to U575/U585; on U535 the only crypto blocks are **HASH (SHA-1, SHA-2/SHA-256)** and **TRNG**. All AES, ECDSA, EdDSA must run in software (or be delegated to TROPIC01). The big U5 security toolkit referenced in many STM AppNotes (BHK / MCE / SAES / OBKey) — none of it is on this die. See [DS14217 §3, Table 2, p17–18] and §3.34, 3.35 (only RNG + HASH peripherals listed).
+
+> **Corrected (v0.3.0):** SFI/RSS *is* supported on the U535 (DS14217 Rev 5 p1, §3.7 p28), and TAMP defines the BHK lock bit; what is missing is SAES, so no hardware engine uses a boot hardware key.
 
 ---
 
@@ -28,6 +35,8 @@ DS14217 covers **both** STM32U535 and STM32U545 (same datasheet body, ES0587 err
 
 What U545 adds vs U535: the U545 is the same die with **AES, PKA, OEM cryptography (SAES variants), and OTFDEC** enabled (full security stack). U535 has these blocks fused off. _Confirm against ES0587 / latest DS14217 if planning U545 substitution; the part is pin-compatible drop-in._
 
+> **Corrected (v0.3.0):** the "same die, fused off" statement is not backed by a cited ST document; do not rely on it.
+
 ### Package on TS1302
 
 - **STM32U535CCTx** = `C` (LQFP-48) + `C` (256 KB flash) + `T` (LQFP) + `x` (industrial). [Confirmed: TS-SCH p1, pins 1–48 visible; ST part-number convention.]
@@ -45,7 +54,7 @@ What U545 adds vs U535: the U545 is the same die with **AES, PKA, OEM cryptograp
 | OTP | 512 B | inside flash region | n/a | Write-once. |
 | SRAM1 | 192 KB | `0x2000_0000` | `0x3000_0000` | 3× 64 KB blocks, can be powered down by block in Stop. |
 | SRAM2 | 64 KB | `0x2003_0000` | `0x3003_0000` | 8 KB + 56 KB blocks, optional ECC, retainable in Standby. |
-| SRAM4 | 16 KB | `0x2840_0000` | `0x3840_0000` | LPBAM SRAM — accessible by LPDMA1 in Stop 2. |
+| SRAM4 | 16 KB | `0x2800_0000` | `0x3800_0000` | LPBAM SRAM — accessible by LPDMA1 in Stop 2. |
 | BKPSRAM | 2 KB | `0x4003_6400` | `0x5003_6400` | Backup-domain SRAM. Retained in Standby/VBAT, lost in Shutdown. |
 | **Total user SRAM** | **272 KB** + 2 KB BKPSRAM = 274 KB | | | [DS14217 cover, §3.5] |
 
@@ -111,7 +120,7 @@ Note: there is **no SRAM3** on STM32U535 (despite RAMCFG references). The "SRAM3
 | **RDP 1** | All debug blocked. Boot is forced into flash. RAM still accessible to debugger only after RDP regression. | Reversible to 0 ⇒ **mass-erase** triggered. With OEM1KEY set, regression requires that key. |
 | **RDP 2** | Debug interface permanently disabled. No regression possible without **OEM2KEY** set in advance. **If you set RDP=2 without OEM2KEY, the part is locked permanently**. | One-way unless OEM2KEY pre-configured. |
 
-ST community confirms: "RDP level 2 cannot be removed (irreversible operation). Regression can be blocked by OEM1 key." [community.st.com U5 RDP regression thread]
+Official transitions (RM0456 Rev 7 §3.10.1 Table 22 p186; DS14217 §3.4.1 p23): an OEM2 key provisioned beforehand enables RDP 2 → 1; OEM1 gates 1 → 0; without OEM2 unlocking, level 2 is permanent. *(Corrected in v0.3.0: an earlier community quotation here conflated the levels.)*
 
 ### HDP — Hide Protection
 
@@ -120,6 +129,8 @@ ST community confirms: "RDP level 2 cannot be removed (irreversible operation). 
 ### What U535 does NOT have (vs U575/U585):
 
 - ❌ **BHK** (Boot Hardware Key, per-die 256-bit AES key). DS14217 §3.34/§3.35 only list RNG + HASH; no SAES; no BHK. No marketing language about "Hardware Unique Key" for U535.
+
+  > **Corrected (v0.3.0):** the BHK is application-supplied volatile 256-bit material in the TAMP backup registers (RM0456 §3.8.1 p179), not a per-die key. The U535 register map defines `TAMP_SECCFGR.BHKLOCK`, but without SAES no hardware engine uses it (AN4759).
 - ❌ **MCE** (Memory Cipher Engine for external flash encryption) — no `HAL_MCE_*` would link.
 - ❌ **SAES** (Secure AES with side-channel hardening, key-protected mode).
 - ❌ **OTFDEC** (On-The-Fly Decryption for OCTOSPI).
@@ -129,9 +140,11 @@ ST community confirms: "RDP level 2 cannot be removed (irreversible operation). 
 ### What U535 DOES have
 
 - ✅ **SFI / RSS** (Secure Firmware Install / Root Security Services). Located at `0x0FF8_0000`. Lets ST's RSS unwrap an OEM-encrypted firmware image during factory provisioning. [DS14217 §3.7 p28] **Note**: SFI uses fixed RSS algorithms (AES-GCM with key from BHK). On U535 BHK is absent → SFI is **only useful in the limited form ST provides** — verify with AN4992 before relying on it.
+
+  > **Corrected (v0.3.0):** the claim that SFI depends on an absent BHK is unsupported; the U535 supports SFI/RSS.
 - ✅ **OBL** (Option Byte Loader): standard STM32 option-byte mechanism with secure mirror.
 - ✅ **OBKey** = OEM1KEY / OEM2KEY (RDP regression passwords). 64-bit each, stored in option bytes.
-- ✅ **TAMP** [DS14217 §3.37.2 p74]: 8 tamper input pins (`TAMP_IN[8:1]`) + 8 outputs in active mode, RTC tamper detection, **128 backup registers** (32-bit each = 512 B). On detection of tamper: backup registers + BKPSRAM are erased by hardware. LQFP-48 exposes 3/3 (without SMPS) tamper pins. [DS14217 Table 2, p17]
+- ✅ **TAMP** [DS14217 §3.37.2 p74]: 8 tamper input pins (`TAMP_IN[8:1]`) + 8 outputs in active mode, RTC tamper detection, **32 backup registers** (32-bit each = 128 B; corrected in v0.3.0, DS14217 §3.37.2 pp74–75). On detection of tamper: backup registers + BKPSRAM are erased by hardware. LQFP-48 exposes 3/3 (without SMPS) tamper pins. [DS14217 Table 2, p17]
 - ✅ **PWR security**: PWR registers can be put in secure state via TZSC. [§3.9.6 p44]
 - ✅ **Active tampers** in output-sharing mode (one output cycles through inputs to detect cut traces). 2 active tamper pins in LQFP-48. [DS14217 Table 2, p17]
 - ✅ **96-bit unique device ID** (read-only), **512 B OTP**. [DS14217 cover features list]
@@ -556,7 +569,7 @@ This is the biggest design constraint. Anything you'd "just hand to SAES" (key w
 
 ### 13.7 Mass-erase on RDP regression
 
-- RDP 1 → 0 triggers a **mass erase** of secure + nonsecure flash. Backup any secrets you want to preserve to BKPSRAM (which survives, since it's in the backup domain) BEFORE attempting regression.
+- RDP 1 → 0 triggers a **mass erase** of secure and non-secure flash, and erases the backup registers and **all SRAM, BKPSRAM included** (DS14217 Rev 5 Table 3 p24, Table 4 p25; RM0456 §3.7.3 p177). No secret kept in flash, the backup registers or SRAM survives a regression (the OTP area is not erased). *(Corrected in v0.3.0: an earlier version advised backing secrets up to BKPSRAM before a regression. That advice was wrong.)*
 
 ### 13.8 The TROPIC01 GPO is not an interrupt line
 

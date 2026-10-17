@@ -191,7 +191,7 @@ int tropic_l3_session_ensure(void)
     }
 
     /* Step 3: open the L3 secure session using the default sh0_prod0
-     * pairing keys (PROJECT.md §5 — production silicon, public dev keys). */
+     * pairing keys (docs/security.md — production silicon, public dev keys). */
     r = lt_session_start(&s_handle,
                          s_stpub,
                          TR01_PAIRING_KEY_SLOT_INDEX_0,
@@ -248,7 +248,7 @@ int      tropic_last_ensure_step   = 0;  /* 0=none, 1=read, 2=write */
 
 int tropic_ecc_ensure_slot_authorized(uint8_t slot)
 {
-    /* HAZARD AVOIDED (research/tropic01-inventory.md:277):
+    /* HAZARD AVOIDED (docs/history/research/tropic01-inventory.md:282):
      *   Writing R-config without first erasing it triggers
      *   OI_TR01_ERR_2026010800 — chip enters permanent Alarm Mode
      *   (effectively bricked).  The earlier version of this function

@@ -1,5 +1,10 @@
 # Phase 7 — CCID OpenPGP card (ECC-only, single build)
 
+> **Historical record, frozen at v0.3.0.** Kept for the reasoning and the evidence it
+> contains. Facts and procedures here may be outdated or wrong: do not follow
+> instructions from this file. Current documentation: <https://jjacke13.github.io/nixtropic/>
+> (known corrections: <https://jjacke13.github.io/nixtropic/hardware/#corrections-to-earlier-documentation>).
+
 > **Status:** Draft — awaiting user sign-off before M1 implementation.
 > **Started:** 2026-05-11 (immediately after Phase 6 sign-off; pushed to origin at 38 commits).
 > **Amended:** 2026-05-11 (same day) — original draft proposed two build variants (`firmware-fido` + `firmware-combo`); collapsed to single build after slot-count verification showed the trade-off was trivial. See §1.

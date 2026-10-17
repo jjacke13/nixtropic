@@ -49,7 +49,7 @@ void gpio_init(void)
 
     /* PH3 — SW1 button (BOOT0 strap at reset; runtime input).  Phase 6 M1
      * requires real user-presence reads.  Topology per
-     * research/stm32u535-inventory.md:327 — SW1 pulls PH3 to VCC,
+     * docs/history/research/stm32u535-inventory.md:340 — SW1 pulls PH3 to VCC,
      * external 33 kΩ R1 pull-down to GND.  Pressed = HIGH.  Without
      * this init the pin stays in silicon-default analog mode and
      * HAL_GPIO_ReadPin returns garbage. */

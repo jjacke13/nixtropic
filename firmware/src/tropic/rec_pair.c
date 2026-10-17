@@ -1,6 +1,6 @@
 /*
  * Mirrored R-mem record pairs.  See rec_pair.h and
- * docs/PHASE-9-M4-DESIGN.md §2.
+ * docs/history/PHASE-9-M4-DESIGN.md §2.
  */
 #include "tropic/rec_pair.h"
 

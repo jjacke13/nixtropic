@@ -1376,7 +1376,7 @@ def sub_validate_phase6_m3(args) -> int:
 def sub_validate_phase6_m2(args) -> int:
     """Phase 6 M2 validation — Force-UV auto-enable + lt-rpc toggle + alwaysUv.
 
-    Exercises docs/PHASE-6-PLAN.md §4.4 + §5 M2:
+    Exercises docs/history/PHASE-6-PLAN.md §4.4 + §5 M2:
 
       1) factory_reset baseline — GetInfo `alwaysUv=false`, `clientPin=false`.
       2) lt-rpc `force-uv-get` reads 0 initially.

@@ -1,5 +1,10 @@
 # Phase 9 M3 — work plan (FIDO2 fixes, permission tokens, authenticatorConfig)
 
+> **Historical record, frozen at v0.3.0.** Kept for the reasoning and the evidence it
+> contains. Facts and procedures here may be outdated or wrong: do not follow
+> instructions from this file. Current documentation: <https://jjacke13.github.io/nixtropic/>
+> (known corrections: <https://jjacke13.github.io/nixtropic/hardware/#corrections-to-earlier-documentation>).
+
 Contract: `PHASE-9-PLAN.md` §5. Reviewed by Jan 2026-10-15 (changes folded in: decisions
 3, 9, items 3, 4). This file says **how**, item by item, and records the
 decisions taken while reading CTAP 2.1 (PS 2021-06-15, "CTAP" below) and the libfido2

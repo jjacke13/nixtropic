@@ -1,5 +1,10 @@
 # Prior-Art Verification: TROPIC01-backed FIDO2 + OpenPGP-card USB Security Device
 
+> **Historical record, frozen at v0.3.0.** Kept for the reasoning and the evidence it
+> contains. Facts and procedures here may be outdated or wrong: do not follow
+> instructions from this file. Current documentation: <https://jjacke13.github.io/nixtropic/>
+> (known corrections: <https://jjacke13.github.io/nixtropic/hardware/#corrections-to-earlier-documentation>).
+
 _Researched 2026-05-09 by exhaustive search of GitHub, GitLab, Codeberg, Hacker News, Tropic Square's site, 39C3 / FOSDEM programs, and the open web._
 
 ---

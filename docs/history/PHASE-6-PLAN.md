@@ -1,5 +1,10 @@
 # Phase 6 — Production-grade UX (button + Force-UV + credentialManagement)
 
+> **Historical record, frozen at v0.3.0.** Kept for the reasoning and the evidence it
+> contains. Facts and procedures here may be outdated or wrong: do not follow
+> instructions from this file. Current documentation: <https://jjacke13.github.io/nixtropic/>
+> (known corrections: <https://jjacke13.github.io/nixtropic/hardware/#corrections-to-earlier-documentation>).
+
 > **Status:** Draft — awaiting user sign-off before M1 implementation.
 > **Started:** 2026-05-11 (immediately after Phase 5 sign-off; 30 commits ahead of origin/main pending push).
 > **Goal:** Make the dongle a daily-driver Yubikey-class device. Real touch-to-confirm, always-PIN option, credential management.

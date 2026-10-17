@@ -1,5 +1,10 @@
 # TROPIC01 — Technical Inventory
 
+> **Historical record, frozen at v0.3.0.** Kept for the reasoning and the evidence it
+> contains. Facts and procedures here may be outdated or wrong: do not follow
+> instructions from this file. Current documentation: <https://jjacke13.github.io/nixtropic/>
+> (known corrections: <https://jjacke13.github.io/nixtropic/hardware/#corrections-to-earlier-documentation>).
+
 Reference document for what the **TROPIC01 secure element** (Tropic Square) actually exposes to a host MCU. Compiled from the libtropic SDK headers, the docs site, and the chip product repo. Cited by `path:line` for source files and by URL for docs.
 
 Sources:
@@ -276,6 +281,8 @@ FW <2.0.0 fails silently when writing pairing keys outside -20..+85 °C; FW ≥2
 
 **HAZARD**: Writing R-config without erasing first triggers erratum `OI_TR01_ERR_2026010800` (permanent Alarm Mode = brick). Always use the erase→write-whole pattern via the `lt_write_whole_R_config` / `lt_read_whole_R_config` / `lt_write_whole_I_config` / `lt_read_whole_I_config` helpers (`libtropic.h:685-728`, gated on `LT_HELPERS`). Helper table: `extern lt_config_obj_desc_t cfg_desc_table[LT_CONFIG_OBJ_CNT];`.
 
+> **Corrected (v0.3.0):** erase → write-whole is not the full procedure. `lt_write_whole_R_config` does **not** erase, and an erase sets every bit to 1 (not the factory settings; some factory sensor settings exist only in R-config). The official procedure (CONFIG §4.2 p13, pp18–19): read the whole configuration into a mirror, change the mirror, explicit checked erase, write the whole mirror, regular reboot, read back.
+
 ### R-memory user data (`slot` 0..511)
 
 - `lt_r_mem_data_write(h, slot, data, size)` (`libtropic.h:443`)
@@ -354,6 +361,8 @@ The libtropic public source does **not** ship hard-coded factory defaults for th
 ### Brick erratum: `OI_TR01_ERR_2026010800` — "R-Config write triggers permanent Alarm Mode"
 
 Published 2026-01-08, listed for both TR01-C2P-T301 and TR01-C2P-T310. **Trigger**: `lt_r_config_write` without prior `lt_r_config_erase`. **Result**: chip enters Alarm Mode permanently — bricked from host's standpoint. **Recovery**: none documented. **Workaround**: always `erase → write whole config` (use `lt_write_whole_R_config`). The doxygen explicitly warns at `libtropic.h:357-360, 675-677`. **This is the most critical hazard in the public API** — host firmware should refuse to expose raw `lt_r_config_write` outside the erase→batch-write sequence.
+
+> **Corrected (v0.3.0):** erase → write-whole is not the full procedure. `lt_write_whole_R_config` does **not** erase, and an erase sets every bit to 1 (not the factory settings; some factory sensor settings exist only in R-config). The official procedure (CONFIG §4.2 p13, pp18–19): read the whole configuration into a mirror, change the mirror, explicit checked erase, write the whole mirror, regular reboot, read back.
 
 ---
 
@@ -693,11 +702,13 @@ These are **public** (committed to the repo). Anyone with physical access can op
 4. After testing, `lt_pairing_key_invalidate(h, 0)` — permanent lock of SH0.
 5. Burn relevant I-config bits to make the policy permanent.
 
+> **Corrected (v0.3.0):** this list is incomplete and steps 4–5 are irreversible. A replacement needs its own reviewed plan (PAIR §2.1/§3.2/§3.3, CONFIG §4.2, DS §7.5.3): verify the exact part and a writable slot, protect the new private key, write and read back the public key, use the full R-config procedure above, prove a session with the new key and every needed permission after a reboot, keep a recovery route, and only then consider invalidating SH0. Burning I-config is a separate permanent decision.
+
 CMake option `LT_SH0_KEYS` selects the key set in examples/tests.
 
 ### Alarm Mode
 
-Triggered by: the brick erratum `OI_TR01_ERR_2026010800`; any active sensor in `CFG_SENSORS` firing (voltage glitch, laser, EM pulse, temp, shield, oscillator, 8 different bit-flip detectors, CPU alert); I-Memory write errors (errata "Verification of Irreversible Memory writes", 2025-12-01). **Recovery: none.** Build option `LT_RETRIEVE_ALARM_LOG` pulls an alarm log (`libtropic.c:149-153`) but does not reset. Treat as bricked.
+Triggered by: the brick erratum `OI_TR01_ERR_2026010800`; any active sensor in `CFG_SENSORS` firing (voltage glitch, laser, EM pulse, temp, shield, oscillator, 8 different bit-flip detectors, CPU alert); I-Memory write errors (errata "Verification of Irreversible Memory writes", 2025-12-01). **Recovery (corrected in v0.3.0):** ordinary Alarm Mode from a sensor lasts only until the next power cycle (DS §6.5 p18); the R-config erratum and fatal I-config failures are the permanent cases, with no recovery. Build option `LT_RETRIEVE_ALARM_LOG` pulls an alarm log (`libtropic.c:149-153`) but does not reset.
 
 ### Firmware logging
 

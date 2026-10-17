@@ -1,7 +1,7 @@
 /*
  * OpenPGP key generation + signing/ECDH on TROPIC01.
  *
- * Slot allocation (per docs/PHASE-7-PLAN.md §4.6):
+ * Slot allocation (per docs/history/PHASE-7-PLAN.md §4.6):
  *
  *   29 — sig key (Ed25519, chip-side)  — used by PSO:CDS
  *   30 — UNUSED (dec key is host-side, see below)
@@ -18,7 +18,7 @@
  *
  *   - dec key (X25519): host-side compute.  TROPIC01 doesn't expose
  *     ECDH at the user-key level (confirmed via libtropic API audit
- *     + TROPIC01.md line 32).  X25519 priv lives in OpenPGP state O3
+ *     + docs/hardware.md).  X25519 priv lives in OpenPGP state O3
  *     (R-mem 33/43, encrypted by L3 session); STM32 does
  *     curve25519_donna scalarmult in software via trezor-crypto.
  *     Since Phase 9 M5 it is stored AES-GCM-wrapped under a KEK

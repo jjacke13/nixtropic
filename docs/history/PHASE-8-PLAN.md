@@ -1,5 +1,10 @@
 # Phase 8 — Plan
 
+> **Historical record, frozen at v0.3.0.** Kept for the reasoning and the evidence it
+> contains. Facts and procedures here may be outdated or wrong: do not follow
+> instructions from this file. Current documentation: <https://jjacke13.github.io/nixtropic/>
+> (known corrections: <https://jjacke13.github.io/nixtropic/hardware/#corrections-to-earlier-documentation>).
+
 Status: planning.  No code shipped yet.  This document is the contract.
 
 The intent of Phase 8 is to clear the [`docs/BACKLOG.md`](BACKLOG.md)
@@ -16,6 +21,8 @@ rest are sequenced here.
 ---
 
 ## 0. Chip-side guard rails (READ FIRST every time)
+
+> **Superseded (Phase 9):** this list was replaced by the Phase 9 plan’s guard rails. Several rules here are wrong: sessions do not last for the chip’s lifetime (resets, sleep, aborts and errors end them), a failed call does not always consume an M&D slot (a rejected request never runs; a lost reply leaves it uncertain), ordinary Alarm Mode clears on power cycle, and the temperature figures are not a blanket operating range.
 
 Every item below MUST honour these rules.  Most of them came out of
 PROJECT.md §5 and `research/tropic01-inventory.md` §10 — re-derived

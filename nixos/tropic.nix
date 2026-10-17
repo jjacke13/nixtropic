@@ -39,7 +39,7 @@ let
   # three parallel arrays (ifdVendorID, ifdProductID, ifdFriendlyName)
   # in Info.plist via awk.  Existing 607 readers are untouched.
   #
-  # Real fix (tracked in docs/BACKLOG.md §5.2): pid.codes-allocated
+  # Real fix (tracked in docs/backlog.md §5.2): pid.codes-allocated
   # VID:PID + upstream PR to libccid.  For now this patch keeps the
   # test surface clean.
   ccidWithNixtropic = pkgs.ccid.overrideAttrs (old: {
@@ -125,7 +125,7 @@ in
         #      labeled "TropicSquare SPI interface")
         #   2. nixtropic open firmware: VID cafe PID 4001 (TinyUSB demo
         #      defaults — pid.codes allocation tracked in
-        #      docs/BACKLOG.md §5.2)
+        #      docs/backlog.md §5.2)
         #   3. STM32 DFU bootloader: VID 0483 PID df11
         #
         # All three get group/permission + ID_MM_DEVICE_IGNORE so:
@@ -163,7 +163,7 @@ in
         # systemd's built-in hwdb auto-tags it with `security-device` on
         # most distros, but Wayland / split-userspace setups occasionally
         # drop the tag.  Pin the rule explicitly so browsers can always
-        # open /dev/hidrawN without sudo.  See docs/WEBAUTHN-NOTES.md §7.
+        # open /dev/hidrawN without sudo.  See docs/linux-setup.md.
         SUBSYSTEM=="hidraw", ATTRS{idVendor}=="cafe", ATTRS{idProduct}=="4001", \
           GROUP="${cfg.groupName}", MODE="0660", \
           TAG+="uaccess"

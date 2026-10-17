@@ -4,7 +4,7 @@
  *
  * Hard-coded to forward to the OpenPGP applet.  AID-based routing for
  * multiple applets (e.g. PIV) lands when the second applet does — see
- * docs/BACKLOG.md §4.4.
+ * docs/backlog.md §4.4.
  */
 
 #include "apdu_dispatch.h"

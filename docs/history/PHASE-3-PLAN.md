@@ -1,5 +1,10 @@
 # Phase 3 — Composite USB (CDC + HID) + lt-rpc-over-HID
 
+> **Historical record, frozen at v0.3.0.** Kept for the reasoning and the evidence it
+> contains. Facts and procedures here may be outdated or wrong: do not follow
+> instructions from this file. Current documentation: <https://jjacke13.github.io/nixtropic/>
+> (known corrections: <https://jjacke13.github.io/nixtropic/hardware/#corrections-to-earlier-documentation>).
+
 > **Status:** Plan, 2026-05-10. Executes after Phase 2 (commits `c0edfb1` + `70eaa00` + `e04da71`).
 > **Goal (per PROJECT.md §6):** Validate composite USB descriptors and HID-class enumeration. End state: OS sees `/dev/ttyACM*` AND `/dev/hidraw*`; `lt_ecc_eddsa_sign` round-trips over HID; signature verifies.
 

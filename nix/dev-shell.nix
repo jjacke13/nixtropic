@@ -68,7 +68,7 @@ pkgs.mkShell {
       nix run  .#validate                  Run the validation suite against a flashed dongle
       nix run  .#check-dongle              Diagnose USB enumeration / permissions
 
-    Read README.md for the daily-driver recipe.  See docs/RECOVERY.md for DFU procedure.
+    Read README.md for the daily-driver recipe.  See docs/recovery.md for DFU procedure.
     EOF
   '';
 }

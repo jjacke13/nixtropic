@@ -1,5 +1,5 @@
 /*
- * Mirrored R-mem record pairs (Phase 9 M4, docs/PHASE-9-M4-DESIGN.md §2).
+ * Mirrored R-mem record pairs (Phase 9 M4, docs/history/PHASE-9-M4-DESIGN.md §2).
  *
  * One persistent object = one record kept in two R-mem slots, copies A and
  * B, that hold the same record at rest.  A write commits A, then B, each

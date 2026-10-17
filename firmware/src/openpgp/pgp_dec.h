@@ -1,6 +1,6 @@
 /*
  * The OpenPGP decryption key (X25519), wrapped under the PW1 KEK
- * (Phase 9 M5, docs/PHASE-9-M5-DESIGN.md).
+ * (Phase 9 M5, docs/history/PHASE-9-M5-DESIGN.md).
  *
  * TROPIC01 has no X25519 for user keys, so the private key is computed on
  * the STM32 and stored in O3 (openpgp_state.h) — only AES-256-GCM-wrapped:

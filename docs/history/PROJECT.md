@@ -1,5 +1,10 @@
 # nixtropic — Project Document
 
+> **Historical record, frozen at v0.3.0.** Kept for the reasoning and the evidence it
+> contains. Facts and procedures here may be outdated or wrong: do not follow
+> instructions from this file. Current documentation: <https://jjacke13.github.io/nixtropic/>
+> (known corrections: <https://jjacke13.github.io/nixtropic/hardware/#corrections-to-earlier-documentation>).
+
 > **Audience:** AI coding agents (Claude, Codex, etc.) and contributors
 > working on this project across sessions.
 > **Read order:** This document first.  Reference `research/*.md` files
@@ -36,6 +41,8 @@ for the full search trail.
 ---
 
 ## 2. Locked decisions
+
+> **Corrected (v0.3.0):** decision 9’s `NIXTROPIC_ENG_KEYS` switch was never implemented, decision 15’s dates are vendor estimates (first half of 2027, planned 2027-Q2; hardened parts expected 2026-Q4), and its cost and effort figures are not from the advisory. The current decisions are in <https://jjacke13.github.io/nixtropic/design/>.
 
 | # | Decision | Rationale |
 |---|---|---|
@@ -195,6 +202,8 @@ for the full search trail.
 ---
 
 ## 5. Critical facts (do NOT forget)
+
+> **Corrected (v0.3.0):** several rows below are wrong or incomplete: the R-config procedure (needs a full mirror, explicit checked erase, whole write, reboot and read-back), the pairing-key replacement recipe (irreversible; needs a reviewed plan), the 256-byte R-memory default (slots hold up to 475 bytes of payload on firmware 2.x), the engineering-key build flag (never implemented) and the TRNG note (the vendor states SP 800-90B compliance). See <https://jjacke13.github.io/nixtropic/hardware/>.
 
 These will hurt the project if violated.  Re-read this section before
 any R-config or pairing-key change.

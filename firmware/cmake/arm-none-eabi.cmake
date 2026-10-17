@@ -1,6 +1,6 @@
 # arm-none-eabi-gcc cross-compile toolchain for STM32U535 (TS1302).
 #
-# Cortex-M33 with FPv5-SP-D16 hard-float ABI. Per PROJECT.md §8 we want
+# Cortex-M33 with FPv5-SP-D16 hard-float ABI. Per docs/contributing.md we want
 # strict warnings; -Werror is parked until past the skeleton stage so we
 # can integrate ST HAL noise without fighting it (Group D restores it).
 

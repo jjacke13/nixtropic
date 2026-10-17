@@ -1,5 +1,10 @@
 # Phase 5 M4 — MAC-and-Destroy-backed PIN retry counter
 
+> **Historical record, frozen at v0.3.0.** Kept for the reasoning and the evidence it
+> contains. Facts and procedures here may be outdated or wrong: do not follow
+> instructions from this file. Current documentation: <https://jjacke13.github.io/nixtropic/>
+> (known corrections: <https://jjacke13.github.io/nixtropic/hardware/#corrections-to-earlier-documentation>).
+
 > **Goal:** Replace M3's RAM/R-mem-only retry counter with TROPIC01-
 > hardware-enforced limit using MAC-and-Destroy slot consumption.
 > Even firmware compromise cannot extend the 8-attempt limit because

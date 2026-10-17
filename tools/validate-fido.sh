@@ -107,7 +107,7 @@ if [ $overall_rc -eq 0 ]; then
   echo ""
   echo "Quick checks only — no real credential operations were performed."
   echo "For the deep flow (register + authenticate with real SW1 touch):"
-  echo "  - webauthn.io in Firefox (see README §Demo recipes)"
+  echo "  - webauthn.io in Firefox (see docs/card-setup.md)"
   echo "  - or python3 tools/fido2_test.py make-cred / assertion"
 else
   echo "═══════════════════════════════════════════════════════════════"

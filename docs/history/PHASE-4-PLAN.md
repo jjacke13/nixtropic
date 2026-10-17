@@ -1,5 +1,10 @@
 # Phase 4 Plan — FIDO2 stack port (stub backend)
 
+> **Historical record, frozen at v0.3.0.** Kept for the reasoning and the evidence it
+> contains. Facts and procedures here may be outdated or wrong: do not follow
+> instructions from this file. Current documentation: <https://jjacke13.github.io/nixtropic/>
+> (known corrections: <https://jjacke13.github.io/nixtropic/hardware/#corrections-to-earlier-documentation>).
+
 > **Phase 4 goal (PROJECT.md §6):** SoloKeys-derived FIDO2 stack ported to STM32U535. HID interface advertises FIDO usage page (`0xF1D0`). `MakeCredential` / `GetAssertion` return cryptographically dummy responses. `fido2-token -L` lists the device. `fido2-token -I` returns plausible info. `libfido2` `MakeCredential` succeeds with stub.
 
 ## Locked decisions

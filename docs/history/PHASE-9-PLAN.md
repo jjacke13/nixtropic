@@ -1,5 +1,10 @@
 # Phase 9 — Plan (v2)
 
+> **Historical record, frozen at v0.3.0.** Kept for the reasoning and the evidence it
+> contains. Facts and procedures here may be outdated or wrong: do not follow
+> instructions from this file. Current documentation: <https://jjacke13.github.io/nixtropic/>
+> (known corrections: <https://jjacke13.github.io/nixtropic/hardware/#corrections-to-earlier-documentation>).
+
 Status: in progress — M0 and M1 done (2026-10-14), M2 and M3 done (2026-10-15); see STATUS.md. v1 (98cbfde,
 2026-10-14) was reviewed against the official TROPIC01 documentation the same evening;
 verdict "changes required, direction supported". v2 folds that review in. This

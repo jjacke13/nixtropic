@@ -1,5 +1,10 @@
 # Project Status
 
+> **Historical record, frozen at v0.3.0.** Kept for the reasoning and the evidence it
+> contains. Facts and procedures here may be outdated or wrong: do not follow
+> instructions from this file. Current documentation: <https://jjacke13.github.io/nixtropic/>
+> (known corrections: <https://jjacke13.github.io/nixtropic/hardware/#corrections-to-earlier-documentation>).
+
 Top-level milestone log.  Full per-phase progression with day-by-day
 HW-validation logs lives on the `archive/phases-1-7` branch
 (`STATUS.md` there).
@@ -469,3 +474,25 @@ Measured: VERIFY 81 ≈ 1.4 s (unchanged from M4).  Sizes: release 223 188 B, de
 M4-era card reads damaged until TERMINATE + ACTIVATE.  Resetting PW1 with the Reset Code
 or the Admin PIN destroys the decryption key (a change keeps it).  Tools that generate the
 decryption key after verifying only PW3 now get 6982; gpg verifies PW1 first and works.
+
+## 2026-10-18 — Phase 9 M6 documentation + final acceptance ✅
+
+Documentation restructured into one `docs/` tree that GitHub shows and MkDocs Material
+publishes (`nix build .#docs`, strict link and anchor validation; workflow
+`.github/workflows/docs.yml`). Plans, design documents, this log, `PROJECT.md`,
+`TROPIC01.md` and `research/` moved to `docs/history/` with a banner and inline
+corrections. Jan reviewed the outline (approve with additions), the drafts (J1–J10,
+all applied) and, at Vaios's request, verified every pairing-key statement twice more
+against Tropic Square's documents (second pass P1–P12; third, fresh pass: core model
+matches, two overstatements fixed, project-specific claims given source citations).
+Code comments only point at the new paths; firmware bytes unchanged.
+
+Final acceptance on the M5 binaries (release `467a2b87`, debug `1a8b7997`):
+
+| Suite | Release | Debug |
+|---|---|---|
+| `validate-openpgp-m4.sh` | 42/42 (second run; the first started on a card the gpg run had left keyed — precondition "no dec key yet" failed, all else passed) | 42/42 |
+| `validate-openpgp` | 16/16 | 16/16 |
+| `validate_fido_m3.py` | 60/60 | 60/60 |
+| gpg end to end (generate, sign+verify, wrong PIN, decrypt, ssh-add -L) | 7/7 | 7/7 |
+| `nix flake check` (host tests, release surface, docs) | pass | |

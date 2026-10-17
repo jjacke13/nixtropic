@@ -32,7 +32,7 @@
  * of power-up. After the window, return CTAP2_ERR_NOT_ALLOWED. */
 #define RESET_WINDOW_MS  10000u
 
-/* nixtropic AAGUID per PROJECT.md plan decision #6:
+/* nixtropic AAGUID:
  *   "nixtropic" (9 bytes: 6E 69 78 74 72 6F 70 69 63) + 6 zero bytes +
  *   version byte.
  *
@@ -49,7 +49,7 @@
  *   0x04 — Phase 9 M3 (EdDSA only, real rk, permission tokens,
  *          authenticatorConfig, makeCredUvNotRqd)
  *
- * AAGUID bump policy + history in docs/WEBAUTHN-NOTES.md §3.
+ * AAGUID bump policy: docs/webauthn.md, section AAGUID.
  *
  * Non-static so ctap2_creds.c can reference the same blob. */
 const uint8_t NIXTROPIC_AAGUID[16] = {
@@ -201,7 +201,7 @@ int fido_hid_cbor_dispatch(const uint8_t *req, size_t req_len,
     case CTAP2_CMD_CLIENT_PIN:
         return pin_handle_cbor(&req[1], req_len - 1u, resp, resp_max);
     case CTAP2_CMD_RESET: {
-        /* CTAP2.1 §6.8 + Phase 6 M2 tightening (docs/PHASE-6-PLAN.md
+        /* CTAP2.1 §6.8 + Phase 6 M2 tightening (docs/history/PHASE-6-PLAN.md
          * §4.7, H1 defense).
          *
          * Two gates (CTAP 2.1 §6.6):

@@ -364,7 +364,7 @@ if [ $overall_rc -eq 0 ]; then
   echo "(123456 / 12345678).  Set tools/fixture.env back to those if it differed."
   echo ""
   echo "For gpg-side end-to-end (post-flash):"
-  echo "  See README §5 — gpgconf --kill scdaemon + gpg --card-status"
+  echo "  See docs/linux-setup.md (After a replug): gpgconf --kill scdaemon + gpg --card-status"
 else
   echo "═══════════════════════════════════════════════════════════════"
   echo "  ✗ OpenPGP card surface FAIL  (rc=$overall_rc)"
