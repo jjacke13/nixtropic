@@ -83,7 +83,7 @@ the PIN-derived key Phase 10 builds on, so nothing here is in its way.
 | M3 | FIDO2 fixes + CTAP2.1 permission tokens + `authenticatorConfig` | ✅ Thu 15 Oct (planned Sat 17 – Sun 18) | M2 |
 | M3b | ES256 (P-256) credentials (added 15 Oct) | ✅ Thu 15 Oct | M3 |
 | M4 | PIN + persistent-state integrity | ✅ Fri 16 Oct (STATUS.md; design §13) | M2 |
-| M5 | No secrets in readable R-memory: DEC key wrapped under k (PIN hashes already gone in M4) | Sat 17 18:00 (quota reset) – Sun 18 Oct | M4 ✅ green Fri 16 |
+| M5 ✅ | No secrets in readable R-memory: DEC key wrapped under k (PIN hashes already gone in M4) — done Sat 17 Oct (design, code, HIL) | Sat 17 18:00 (quota reset) – Sun 18 Oct | M4 ✅ green Fri 16 |
 | M6 | Docs + CARD-SETUP (+ v0.3.0 release note) | Mon 19 Oct | M1–M5 |
 | — | Tag v0.3.0 (Vaios decides the push) + buffer | Tue 20 Oct | — |
 | — | FOSSCOMM material (slides, demo, refresher, rehearsal) | Tue 20 – Wed 28 Oct | v0.3.0 |

@@ -432,3 +432,40 @@ Sizes: release 221 908 B, debug 227 792 B.
 answers 6F00).
 Until then FIDO answers only GetInfo/Reset and OpenPGP only SELECT / VERIFY 83 /
 TERMINATE.  All FIDO credentials, OpenPGP keys and PINs are lost (no migration).
+
+## 2026-10-17 — Phase 9 M5 OpenPGP decryption key wrapped under the PIN ✅
+
+Design `docs/PHASE-9-M5-DESIGN.md` (Jan: CHANGES REQUIRED at r1, APPROVE at r2, before
+code; §10 = implementation and reviews).  Commits 3d14ea7..cc93d82.
+- The X25519 DEC private key is no longer stored plain: O3 schema 2 holds the public key
+  and the private key sealed with AES-256-GCM under KEK = HMAC(k, label), k = HMAC(s, 2)
+  from the PW1 M&D binding; fresh TRNG nonce per seal; the AAD binds the public key.
+  Unwrap checks the tag first (constant time) and decrypts only after a match.
+- The KEK lives in RAM only while PW1.81 or PW1.82 is verified.  GENERATE DEC needs PW3
+  and a verified PW1 (gpg verifies 81 on a fresh card); PSO:DEC needs 82.
+- A PW1 change keeps the key (same s).  RESET RETRY COUNTER (RC or PW3) destroys it,
+  checked, after every refusal of the reset and before the new PIN (fresh s).
+- Format pinned by a golden record made outside the code (Python `cryptography`).
+
+Reviews: Jan APPROVE (one LOW fixed); cpp-reviewer CHANGES REQUIRED (test gaps only:
+nonce freshness, preflight vs PW1 ERROR, no outside vector, generate failure, a
+mislabelled case, PIN scan) → APPROVE on cc93d82.  Mutants: 17 at 2583b6f (3
+equivalent) + the reviewer's 6 survivors, all killed after cc93d82.
+
+| Build | Test | Result |
+|---|---|---|
+| host | `nix build .#host-tests` (+ new `pgp_dec`: GCM KAT, golden record, ECDH vs reference, tamper, faults, no key / PIN / SHA-256(PIN) in any R-mem window) | ✓ 15/15 |
+| debug 1a8b7997 | M4 layout (schema 1): GET DATA 6F00 → VERIFY 83 + TERMINATE + ACTIVATE → factory | ✓ |
+| release 467a2b87 / debug 1a8b7997 | `tools/validate-openpgp-m4.sh` (M5 fixture: GENERATE dec refused with PW3 only, ok after VERIFY 81; PSO:DEC after CHANGE; RC reset destroys) | ✓ 42/42 both |
+| release / debug | `validate-openpgp` | ✓ 16/16 both |
+| release | `validate_fido_m3.py` | ✓ 60/60 |
+| release / debug | gpg (throwaway GNUPGHOME): `--card-edit generate` on a fresh card, decrypt fails with a wrong PIN, works with PW1; works after a PW1 change; after RESET RETRY COUNTER (RC on debug, PW3 on release) `--card-status` shows Encryption key [none], SIG + AUT kept | ✓ both |
+
+Not done on hardware: the R-mem dump scan (design §5) — the debug build has no raw R-mem
+read RPC; the host tests scan every R-mem window instead.
+Measured: VERIFY 81 ≈ 1.4 s (unchanged from M4).  Sizes: release 223 188 B, debug 229 072 B.
+
+**Release note for v0.3.0 (add):** the OpenPGP layout changed again (O3 schema 2): an
+M4-era card reads damaged until TERMINATE + ACTIVATE.  Resetting PW1 with the Reset Code
+or the Admin PIN destroys the decryption key (a change keeps it).  Tools that generate the
+decryption key after verifying only PW3 now get 6982; gpg verifies PW1 first and works.
