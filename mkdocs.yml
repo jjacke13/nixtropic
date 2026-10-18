@@ -78,6 +78,7 @@ nav:
   - Get started:
       - Flashing: flashing.md
       - Linux setup: linux-setup.md
+      - Windows: windows.md
       - Card setup: card-setup.md
   - Using it:
       - WebAuthn notes: webauthn.md

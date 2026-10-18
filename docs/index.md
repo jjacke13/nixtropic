@@ -78,6 +78,10 @@ against a simulated chip, with planted bugs, and on real hardware.
 
     `pcscd`, `scdaemon`, udev rules and the libccid patch; a NixOS module does it all.
 
+-   :material-microsoft-windows: **[Windows](windows.md)**
+
+    The OpenPGP card with Gpg4win and Kleopatra; FIDO2 status.
+
 -   :material-card-account-details-outline: **[Card setup](card-setup.md)**
 
     PINs, touch policy, key generation, resets.
