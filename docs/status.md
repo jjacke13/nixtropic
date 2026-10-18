@@ -20,6 +20,7 @@
 - Not protected against physical attacks on the STM32 (no read-out protection, no
   secure boot) or on the chip (see the laser fault-injection advisory).
 - Not a finished FIDO 2.1 authenticator: it reports `FIDO_2_0`.
+- Not usable for FIDO2 on Windows when a PIN is set (v0.3.1 will send KEEPALIVE).
 
 ## Compatibility
 
@@ -28,7 +29,8 @@
 | Board | TS1302 with TROPIC01 `TR01-C2P-T101` (ACAB), chip application FW 2.0.0 / SPECT 1.0.0 | other boards unsupported; older chip FW must be updated |
 | Host OS | NixOS (nixos-26.05) | Debian/Ubuntu steps documented, not CI-tested |
 | Host stack | GnuPG 2.4, pcsc-lite + patched libccid, OpenSSH via gpg-agent, libfido2 | `scdaemon` with `disable-ccid` + `pcsc-shared` |
-| Browsers | Firefox, Brave (Linux) | Chrome expected to work; Windows 11 verified only with the v0.2 USB layout; macOS untested |
+| Browsers | Firefox, Brave (Linux) | Chrome expected to work; macOS untested |
+| Windows 11 | OpenPGP card with Gpg4win/Kleopatra: sign, encrypt, decrypt | **FIDO2 with a PIN fails** (no KEEPALIVE, Windows times out); fixed in v0.3.1 ([Linux setup](linux-setup.md#windows-and-macos)) |
 | Sites | webauthn.io, webauthn.me (v0.3); Proton account 2FA (v0.2) | attestation `none` |
 | FIDO2 | CTAP 2.0 + CTAP 2.1 credential management, authenticatorConfig, permission tokens | EdDSA and ES256; no hmac-secret, credProtect, PIN protocol 2 |
 | OpenPGP card | 3.4.1 subset: Ed25519 sign/auth, Cv25519 decrypt, PINs, UIF, forcesig | no RSA, no key import, no KDF-DO |

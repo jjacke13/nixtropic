@@ -94,6 +94,15 @@ After flashing v0.3.0 over v0.2 or an earlier v0.3 build:
   [flashing](flashing.md) and [Linux setup](linux-setup.md); `docs/RECOVERY.md`,
   `docs/WEBAUTHN-NOTES.md` and `docs/BACKLOG.md` became lowercase pages.
 
+### Known issues
+
+- **FIDO2 on Windows with a PIN set fails.** The dongle sends no CTAPHID KEEPALIVE while
+  it works, and Windows abandons a silent request after a few seconds; the PIN token
+  (about 2.6 s) and a PIN change (about 6.6 s) take longer since the crash-safe PIN
+  storage. Registration then loops, and a PIN change reports an error although it
+  completed. The OpenPGP card works on Windows. Fix planned for v0.3.1. Linux clients
+  are not affected.
+
 ### Sizes
 
 Release `firmware.bin` 223 188 B (85 % of flash), debug 229 072 B.

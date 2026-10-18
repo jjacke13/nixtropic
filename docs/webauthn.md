@@ -91,7 +91,7 @@ GetInfo lists no extensions; MakeCredential still answers the `credProps` extens
 | Firefox / Linux | works |
 | Brave / Linux | works |
 | Chrome / Linux | expected to work (same engine as Brave), not verified separately |
-| Windows 11 browsers | worked with the v0.2 USB layout; v0.3 not re-verified |
+| Windows 11 browsers | v0.3.0: fails when a PIN is set — Windows abandons the PIN steps before the dongle answers (no KEEPALIVE yet); v0.2 worked; fix in v0.3.1 |
 | Safari / macOS | untested |
 
 Troubleshooting steps: [Linux setup](linux-setup.md#fido2-troubleshooting).

@@ -496,3 +496,13 @@ Final acceptance on the M5 binaries (release `467a2b87`, debug `1a8b7997`):
 | `validate_fido_m3.py` | 60/60 | 60/60 |
 | gpg end to end (generate, sign+verify, wrong PIN, decrypt, ssh-add -L) | 7/7 | 7/7 |
 | `nix flake check` (host tests, release surface, docs) | pass | |
+
+**Windows 11 check (same night, VirtualBox USB passthrough, release build, demo keys):**
+enumeration without driver install ✓; OpenPGP card in Gpg4win/Kleopatra — card view,
+sign, encrypt, decrypt ✓; FIDO2 with a PIN ✗. usbmon captures decoded to CTAPHID: Windows
+abandoned getPinUvAuthToken after 2.6 s and changePIN after 6.6 s, each answered with
+status 0x00 1–2 ms later (no KEEPALIVE: BACKLOG 6.7); the registration loop and the
+"Something went wrong" after a PIN change follow from that. GetInfo and the touch-probe
+answer were checked against CTAP 2.0/2.1/2.2 by Jan: correct. v0.2 worked because its
+PIN path was faster. Tagged v0.3.0 with this as a known issue; KEEPALIVE = v0.3.1.
+Unexplained, carried to v0.3.1: GetInfo showed alwaysUv on after the Windows session.

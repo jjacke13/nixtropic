@@ -230,7 +230,8 @@ as Linux, via Gpg4win), DFU flashing recipe (Zadig + dfu-util OR
 STM32CubeProgrammer), README "Windows setup" section, HW-in-the-loop
 verification on Win10 22H2 + Win11.  No firmware changes expected.
 Phase 9 M1 changed the release layout (HID + CCID only, device class 0,
-no IAD): re-verify on Windows.
+no IAD). Re-verified 18 Oct 2026 on Windows 11: enumeration and the OpenPGP card
+work; FIDO2 with a PIN needs 6.7.
 
 ### 6.4 Debug console loses the boot banner (Phase 9 M1)
 
@@ -260,11 +261,21 @@ M2 review; plan it with the M3 FIDO work.
 Fixed: requests run from the main loop, never inside a USB callback; one
 request and one touch wait at a time.
 
-### 6.7 CTAPHID KEEPALIVE and reply backpressure
+### 6.7 CTAPHID KEEPALIVE and reply backpressure — NEXT (v0.3.1, breaks Windows)
 
-No KEEPALIVE packets during a touch wait (CTAP SHOULD; clients work without).
-One-packet replies sent while a request owns the buffers are dropped if the IN
-endpoint is busy (Jan, M3).
+No KEEPALIVE packets during processing or a touch wait (CTAP 2.2 §11.2.9.1.7:
+SHOULD, at least every 100 ms; PROCESSING = 1, UPNEEDED = 2). Linux clients wait;
+**Windows does not** (usbmon captures, 18 Oct 2026): it abandoned getPinUvAuthToken
+after 2.6 s and changePIN after 6.6 s, each answered successfully 1–2 ms later, so
+registration loops and a PIN change reports an error. v0.2 worked because its PIN
+path was faster. Plan (Jan): one progress function on the active CID, called between
+chip calls (`tropic.c` `l3_done`) and from the touch-wait loop; never re-dispatch the
+active request or re-enter libtropic (debug lt-rpc must be held back while FIDO works);
+handle IN-endpoint backpressure; host tests for INIT/CANCEL/other CID during progress;
+Windows HIL with captures. Also: one-packet replies sent while a request owns the
+buffers are dropped if the IN endpoint is busy (Jan, M3). Open in the same milestone:
+why GetInfo reported `alwaysUv` on after the Windows session (four setter paths, none
+seen in the captures).
 
 ### 6.8 Retire superseded test suites
 

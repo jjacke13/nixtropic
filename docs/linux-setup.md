@@ -157,7 +157,16 @@ More WebAuthn detail: [WebAuthn notes](webauthn.md).
 
 ## Windows and macOS
 
-Windows 11 was tested with the v0.2 USB layout: FIDO2 worked in the browsers, the
-OpenPGP card worked with Gpg4win (`%APPDATA%\gnupg\scdaemon.conf` with the same two
-lines, then a reboot). The v0.3 layout is not re-verified on Windows; flashing from
-Windows is untested. macOS is untested.
+Windows 11 (tested 18 October 2026 in a VirtualBox VM with USB passthrough):
+
+- **OpenPGP card: works.** Install [Gpg4win](https://gpg4win.org), put the same two lines
+  in `%APPDATA%\gnupg\scdaemon.conf`, then `gpgconf --kill scdaemon` (or reboot).
+  Kleopatra (*Tools → Manage Smart Cards*) shows the card; signing, encryption and
+  decryption work.
+- **FIDO2 with a PIN: does not work in v0.3.0.** The dongle sends no CTAPHID KEEPALIVE
+  while it works, and Windows abandons a silent request after a few seconds (about
+  2.6 s for the PIN token, 6.6 s for a PIN change); PIN operations take longer than that
+  since v0.3.0’s crash-safe PIN storage. The operations complete on the dongle, but
+  registration loops and a PIN change reports an error. The fix is planned for v0.3.1
+  ([backlog 6.7](backlog.md)). v0.2 worked.
+- Flashing from Windows and macOS are untested.
