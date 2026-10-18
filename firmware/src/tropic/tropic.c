@@ -160,8 +160,23 @@ int tropic_init(void)
 static uint8_t s_cert_buf[LT_NUM_CERTIFICATES][TR01_L2_GET_INFO_REQ_CERT_SIZE_SINGLE];
 static uint8_t s_stpub[TR01_STPUB_LEN];
 
+static void (*s_progress_hook)(void);
+
+void tropic_set_progress_hook(void (*fn)(void))
+{
+    s_progress_hook = fn;
+}
+
+static void progress(void)
+{
+    if (s_progress_hook != NULL) s_progress_hook();
+}
+
 int tropic_l3_session_ensure(void)
 {
+    /* Every L3 wrapper starts here: a progress point before each chip
+     * command, also when the session is already open (v0.3.1). */
+    progress();
     if (!s_lt_ready) {
         return -1;   /* lt_init failed at boot: no usable handle */
     }
@@ -192,6 +207,7 @@ int tropic_l3_session_ensure(void)
 
     /* Step 3: open the L3 secure session using the default sh0_prod0
      * pairing keys (docs/security.md — production silicon, public dev keys). */
+    progress();
     r = lt_session_start(&s_handle,
                          s_stpub,
                          TR01_PAIRING_KEY_SLOT_INDEX_0,

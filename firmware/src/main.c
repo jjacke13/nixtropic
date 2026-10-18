@@ -243,6 +243,7 @@ int main(void)
     hid_rpc_init();
 #endif
     fido_hid_init();
+    tropic_set_progress_hook(fido_hid_progress);   /* KEEPALIVE between chip calls */
     boot_banner();
 
 

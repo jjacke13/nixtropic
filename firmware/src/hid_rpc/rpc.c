@@ -14,6 +14,7 @@
 #include "rpc.h"
 #include "lt_rpc_proto.h"
 #include "usb/usb.h"
+#include "fido_hid/ctaphid.h"
 #include "fido_hid/user_presence.h"
 
 #include <stdint.h>
@@ -159,8 +160,10 @@ static bool emit_response_packet(void)
 static void dispatch_request(void)
 {
     /* Phase 9 M3 dispatch policy: no chip command while a FIDO or
-     * OpenPGP request waits for touch (its pump would run it). */
-    if (user_presence_is_awaiting()) {
+     * OpenPGP request waits for touch (its pump would run it).  v0.3.1:
+     * nor while a FIDO request runs at all — its progress points pump USB
+     * between two chip calls, e.g. inside an M&D sequence. */
+    if (user_presence_is_awaiting() || fido_hid_is_running()) {
         queue_error(LT_RPC_ERR_BUSY);
         return;
     }

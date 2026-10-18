@@ -48,9 +48,15 @@ typedef enum {
  * lt-rpc answers BUSY).  The waiting request owns the consent. */
 up_result_t user_presence_check(uint32_t timeout_ms);
 
-/* End a running wait with UP_CANCEL (CTAPHID_CANCEL on the waiting
- * request's channel).  No effect when nothing waits. */
+/* CTAPHID_CANCEL (or a resync) for the running FIDO request: ends a running
+ * wait with UP_CANCEL, and a wait that starts later in the same request
+ * returns UP_CANCEL at once (v0.3.1: before, a CANCEL that came before the
+ * wait was lost).  Latched until user_presence_clear_cancel(). */
 void user_presence_cancel(void);
+
+/* Drop the cancel latch.  fido_hid_task() calls it before and after every
+ * request, so a cancel never reaches another request or an OpenPGP wait. */
+void user_presence_clear_cancel(void);
 
 /* Current debounced state.  Non-blocking. */
 bool user_presence_is_pressed(void);

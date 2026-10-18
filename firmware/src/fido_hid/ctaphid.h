@@ -16,7 +16,8 @@
  *                           class-not-supported — we're CTAP2-only)
  *   0x10  CTAPHID_CBOR      CTAP2 request → ctap2.c dispatcher
  *   0x11  CTAPHID_CANCEL    abort in-flight transaction
- *   0x12  CTAPHID_KEEPALIVE emitted by us when waiting for SW1 touch
+ *   0x3B  CTAPHID_KEEPALIVE sent by us while a request runs (v0.3.1):
+ *                           PROCESSING, or UPNEEDED during the touch wait
  *   0x3F  CTAPHID_ERROR     non-success transport error
  *
  * Multi-CID negotiation: hosts allocate channels via CTAPHID_INIT
@@ -32,6 +33,7 @@
 #ifndef NIXTROPIC_FIDO_HID_CTAPHID_H
 #define NIXTROPIC_FIDO_HID_CTAPHID_H
 
+#include <stdbool.h>
 #include <stdint.h>
 #include <stddef.h>
 
@@ -52,6 +54,22 @@ void fido_hid_task(void);
  *        Called by the USB layer (usb.c) for the FIDO HID instance.
  */
 void fido_hid_handle_packet(const uint8_t *pkt, size_t len);
+
+/**
+ * @brief Progress point of a running FIDO request (between chip calls and in
+ *        the touch wait): sends CTAPHID_KEEPALIVE on its channel when due
+ *        and pumps USB.  No-op unless a FIDO request is running.
+ */
+void fido_hid_progress(void);
+
+/** @brief True while fido_hid_task() executes a request. */
+bool fido_hid_is_running(void);
+
+#if NIXTROPIC_DEBUG
+/** @brief Largest KEEPALIVE gap of the last request, up to the acceptance of
+ *         its answer's first packet (0 while that answer is still queued). */
+uint32_t fido_hid_dbg_max_ka_gap(void);
+#endif
 
 /* ===== CBOR sub-dispatch (M3 fills in) =====
  *

@@ -31,7 +31,11 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <string.h>
+#if NIXTROPIC_DEBUG
+#include <stdio.h>
+#endif
 
+#include "stm32u5xx_hal.h"
 #include "tusb.h"
 
 /* ===== State ===== */
@@ -76,6 +80,41 @@ static uint32_t s_busy_cid;
  * acts only on a running one (Jan, M3 round 4). */
 static bool     s_running;
 
+/* v0.3.1: CTAPHID_KEEPALIVE while a request runs (CTAP 2.2 §11.2.9.1.7:
+ * SHOULD, at least every 100 ms and on every status change).  Sent only
+ * from fido_hid_progress(), i.e. between chip calls and in the touch wait,
+ * so the wire gap is KA_INTERVAL_MS + the longest step without a progress
+ * point; hence 50, not 100 (Jan, v0.3.1 design review). */
+#define KA_INTERVAL_MS   50u
+#define KA_PROCESSING    1u
+#define KA_UPNEEDED      2u
+
+static bool     s_in_progress;      /* fido_hid_progress() is on the stack */
+static uint8_t  s_ka_status;        /* last status sent for this request, 0 = none */
+static uint32_t s_ka_last;          /* tick of the last accepted KEEPALIVE */
+
+/* One-packet answer (INIT, error) that found the IN endpoint busy while a
+ * request owned the buffers; sent before anything else.  ponytail: one
+ * slot, a second one while it is full is dropped (as every one was before
+ * v0.3.1); a queue only if captures show drops. */
+static uint8_t  s_short_pkt[FIDO_HID_REPORT_LEN];
+static bool     s_short_pending;
+
+/* INIT on the CID of the queued or running request = resync (CTAP 2.2
+ * §11.2.9.1.3): the request is abandoned.  Its non-cancellable chip work
+ * still finishes, but no KEEPALIVE and no answer go out for it any more;
+ * the INIT answer is held here until it is done (Jan, v0.3.1 review). */
+static bool     s_abandoned;
+static uint8_t  s_resync_pkt[FIDO_HID_REPORT_LEN];
+static bool     s_resync_pending;
+
+#if NIXTROPIC_DEBUG
+/* Per-request timing on the debug console (design §4.5). */
+static uint32_t s_dbg_start, s_dbg_last_ka, s_dbg_last_prog;
+static uint32_t s_dbg_max_ka_gap, s_dbg_max_prog_gap, s_dbg_kas;
+static void dbg_first_packet_sent(void);
+#endif
+
 /* ===== Helpers ===== */
 
 static uint32_t read_be32(const uint8_t *p)
@@ -117,20 +156,50 @@ static void reset_assembly(void)
 
 /* ===== Response queueing ===== */
 
-/* One-packet answer sent at once, without the shared buffer.  Dropped if
- * the IN endpoint is busy; the host retries or times out. */
+/* A complete one-packet message (len <= FIDO_HID_INIT_DATA_LEN). */
+static void build_packet(uint8_t pkt[FIDO_HID_REPORT_LEN], uint32_t cid,
+                         uint8_t cmd_with_flag, const uint8_t *payload, size_t len)
+{
+    memset(pkt, 0, FIDO_HID_REPORT_LEN);
+    write_be32(pkt, cid);
+    pkt[4] = cmd_with_flag;
+    write_be16(&pkt[5], (uint16_t) len);
+    if (len > 0u) memcpy(&pkt[7], payload, len);
+}
+
+/* True if USB took the packet. */
+static bool push_packet(const uint8_t pkt[FIDO_HID_REPORT_LEN])
+{
+    return tud_hid_n_ready(USB_HID_INSTANCE_FIDO) &&
+           tud_hid_n_report(USB_HID_INSTANCE_FIDO, 0, pkt, FIDO_HID_REPORT_LEN);
+}
+
+/* Held one-packet answers first: the short slot, then a held resync answer
+ * once its abandoned request is over.  True if the short slot is empty. */
+static bool flush_pending(void)
+{
+    if (s_short_pending && push_packet(s_short_pkt)) {
+        s_short_pending = false;
+    }
+    if (!s_short_pending && s_resync_pending && !s_abandoned &&
+        push_packet(s_resync_pkt)) {
+        s_resync_pending = false;
+    }
+    return !s_short_pending;
+}
+
+/* One-packet answer sent at once, without the shared buffer; kept in the
+ * short slot if the IN endpoint is busy. */
 static void send_now(uint32_t cid, uint8_t cmd_with_flag,
                      const uint8_t *payload, size_t len)
 {
     uint8_t pkt[FIDO_HID_REPORT_LEN];
     if (len > FIDO_HID_INIT_DATA_LEN) return;
-    memset(pkt, 0, sizeof pkt);
-    write_be32(pkt, cid);
-    pkt[4] = cmd_with_flag;
-    write_be16(&pkt[5], (uint16_t) len);
-    if (len > 0u) memcpy(&pkt[7], payload, len);
-    if (tud_hid_n_ready(USB_HID_INSTANCE_FIDO)) {
-        (void) tud_hid_n_report(USB_HID_INSTANCE_FIDO, 0, pkt, sizeof pkt);
+    build_packet(pkt, cid, cmd_with_flag, payload, len);
+    if (flush_pending() && push_packet(pkt)) return;
+    if (!s_short_pending) {
+        memcpy(s_short_pkt, pkt, sizeof pkt);
+        s_short_pending = true;
     }
 }
 
@@ -152,6 +221,7 @@ static void queue_response(uint32_t cid, uint8_t cmd_with_flag,
 static void reply_short(uint32_t cid, uint8_t cmd_with_flag,
                         const uint8_t *payload, size_t len)
 {
+    if (s_abandoned && cid == s_busy_cid) return;   /* the host left it */
     /* Also while an earlier response is still going out: it lives in
      * s_resp_buf until its last packet is sent (Jan, M3 round 4). */
     if (s_busy_cid != 0u || s_resp_pending) {
@@ -204,6 +274,9 @@ static bool emit_response_packet(void)
         if (!is_first) s_resp_seq--;
         return false;
     }
+#if NIXTROPIC_DEBUG
+    if (is_first) dbg_first_packet_sent();
+#endif
 
     /* INIT response with empty payload (BCNT=0) is still a valid packet —
      * we've emitted it; mark done. Otherwise check the byte counter. */
@@ -258,6 +331,34 @@ static void handle_init(uint32_t req_cid, const uint8_t *payload, size_t len)
     resp[14] = (uint8_t) FIDO_HID_DEVICE_VER_MINOR;
     resp[15] = (uint8_t) FIDO_HID_DEVICE_VER_BUILD;
     resp[16] = (uint8_t) FIDO_HID_CAPABILITIES;
+
+    if (req_cid != FIDO_HID_CID_BROADCAST) {
+        /* A newer INIT on this channel supersedes an unsent answer to an
+         * older one, so a stale acknowledgement can never follow the fresh
+         * one (Jan, v0.3.1 code review). */
+        if (s_resync_pending && read_be32(s_resync_pkt) == req_cid) {
+            s_resync_pending = false;
+        }
+        if (s_short_pending && read_be32(s_short_pkt) == req_cid &&
+            s_short_pkt[4] == (FIDO_HID_CMD_INIT_FLAG | FIDO_HID_CMD_INIT)) {
+            s_short_pending = false;
+        }
+    }
+
+    if (req_cid != FIDO_HID_CID_BROADCAST && req_cid == s_busy_cid) {
+        /* Resync of the queued or running request's channel: abandon it,
+         * end its touch wait (only a running request owns one; a queued
+         * one may sit behind an OpenPGP wait), hold this answer. */
+        s_abandoned = true;
+        if (s_running) user_presence_cancel();
+        build_packet(s_resync_pkt, req_cid, FIDO_HID_CMD_INIT_FLAG | FIDO_HID_CMD_INIT,
+                     resp, sizeof resp);
+        s_resync_pending = true;
+        return;
+    }
+    if (req_cid != FIDO_HID_CID_BROADCAST && s_resp_pending && s_resp_cid == req_cid) {
+        s_resp_pending = false;          /* rest of an answer the host left */
+    }
 
     reply_short(req_cid, FIDO_HID_CMD_INIT_FLAG | FIDO_HID_CMD_INIT,
                 resp, sizeof resp);
@@ -500,26 +601,150 @@ void fido_hid_init(void)
     s_resp_cid     = 0;
     s_resp_cmd     = 0;
     s_resp_seq     = 0;
+    s_short_pending  = false;
+    s_resync_pending = false;
+    s_abandoned      = false;
+    s_busy_cid       = 0u;
     /* CIDs 0x00000001..0xFFFFFFFE are valid; we start at 1. */
     s_next_cid     = 1u;
 }
 
+#if NIXTROPIC_DEBUG
+/* Printed after the answer is out, so the printout does not delay it.  The
+ * tail gap (last KEEPALIVE → answer) ends when USB accepts the answer's
+ * first packet, not when the handler returns (Jan, v0.3.1 code review). */
+static bool     s_dbg_pending, s_dbg_wait_first, s_dbg_abandoned;
+static uint8_t  s_dbg_cmd, s_dbg_cbor;
+static uint16_t s_dbg_len;
+static uint32_t s_dbg_handler_ms, s_dbg_total_ms;
+
+static void dbg_tail(void)
+{
+    uint32_t now  = HAL_GetTick();
+    uint32_t tail = now - s_dbg_last_ka;
+    if (tail > s_dbg_max_ka_gap) s_dbg_max_ka_gap = tail;
+    s_dbg_total_ms = now - s_dbg_start;
+}
+
+static void dbg_request_end(void)
+{
+    s_dbg_cmd        = s_req_cmd;
+    s_dbg_cbor       = s_req_buf[0];    /* CTAP command byte; no request data */
+    s_dbg_len        = s_req_received;
+    s_dbg_handler_ms = HAL_GetTick() - s_dbg_start;
+    s_dbg_abandoned  = s_abandoned;
+    /* An answer still queued in s_resp_buf: its tail ends at emission. */
+    s_dbg_wait_first = s_resp_pending && !s_abandoned;
+    if (!s_dbg_wait_first) dbg_tail();
+    s_dbg_pending = true;
+}
+
+static void dbg_first_packet_sent(void)
+{
+    if (s_dbg_wait_first) {
+        s_dbg_wait_first = false;
+        dbg_tail();
+    }
+}
+
+static void dbg_print(void)
+{
+    if (!s_dbg_pending || s_dbg_wait_first || s_resp_pending) return;
+    s_dbg_pending = false;
+    printf("[ctaphid] cmd %02x/%02x len %u%s: handler %lu ms, answer at %lu ms, "
+           "%lu keepalives, max gap %lu ms (progress %lu ms)\n",
+           s_dbg_cmd, s_dbg_cbor, (unsigned) s_dbg_len,
+           s_dbg_abandoned ? " ABANDONED" : "",
+           (unsigned long) s_dbg_handler_ms, (unsigned long) s_dbg_total_ms,
+           (unsigned long) s_dbg_kas, (unsigned long) s_dbg_max_ka_gap,
+           (unsigned long) s_dbg_max_prog_gap);
+}
+
+uint32_t fido_hid_dbg_max_ka_gap(void)
+{
+    return s_dbg_wait_first ? 0u : s_dbg_max_ka_gap;
+}
+#endif
+
 void fido_hid_task(void)
 {
     /* Run a complete request here, outside the USB callback, once the
-     * previous response is out (it shares s_resp_buf).  Its touch wait
-     * pumps tud_task(), and the callbacks then still get INIT, CANCEL and
-     * BUSY-refused requests (Phase 9 M3). */
+     * previous response is out (it shares s_resp_buf).  Its progress points
+     * and touch wait pump tud_task(), and the callbacks then still get
+     * INIT, CANCEL and BUSY-refused requests (Phase 9 M3). */
     if (s_busy_cid != 0u && !s_resp_pending) {
+        uint32_t cid = s_busy_cid;
+        s_ka_status = 0u;
+        s_ka_last   = HAL_GetTick();
+#if NIXTROPIC_DEBUG
+        s_dbg_start = s_dbg_last_ka = s_dbg_last_prog = s_ka_last;
+        s_dbg_max_ka_gap = s_dbg_max_prog_gap = s_dbg_kas = 0u;
+#endif
+        /* The cancel latch belongs to this request only. */
+        user_presence_clear_cancel();
         s_running = true;
-        dispatch_request(s_busy_cid);
+        if (!s_abandoned) {
+            dispatch_request(cid);
+        }
         s_running = false;
+        if (s_abandoned) {
+            s_resp_pending = false;      /* the stale answer never goes out */
+        }
+        user_presence_clear_cancel();
+#if NIXTROPIC_DEBUG
+        dbg_request_end();
+#endif
         reset_assembly();
-        s_busy_cid = 0u;
+        s_busy_cid  = 0u;
+        s_abandoned = false;
     }
-    while (emit_response_packet()) {
-        /* drain until backpressure or done */
+    /* Nothing overtakes a held one-packet answer. */
+    if (flush_pending() && !s_resync_pending) {
+        while (emit_response_packet()) {
+            /* drain until backpressure or done */
+        }
     }
+#if NIXTROPIC_DEBUG
+    dbg_print();
+#endif
+}
+
+void fido_hid_progress(void)
+{
+    if (!s_running || s_in_progress) return;
+    s_in_progress = true;
+#if NIXTROPIC_DEBUG
+    uint32_t t = HAL_GetTick();
+    if (t - s_dbg_last_prog > s_dbg_max_prog_gap) s_dbg_max_prog_gap = t - s_dbg_last_prog;
+    s_dbg_last_prog = t;
+#endif
+    if (flush_pending() && !s_abandoned) {
+        uint8_t  status = user_presence_is_awaiting() ? KA_UPNEEDED : KA_PROCESSING;
+        uint32_t now    = HAL_GetTick();
+        if (status != s_ka_status || (uint32_t)(now - s_ka_last) >= KA_INTERVAL_MS) {
+            uint8_t pkt[FIDO_HID_REPORT_LEN];
+            build_packet(pkt, s_busy_cid, FIDO_HID_CMD_INIT_FLAG | FIDO_HID_CMD_KEEPALIVE,
+                         &status, 1u);
+            if (push_packet(pkt)) {
+                s_ka_status = status;
+                s_ka_last   = now;
+#if NIXTROPIC_DEBUG
+                if (now - s_dbg_last_ka > s_dbg_max_ka_gap) s_dbg_max_ka_gap = now - s_dbg_last_ka;
+                s_dbg_last_ka = now;
+                s_dbg_kas++;
+#endif
+            }
+        }
+    }
+    /* Completes the IN transfer (TinyUSB frees the endpoint only here) and
+     * takes INIT / CANCEL / refused requests, as in the touch wait. */
+    tud_task();
+    s_in_progress = false;
+}
+
+bool fido_hid_is_running(void)
+{
+    return s_running;
 }
 
 void fido_hid_handle_packet(const uint8_t *pkt, size_t len)

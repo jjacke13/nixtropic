@@ -19,6 +19,7 @@
  */
 
 #include "user_presence.h"
+#include "ctaphid.h"
 #include "../platform/board.h"
 #include "../platform/led.h"
 
@@ -97,7 +98,12 @@ bool user_presence_is_awaiting(void)
 
 void user_presence_cancel(void)
 {
-    if (s_awaiting) s_cancel = true;
+    s_cancel = true;
+}
+
+void user_presence_clear_cancel(void)
+{
+    s_cancel = false;
 }
 
 up_result_t user_presence_check(uint32_t timeout_ms)
@@ -109,6 +115,12 @@ up_result_t user_presence_check(uint32_t timeout_ms)
         return UP_FAIL;
     }
 
+    /* Cancelled before the wait began (v0.3.1, Jan): no wait at all. */
+    if (s_cancel) {
+        led_set_state(LED_ERROR);
+        return UP_CANCEL;
+    }
+
     /* C1: refuse fresh-consent if button is already pressed.  No LED, no
      * wait — return UP_FAIL right now.  Caller maps to OPERATION_DENIED. */
     if (s_pressed) {
@@ -116,7 +128,6 @@ up_result_t user_presence_check(uint32_t timeout_ms)
         return UP_FAIL;
     }
 
-    s_cancel   = false;
     s_awaiting = true;
     led_set_state(LED_AWAITING_TOUCH);
 
@@ -131,7 +142,9 @@ up_result_t user_presence_check(uint32_t timeout_ms)
     while ((HAL_GetTick() - start) < timeout_ms) {
         /* Pump USB so the host does not time us out.  CTAPHID answers
          * INIT, takes CANCEL for this request and refuses the rest;
-         * CCID and lt-rpc wait (Phase 9 M3 dispatch policy). */
+         * CCID and lt-rpc wait (Phase 9 M3 dispatch policy).  For a FIDO
+         * request also KEEPALIVE UPNEEDED (v0.3.1). */
+        fido_hid_progress();
         tud_task();
         if (s_cancel) {
             break;
@@ -151,7 +164,6 @@ up_result_t user_presence_check(uint32_t timeout_ms)
         return UP_OK;
     }
     if (s_cancel) {
-        s_cancel = false;
         led_set_state(LED_ERROR);
         return UP_CANCEL;
     }

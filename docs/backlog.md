@@ -275,7 +275,9 @@ handle IN-endpoint backpressure; host tests for INIT/CANCEL/other CID during pro
 Windows HIL with captures. Also: one-packet replies sent while a request owns the
 buffers are dropped if the IN endpoint is busy (Jan, M3). Open in the same milestone:
 why GetInfo reported `alwaysUv` on after the Windows session (four setter paths, none
-seen in the captures).
+seen in the captures). Docs in the same release: a visible "Protocols" section that links CTAP 2.2
+(and 2.1, the level implemented), the OpenPGP card 3.4.1 spec, CCID 1.1 and ISO 7816-4, with the
+section each USB interface follows.
 
 ### 6.8 Retire superseded test suites
 

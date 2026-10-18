@@ -62,6 +62,14 @@ stdenv.mkDerivation {
     $CC $STRICT $SAN $INC tests/host/test_cose.c firmware/src/fido_hid/cose.c \
       firmware/src/fido_hid/cbor.c -o test_cose
     $CC $STRICT $SAN $INC tests/host/test_l3_result.c -o test_l3_result
+    $CC $STRICT $SAN $INC tests/host/test_ctaphid.c tests/host/mock_tusb.c \
+      firmware/src/fido_hid/ctaphid.c -o test_ctaphid
+    $CC $STRICT $SAN $INC -DNIXTROPIC_DEBUG=1 tests/host/test_ctaphid.c tests/host/mock_tusb.c \
+      firmware/src/fido_hid/ctaphid.c -o test_ctaphid_debug
+    $CC $STRICT $SAN $INC tests/host/test_user_presence.c tests/host/mock_tusb.c \
+      firmware/src/fido_hid/ctaphid.c firmware/src/fido_hid/user_presence.c -o test_user_presence
+    $CC $STRICT $SAN $INC -DNIXTROPIC_DEBUG=1 tests/host/test_rpc_gate.c tests/host/mock_tusb.c \
+      firmware/src/hid_rpc/rpc.c -o test_rpc_gate
     $CC $STRICT $SAN $INC tests/host/test_trezor_rng.c firmware/src/platform/trezor_rng.c -o test_trezor_rng
     PGP="firmware/src/openpgp/openpgp_state.c firmware/src/openpgp/pgp_pin.c firmware/src/openpgp/pgp_lifecycle.c"
     $CC $STRICT $SAN $INC -DNIXTROPIC_HOST_TEST tests/host/test_openpgp_state.c tests/host/mock_tropic.c \
@@ -105,6 +113,10 @@ stdenv.mkDerivation {
     ./test_pin_token
     ./test_cose
     ./test_l3_result
+    ./test_ctaphid
+    ./test_ctaphid_debug > /dev/null && echo "test_ctaphid (debug build): all passed"
+    ./test_user_presence
+    ./test_rpc_gate
     ./test_trezor_rng
     ./test_openpgp_state
     ./test_openpgp_applet

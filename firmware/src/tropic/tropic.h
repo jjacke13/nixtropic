@@ -67,6 +67,13 @@ int tropic_chip_id_read(uint8_t *out, size_t out_size);
 int tropic_l3_session_ensure(void);
 
 /**
+ * @brief Register a function called before every L3 command and between the
+ *        handshake steps — never from inside libtropic (v0.3.1: main.c
+ *        registers fido_hid_progress for CTAPHID KEEPALIVE).  NULL = none.
+ */
+void tropic_set_progress_hook(void (*fn)(void));
+
+/**
  * @brief Generate an ECC keypair in the given slot.
  * @param slot   0..31
  * @param curve  0 = Ed25519, 1 = P-256
