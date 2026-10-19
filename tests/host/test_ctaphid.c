@@ -276,6 +276,25 @@ static void test_busy_endpoint_defers(void)
     CHECK(is_keepalive(mock_hid_sent[0], cid, 1));
 }
 
+static void during_slow_host(void)
+{
+    /* chip calls 60 ms apart (v0.3.1 HIL: the KEEPALIVE gap was twice the
+     * progress gap, every second report refused) */
+    mock_hid_autobusy = mock_hid_slow_host = true;
+    for (uint32_t i = 0; i < 3; i++) {
+        mock_tick = 1000u + 60u * i;
+        fido_hid_progress();
+    }
+}
+
+static void test_slow_host_every_call_sends(void)
+{
+    reset_all();
+    start_request(during_slow_host);
+    fido_hid_task();
+    CHECK(count_keepalives() == 3);      /* pump before the report frees the last one */
+}
+
 static void inject_init_b(void)
 {
     const uint8_t nonce[8] = {7, 7, 7, 7, 7, 7, 7, 7};
@@ -841,6 +860,7 @@ int main(void)
     test_status_change_sends_at_once();
     test_no_keepalive_after_answer();
     test_busy_endpoint_defers();
+    test_slow_host_every_call_sends();
     test_init_reply_not_lost();
     test_new_request_during_progress_is_busy();
     test_cancel_while_processing_completes();

@@ -46,6 +46,7 @@ CMD_MSG       = 0x03
 CMD_INIT      = 0x06
 CMD_CBOR      = 0x10
 CMD_CANCEL    = 0x11
+CMD_KEEPALIVE = 0x3B
 CMD_ERROR     = 0x3F
 
 CID_BROADCAST = 0xFFFFFFFF
@@ -135,6 +136,8 @@ def transact(dev: hid.Device, cid: int, cmd: int, payload: bytes,
         b4     = chunk[4]
         if resp_cid is None:
             # Expect INIT packet
+            if rc_cid == cid and b4 == (CMD_INIT_FLAG | CMD_KEEPALIVE):
+                continue                 # KEEPALIVE: request still running
             if not (b4 & CMD_INIT_FLAG):
                 continue                 # spurious CONT from a different
                                          # transaction; ignore

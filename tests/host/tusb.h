@@ -11,6 +11,7 @@ extern bool     mock_hid_ready;                 /* IN endpoint free */
 /* Like the hardware: a sent report keeps the endpoint busy until the next
  * tud_task() completes the transfer.  Off = always free after a send. */
 extern bool     mock_hid_autobusy;
+extern bool     mock_hid_slow_host;             /* autobusy: a pump frees it only once mock_tick moved */
 extern int      mock_hid_refuse;                /* refuse the next N reports while ready */
 extern int      mock_hid_nsent;
 extern uint8_t  mock_hid_sent[MOCK_HID_MAX_SENT][64];

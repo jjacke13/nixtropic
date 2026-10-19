@@ -718,6 +718,11 @@ void fido_hid_progress(void)
     if (t - s_dbg_last_prog > s_dbg_max_prog_gap) s_dbg_max_prog_gap = t - s_dbg_last_prog;
     s_dbg_last_prog = t;
 #endif
+    /* Pump first: it completes the previous IN transfer (TinyUSB frees the
+     * endpoint only here, and the host polls some time after a report, so a
+     * pump right after our report finds it still busy) and takes INIT /
+     * CANCEL / refused requests, as in the touch wait. */
+    tud_task();
     if (flush_pending() && !s_abandoned) {
         uint8_t  status = user_presence_is_awaiting() ? KA_UPNEEDED : KA_PROCESSING;
         uint32_t now    = HAL_GetTick();
@@ -736,9 +741,6 @@ void fido_hid_progress(void)
             }
         }
     }
-    /* Completes the IN transfer (TinyUSB frees the endpoint only here) and
-     * takes INIT / CANCEL / refused requests, as in the touch wait. */
-    tud_task();
     s_in_progress = false;
 }
 

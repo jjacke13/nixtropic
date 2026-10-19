@@ -277,6 +277,8 @@ def read_reply(h, cid: int, timeout_s: float):
         pkt = h.read(64, timeout=100)
         if not pkt or len(pkt) < 64 or struct.unpack(">I", pkt[0:4])[0] != cid:
             continue
+        if cmd is None and pkt[4] == 0xBB:   # KEEPALIVE: request still running
+            continue
         if cmd is None:
             if not pkt[4] & 0x80:
                 continue
