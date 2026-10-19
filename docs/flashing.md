@@ -4,7 +4,7 @@ nixtropic replaces the firmware of the board's **STM32U535** microcontroller. Fl
 uses the STM32's built-in USB DFU bootloader, which lives in ROM: a bad flash can
 always be redone.
 
-!!! danger "Upgrading from v0.2 or an earlier v0.3 build erases your keys"
+!!! danger "Upgrading from v0.2 or a pre-release v0.3 development build erases your keys"
     The on-chip storage layout changed in v0.3.0 and is **not migrated**. After the
     upgrade you reset both applications, and everything they held is gone:
 
@@ -18,7 +18,7 @@ always be redone.
       ones.
 
     The reset steps are in the [changelog](changelog.md#upgrading). A fresh dongle
-    needs none of this.
+    needs none of this. Released v0.3.0 to v0.3.1 keeps everything.
 
 ## The dongle's USB identities
 

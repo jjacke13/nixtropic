@@ -51,8 +51,9 @@ independent ones.
 | gpg end to end | 7/7 | 7/7 ¹ |
 | Windows 11: FIDO2 registration, login, slow touch, Cancel, PIN change in Settings, with USB captures | pass | — |
 
-¹ On the debug build one commit earlier; the last commit changed only two FIDO2 PIN
-code paths, which the FIDO2 suite covers on both builds.
+¹ Debug build of commit `b674924`. Commit `25c17fc` then added two KEEPALIVE points in
+FIDO2 PIN code; the FIDO2 suite ran on `25c17fc` in both builds. The docs commits after
+it do not change the binaries.
 
 ## Validation of v0.3.0
 

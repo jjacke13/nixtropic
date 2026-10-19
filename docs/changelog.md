@@ -4,7 +4,7 @@
 
 FIDO2 on Windows with a PIN. A bug-fix release on top of v0.3.0.
 
-### Upgrading
+### Upgrading from v0.3.0
 
 Flash over v0.3.0; nothing else to do. The storage layout is unchanged, so FIDO2
 credentials, the FIDO2 PIN and the OpenPGP keys stay. (From v0.2, follow the v0.3.0

@@ -62,9 +62,9 @@ USB full speed, VID:PID `cafe:4001`. Debug code is compiled out of the release b
 not hidden; a Nix check (`release-surface`) fails the build if debug symbols reach
 the release image.
 
-The FIDO interface speaks CTAPHID (CTAP 2.2 USB transport) with CTAP 2.1 commands; the
-CCID interface carries ISO/IEC 7816-4 APDUs for the OpenPGP card 3.4.1 application. Links
-and sections: [references, Protocols](references.md#protocols).
+The FIDO interface speaks CTAPHID (CTAP 2.2 USB transport) with selected CTAP 2.1
+commands; the CCID interface carries ISO/IEC 7816-4 APDUs for the OpenPGP card 3.4.1
+application. Links and sections: [references, Protocols](references.md#protocols).
 
 ## Firmware modules
 
