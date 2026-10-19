@@ -38,6 +38,7 @@
 #include "ctap2.h"
 #include "cbor.h"
 #include "slots.h"
+#include "ctaphid.h"
 
 #include "tropic/tropic.h"
 
@@ -118,6 +119,7 @@ static int regen_eph(void)
         uint8_t any = 0;
         for (int i = 0; i < 32; ++i) any |= s_eph_priv[i];
         if (any != 0) {
+            fido_hid_progress();     /* the multiply below takes ~250 ms (v0.3.1 HIL) */
             /* Compute public key. trezor_crypto returns 65-B uncompressed
              * form: 0x04 || X || Y. */
             if (ecdsa_get_public_key65(&nist256p1, s_eph_priv, s_eph_pub65) != 0) {
@@ -139,6 +141,7 @@ static int compute_shared_key(const uint8_t platform_pub_xy[64],
     memcpy(&peer65[1], platform_pub_xy, 64);
 
     uint8_t shared65[65];
+    fido_hid_progress();         /* ~250 ms of software P-256 follows (v0.3.1 HIL) */
     if (ecdh_multiply(&nist256p1, s_eph_priv, peer65, shared65) != 0) {
         return -1;
     }

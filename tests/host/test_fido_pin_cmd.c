@@ -57,6 +57,8 @@ int ctap2_config(const uint8_t *q, size_t n, uint8_t *resp, size_t m)
 void ctap2_assertion_reset(void) {}
 void credmgmt_reset_iterator(void) {}
 up_result_t user_presence_check(uint32_t timeout_ms) { (void) timeout_ms; return UP_OK; }
+static int s_progress;
+void fido_hid_progress(void) { s_progress++; }
 
 /* trezor rand.c draws from random32(); the firmware supplies it from the
  * TRNG.  Deterministic here (it only blinds the point multiplication). */
@@ -248,13 +250,17 @@ static void fresh(void)
 
 static void test_set_and_retries(void)
 {
+    int p = s_progress;
     fresh();
+    CHECK(s_progress > p);                       /* before the P-256 key generation */
     CHECK(retries() == (int) FIDO_PIN_ROUNDS);   /* no PIN: maxRetries */
     CHECK(set_pin("12") == CTAP2_ERR_PIN_POLICY_VIOLATION);
     CHECK(set_pin("1234") == CTAP2_OK);
     CHECK(set_pin("5678") == CTAP2_ERR_PIN_AUTH_INVALID);
     CHECK(retries() == (int) FIDO_PIN_ROUNDS);
+    p = s_progress;
     CHECK(get_token("1234") == CTAP2_OK && pin_token_is_valid());
+    CHECK(s_progress > p);                       /* before the ECDH */
 }
 
 /* D10: a bad pinUvAuthParam is answered before any attempt is spent. */
