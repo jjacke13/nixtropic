@@ -261,23 +261,19 @@ M2 review; plan it with the M3 FIDO work.
 Fixed: requests run from the main loop, never inside a USB callback; one
 request and one touch wait at a time.
 
-### 6.7 CTAPHID KEEPALIVE and reply backpressure — NEXT (v0.3.1, breaks Windows)
+### 6.7 CTAPHID KEEPALIVE and reply backpressure — ✅ DONE (v0.3.1)
 
-No KEEPALIVE packets during processing or a touch wait (CTAP 2.2 §11.2.9.1.7:
-SHOULD, at least every 100 ms; PROCESSING = 1, UPNEEDED = 2). Linux clients wait;
-**Windows does not** (usbmon captures, 18 Oct 2026): it abandoned getPinUvAuthToken
-after 2.6 s and changePIN after 6.6 s, each answered successfully 1–2 ms later, so
-registration loops and a PIN change reports an error. v0.2 worked because its PIN
-path was faster. Plan (Jan): one progress function on the active CID, called between
-chip calls (`tropic.c` `l3_done`) and from the touch-wait loop; never re-dispatch the
-active request or re-enter libtropic (debug lt-rpc must be held back while FIDO works);
-handle IN-endpoint backpressure; host tests for INIT/CANCEL/other CID during progress;
-Windows HIL with captures. Also: one-packet replies sent while a request owns the
-buffers are dropped if the IN endpoint is busy (Jan, M3). Open in the same milestone:
-why GetInfo reported `alwaysUv` on after the Windows session (four setter paths, none
-seen in the captures). Docs in the same release: a visible "Protocols" section that links CTAP 2.2
-(and 2.1, the level implemented), the OpenPGP card 3.4.1 spec, CCID 1.1 and ISO 7816-4, with the
-section each USB interface follows.
+Windows abandoned silent requests (getPinUvAuthToken after 2.6 s, changePIN after
+6.6 s; usbmon, 18 Oct 2026). v0.3.1 sends KEEPALIVE from a progress function called
+before every chip call and in the touch-wait loop, answers INIT resync and CANCEL during
+a request, queues one-packet replies when the IN endpoint is busy, and holds the debug
+lt-rpc while FIDO2 runs. Design: `docs/history/V0.3.1-KEEPALIVE-DESIGN.md`. Verified on
+Windows 11 with captures (19 Oct 2026; longest silence 240 ms) and in the
+[testing](testing.md#keepalive-timing) timings. Left over: the PIN operations and Reset
+reach ~250 ms because the software P-256 steps cannot be interrupted (CTAP's SHOULD is
+100 ms). The precomputed P-256 table would speed them up but needs about 74 KB of flash,
+more than the headroom (§7). The `alwaysUv` question is 6.10. The
+Protocols section is in [references](references.md#protocols).
 
 ### 6.8 Retire superseded test suites
 
@@ -297,10 +293,19 @@ credMgmt and 32 slots; `tools/validate_fido_m3.py` replaces them (M6 cleanup).
 - `validate-openpgp.sh` needs `pcsc_scan`: run it as `nix run .#validate-openpgp` (the
   dev shell lacks it).
 
+### 6.10 alwaysUv after the first PIN — decision open
+
+Setting the first FIDO2 PIN after a reset also turns on alwaysUv (`fido_pin_set` →
+`slots_set_pin_bound(1, 1)`, Phase 6 design). That is why GetInfo reported alwaysUv on
+after the 18 Oct Windows session: Windows Settings reset the key and set a new PIN.
+Options: keep it (documented in [Windows](windows.md#fido2-with-a-pin)), or leave
+alwaysUv alone on the first PIN so the site decides. A security-behaviour change, so not
+in a bug-fix release; the owner decides.
+
 ## 7. Performance / flash budget
 
-v0.3.0 release `firmware.bin` = 223 188 B / 256 KB (85 %), about 39 KB of headroom
-(the M5 decryption-key wrap cost about 1.3 KB).
+v0.3.1 release `firmware.bin` = 223 364 B / 256 KB (85 %), about 38 KB of headroom
+(the M5 decryption-key wrap cost about 1.3 KB; v0.3.1 KEEPALIVE about 0.2 KB).
 
 PIV applet (§4.4): ~15-25 KB (also fits).
 Attestation slot (§4.5): ~1 KB.

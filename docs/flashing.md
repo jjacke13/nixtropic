@@ -70,7 +70,7 @@ nix run github:jjacke13/nixtropic#flash-stock        # back to the stock firmwar
 ```
 
 The dongle restarts into the new firmware by itself. A pinned version:
-`nix run github:jjacke13/nixtropic/v0.3.0#flash-open`.
+`nix run github:jjacke13/nixtropic/v0.3.1#flash-open`.
 
 !!! warning "Release and debug builds"
     `flash-open` installs the **release** build: FIDO2 and the OpenPGP card, nothing

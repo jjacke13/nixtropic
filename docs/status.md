@@ -1,8 +1,9 @@
 # Status
 
-**Current release: v0.3.0** (October 2026), a development release.
+**Current release: v0.3.1** (October 2026), a development release: v0.3.0 plus the
+Windows FIDO2 fix (CTAPHID KEEPALIVE).
 
-## What v0.3.0 is
+## What v0.3 is
 
 - A working FIDO2 / WebAuthn authenticator and OpenPGP card on the TS1302 devkit, in
   daily use by its author.
@@ -11,7 +12,7 @@
 - Built reproducibly from pinned sources, with host tests, mutation testing and
   hardware-in-the-loop validation on every milestone ([testing](testing.md)).
 
-## What v0.3.0 is not
+## What v0.3 is not
 
 - **Not a production security key.** It uses Tropic Square's public development
   pairing key; someone holding the dongle can make it sign. See the
@@ -20,7 +21,6 @@
 - Not protected against physical attacks on the STM32 (no read-out protection, no
   secure boot) or on the chip (see the laser fault-injection advisory).
 - Not a finished FIDO 2.1 authenticator: it reports `FIDO_2_0`.
-- Not usable for FIDO2 on Windows when a PIN is set (v0.3.1 will send KEEPALIVE).
 
 ## Compatibility
 
@@ -30,11 +30,29 @@
 | Host OS | NixOS (nixos-26.05) | Debian/Ubuntu steps documented, not CI-tested |
 | Host stack | GnuPG 2.4, pcsc-lite + patched libccid, OpenSSH via gpg-agent, libfido2 | `scdaemon` with `disable-ccid` + `pcsc-shared` |
 | Browsers | Firefox, Brave (Linux) | Chrome expected to work; macOS untested |
-| Windows 11 | OpenPGP card with Gpg4win/Kleopatra: sign, encrypt, decrypt | **FIDO2 with a PIN fails** (no KEEPALIVE, Windows times out); fixed in v0.3.1 ([Windows](windows.md)) |
+| Windows 11 | OpenPGP card with Gpg4win/Kleopatra; FIDO2 with a PIN in Brave and Settings (v0.3.1) | FIDO2 with a PIN fails in v0.3.0 (no KEEPALIVE); see [Windows](windows.md) |
 | Sites | webauthn.io, webauthn.me (v0.3); Proton account 2FA (v0.2) | attestation `none` |
 | FIDO2 | CTAP 2.0 + CTAP 2.1 credential management, authenticatorConfig, permission tokens | EdDSA and ES256; no hmac-secret, credProtect, PIN protocol 2 |
 | OpenPGP card | 3.4.1 subset: Ed25519 sign/auth, Cv25519 decrypt, PINs, UIF, forcesig | no RSA, no key import, no KDF-DO |
 | Capacity | 29 FIDO credentials, 3 OpenPGP keys | every FIDO credential uses a chip slot |
+
+## Validation of v0.3.1
+
+Hardware runs on 19 October 2026, on the project's dongle: release `firmware.bin` sha256
+`8bea9a51…` and debug `1fe4eb65…`, the binaries tagged v0.3.1. The author's runs, not
+independent ones.
+
+| Suite | Release | Debug |
+|---|---|---|
+| Host tests (17 programs and 2 script tests, sanitizers on), `nix flake check` | pass | — |
+| FIDO2 suite `validate_fido_m3.py` | 60/60 | 60/60 |
+| OpenPGP APDU suite `validate-openpgp-m4.sh` | 42/42 | 42/42 ¹ |
+| OpenPGP suite `validate-openpgp` | 16/16 | 16/16 ¹ |
+| gpg end to end | 7/7 | 7/7 ¹ |
+| Windows 11: FIDO2 registration, login, slow touch, Cancel, PIN change in Settings, with USB captures | pass | — |
+
+¹ On the debug build one commit earlier; the last commit changed only two FIDO2 PIN
+code paths, which the FIDO2 suite covers on both builds.
 
 ## Validation of v0.3.0
 

@@ -46,6 +46,7 @@ nix build .#host-tests      # or: nix flake check
 | `test_pin_md_kernel` | the MAC-and-Destroy PIN binding: setup, verify, change, the last-try case, faults at every call |
 | `test_openpgp_state`, `test_openpgp_applet` | OpenPGP storage and APDU behaviour, PIN rules, lifecycle, fault sweeps over generate and reset |
 | `test_pgp_dec` | decryption-key seal: AES-GCM test vector, a golden record made outside the code, tamper on every field, nonce freshness, no key or PIN in any data slot |
+| `test_ctaphid` (release and debug), `test_user_presence`, `test_rpc_gate` | CTAPHID transport: KEEPALIVE cadence and status, a busy or slow IN endpoint, INIT resync and CANCEL during a request, reply ordering; touch wait; debug lt-rpc held while FIDO2 runs |
 | `test-dfu-flash.sh`, `test-lib-fixture.sh` | the flashing script's error handling, the PIN fixture loader |
 
 ## Mutation testing
@@ -73,6 +74,22 @@ reset the applications), so they use a dedicated test dongle and the PINs in
 The runs go through a shared terminal so the owner sees every prompt and presses SW1
 when asked. Results per milestone are in the
 [milestone log](https://github.com/jjacke13/nixtropic/blob/main/docs/history/STATUS-log.md).
+
+### KEEPALIVE timing
+
+The debug build prints one line per CTAPHID request: handler time, KEEPALIVE count, and
+the longest gap between packets until the answer is accepted by the USB stack. v0.3.1,
+`validate_fido_m3.py` on the dongle, 19 October 2026:
+
+| Request | Longest gap | What fills it |
+|---|---|---|
+| GetInfo, MakeCredential, credential management, authenticatorConfig | about 108 ms | one chip operation |
+| GetAssertion, GetNextAssertion | 210 ms | the final ES256 signature |
+| ClientPIN token, setPIN, changePIN | 251 ms | P-256 key agreement in software on the STM32 |
+| Reset | 250 ms | a new P-256 key pair in software after the wipe |
+
+CTAP recommends a KEEPALIVE at least every 100 ms (a SHOULD over USB); the software
+P-256 steps cannot be interrupted. Windows captures show a longest silence of 240 ms.
 
 ## Review
 

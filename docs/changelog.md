@@ -1,5 +1,46 @@
 # Changelog
 
+## v0.3.1 — October 2026
+
+FIDO2 on Windows with a PIN. A bug-fix release on top of v0.3.0.
+
+### Upgrading
+
+Flash over v0.3.0; nothing else to do. The storage layout is unchanged, so FIDO2
+credentials, the FIDO2 PIN and the OpenPGP keys stay. (From v0.2, follow the v0.3.0
+steps below.)
+
+### Fixes
+
+- **CTAPHID KEEPALIVE.** While a FIDO2 request runs, the dongle now sends KEEPALIVE on
+  the request's channel: PROCESSING between chip operations, UPNEEDED while it waits
+  for SW1 ([CTAP 2.2 §11.2.9.1.7](https://fidoalliance.org/specs/fido-v2.2-ps-20250714/fido-client-to-authenticator-protocol-v2.2-ps-20250714.html#usb-hid-keepalive)).
+  Windows no longer abandons the PIN token (2.6 s) or a PIN change (6.6 s):
+  registration, login, PIN change in Settings, a slow touch and Cancel all work
+  ([Windows](windows.md)). The longest gap is about 250 ms, in the PIN operations;
+  see [testing](testing.md#keepalive-timing).
+- **Channel resync during a request.** A CTAPHID INIT on the busy channel now abandons
+  the running request as CTAP requires (§11.2.9.1.3); its answer is dropped and the
+  INIT is answered.
+- **CANCEL before the touch wait.** A CANCEL that arrives while a request is still
+  working, before it waits for SW1, now ends the wait at once with
+  `CTAP2_ERR_KEEPALIVE_CANCEL`; before, it was lost.
+- One-packet replies (INIT, errors) are queued when the IN endpoint is busy instead of
+  dropped.
+- Debug build: the lt-rpc interface answers BUSY while a FIDO2 request runs, so it
+  never enters the chip library in the middle of one.
+
+### Documentation
+
+- [Windows](windows.md): v0.3.1 results, the alwaysUv-after-reset note.
+- [References](references.md#protocols): which specification each USB interface
+  follows, with links: CTAP 2.2 for the HID transport, CTAP 2.1 for the commands,
+  OpenPGP card 3.4.1, CCID 1.1, ISO/IEC 7816-4.
+
+### Sizes
+
+Release `firmware.bin` 223 364 B, debug 229 776 B.
+
 ## v0.3.0 — October 2026
 
 Phase 9: hardening. A development release, like v0.2; see [status](status.md) for what
@@ -100,7 +141,7 @@ After flashing v0.3.0 over v0.2 or an earlier v0.3 build:
   it works, and Windows abandons a silent request after a few seconds; the PIN token
   (about 2.6 s) and a PIN change (about 6.6 s) take longer since the crash-safe PIN
   storage. Registration then loops, and a PIN change reports an error although it
-  completed. The OpenPGP card works on Windows. Fix planned for v0.3.1. Linux clients
+  completed. The OpenPGP card works on Windows. Fixed in v0.3.1. Linux clients
   are not affected.
 
 ### Sizes

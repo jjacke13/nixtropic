@@ -1,6 +1,6 @@
 # Security model
 
-This page states what nixtropic v0.3.0 protects, against whom, and what it does not.
+This page states what nixtropic v0.3 protects, against whom, and what it does not.
 Facts about the chips cite the vendor documents listed in [references](references.md).
 To report a vulnerability, see
 [SECURITY.md](https://github.com/jjacke13/nixtropic/blob/main/SECURITY.md).

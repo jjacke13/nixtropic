@@ -14,7 +14,7 @@ and keeps the keys inside the chip. It is built reproducibly with Nix and tested
 against a simulated chip, with planted bugs, and on real hardware.
 
 !!! warning "Development release — not a production security key"
-    v0.3.0 uses Tropic Square's **public development pairing key**: anyone holding the
+    v0.3 uses Tropic Square's **public development pairing key**: anyone holding the
     dongle can make it sign. It fixes the known host-side attack paths of v0.2 and stores
     no readable secrets on the chip; it does not defend against physical attacks. Read the [security model](security.md)
     before you rely on it.

@@ -35,12 +35,22 @@ at commit `90747ca`.
 
 ## Protocols
 
+Which specification each USB interface of the dongle follows:
+
+| USB interface | Follows | Key sections |
+|---|---|---|
+| FIDO2 (HID, usage page `0xF1D0`) | **CTAP 2.2** for the USB HID transport; **CTAP 2.1** for the authenticator commands (GetInfo reports `FIDO_2_0`, see [status](status.md)) | transport: [§11.2 USB](https://fidoalliance.org/specs/fido-v2.2-ps-20250714/fido-client-to-authenticator-protocol-v2.2-ps-20250714.html#usb), [KEEPALIVE](https://fidoalliance.org/specs/fido-v2.2-ps-20250714/fido-client-to-authenticator-protocol-v2.2-ps-20250714.html#usb-hid-keepalive), [CANCEL](https://fidoalliance.org/specs/fido-v2.2-ps-20250714/fido-client-to-authenticator-protocol-v2.2-ps-20250714.html#usb-hid-cancel), [INIT](https://fidoalliance.org/specs/fido-v2.2-ps-20250714/fido-client-to-authenticator-protocol-v2.2-ps-20250714.html#usb-hid-init); commands: [§6 Authenticator API](https://fidoalliance.org/specs/fido-v2.1-ps-20210615/fido-client-to-authenticator-protocol-v2.1-ps-20210615.html#authenticator-api), [§8 Message encoding](https://fidoalliance.org/specs/fido-v2.1-ps-20210615/fido-client-to-authenticator-protocol-v2.1-ps-20210615.html#message-encoding) |
+| Smart card (CCID) | **USB CCID 1.1** for the transport, **ISO/IEC 7816-4** for the APDUs, **OpenPGP card 3.4.1** for the application | Ed25519 / Cv25519 keys, PINs, touch policy (UIF): see [card setup](card-setup.md) |
+| Debug build only: CDC console, lt-rpc HID | project-specific | [architecture](architecture.md) |
+
 | Specification | Version |
 |---|---|
-| [FIDO CTAP](https://fidoalliance.org/specs/fido-v2.1-ps-20210615/fido-client-to-authenticator-protocol-v2.1-ps-20210615.html) | 2.1 Proposed Standard, 2021-06-15 |
+| [FIDO CTAP 2.2](https://fidoalliance.org/specs/fido-v2.2-ps-20250714/fido-client-to-authenticator-protocol-v2.2-ps-20250714.html) | Proposed Standard, 2025-07-14 (USB HID transport) |
+| [FIDO CTAP 2.1](https://fidoalliance.org/specs/fido-v2.1-ps-20210615/fido-client-to-authenticator-protocol-v2.1-ps-20210615.html) | Proposed Standard, 2021-06-15 (the command level implemented) |
 | [W3C WebAuthn](https://www.w3.org/TR/webauthn-2/) | Level 2 |
 | [OpenPGP smart card application](https://gnupg.org/ftp/specs/OpenPGP-smart-card-application-3.4.1.pdf) | 3.4.1 |
-| USB-IF Smart Card CCID class | 1.1 |
+| [USB-IF Smart Card CCID class](https://www.usb.org/sites/default/files/DWG_Smart-Card_CCID_Rev110.pdf) | 1.1 |
+| [ISO/IEC 7816-4](https://www.iso.org/standard/77180.html) | 2020 (commands and responses; paywalled) |
 | [Noise Protocol Framework](https://noiseprotocol.org/noise.html) | revision 34 |
 
 ## Related projects
