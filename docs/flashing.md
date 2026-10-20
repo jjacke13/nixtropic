@@ -18,7 +18,7 @@ always be redone.
       ones.
 
     The reset steps are in the [changelog](changelog.md#upgrading). A fresh dongle
-    needs none of this. From released v0.3.0 on, upgrades keep everything.
+    needs none of this. Upgrading released v0.3.0 or v0.3.1 to v0.3.2 keeps everything.
 
 ## The dongle's USB identities
 

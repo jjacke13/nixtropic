@@ -309,8 +309,8 @@ security hole; deferred until after FOSSCOMM.
 
 - Extended capabilities (`C0`) advertise GET CHALLENGE and key import; neither is
   implemented (both answer `6D00`). Clear the two bits.
-- A `permanent` touch policy accepts further writes, even of the same value; the spec
-  rejects every write once it is permanent.
+- A `permanent` touch policy accepts a repeated write of `02` (switching it off is
+  refused); the spec requires every write to abort once the value is `02`.
 - A refused or timed-out touch answers `6982`; the spec recommends `6600` (a SHOULD).
 - Docs: "until unplug" should read "until the card is reset" (a CCID power cycle also
   clears it), and the touch-on / PIN-once presets are this project's choice: the spec's
