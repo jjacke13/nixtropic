@@ -3,7 +3,7 @@
 nixtropic targets one board: the **Tropic Square TS1302 USB devkit**. Other TROPIC01
 boards are not supported.
 
-## Versions in v0.3.1
+## Versions in v0.3.2
 
 | Component | Version | Source |
 |---|---|---|
@@ -15,7 +15,7 @@ boards are not supported.
 | TinyUSB | 0.20.0 | `flake.lock` |
 | STM32U5 HAL / CMSIS device | 1.6.2 / 1.4.2 | `flake.lock` |
 | Toolchain | Arm GNU 15.2 (nixpkgs nixos-26.05) | `flake.lock` |
-| Firmware size (release) | 223 364 B of 256 KB flash (85 %) | build of v0.3.1 |
+| Firmware size (release) | 223 460 B of 256 KB flash (85 %) | build of v0.3.2 |
 
 SDK compatibility (from libtropic’s compatibility table): libtropic 3.2.1 and 4.0.0
 support chip application firmware 1.0.0–2.0.0; 4.1.0 adds 2.1.0; 4.2.0 adds 2.2.0.

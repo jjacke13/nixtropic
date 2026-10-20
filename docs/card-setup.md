@@ -92,6 +92,9 @@ it for all. When on, every signature, decryption and SSH authentication waits up
 15 s for a press of SW1 (the LED blinks). `permanent` cannot be switched off again;
 only a factory reset clears it.
 
+Needs v0.3.2 or later: older firmware did not announce the button, and gpg refused
+`uif` as not supported.
+
 ### Generate keys
 
 ```text

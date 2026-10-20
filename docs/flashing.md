@@ -18,7 +18,7 @@ always be redone.
       ones.
 
     The reset steps are in the [changelog](changelog.md#upgrading). A fresh dongle
-    needs none of this. Released v0.3.0 to v0.3.1 keeps everything.
+    needs none of this. From released v0.3.0 on, upgrades keep everything.
 
 ## The dongle's USB identities
 
@@ -70,7 +70,7 @@ nix run github:jjacke13/nixtropic#flash-stock        # back to the stock firmwar
 ```
 
 The dongle restarts into the new firmware by itself. A pinned version:
-`nix run github:jjacke13/nixtropic/v0.3.1#flash-open`.
+`nix run github:jjacke13/nixtropic/v0.3.2#flash-open`.
 
 !!! warning "Release and debug builds"
     `flash-open` installs the **release** build: FIDO2 and the OpenPGP card, nothing

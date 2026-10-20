@@ -1,5 +1,26 @@
 # Changelog
 
+## v0.3.2 — October 2026
+
+The touch policy can be changed with gpg. A one-fix release on top of v0.3.1.
+
+### Upgrading from v0.3.0 or v0.3.1
+
+Flash over it; nothing else to do. FIDO2 credentials, the FIDO2 PIN and the OpenPGP
+keys stay.
+
+### Fixes
+
+- **`uif` in gpg.** The card now announces its button (DO `7F74` General Feature
+  Management, `81 01 20`, OpenPGP card 3.4.1 §4.1.3.2), in Application Related Data
+  and by itself. Before, gpg answered "This command is not supported by this card" to
+  `uif`, and `gpg --card-status` showed no UIF line. See
+  [card setup](card-setup.md#touch-policy-uif).
+
+### Sizes
+
+Release `firmware.bin` 223 460 B, debug 229 888 B.
+
 ## v0.3.1 — October 2026
 
 FIDO2 on Windows with a PIN. A bug-fix release on top of v0.3.0.

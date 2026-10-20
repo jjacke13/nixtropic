@@ -302,9 +302,23 @@ Options: keep it (documented in [Windows](windows.md#fido2-with-a-pin)), or leav
 alwaysUv alone on the first PIN so the site decides. A security-behaviour change, so not
 in a bug-fix release; the owner decides.
 
+### 6.11 OpenPGP card spec details (review, 20 Oct 2026)
+
+Found while checking the PIN and touch policy against OpenPGP card 3.4.1. None is a
+security hole; deferred until after FOSSCOMM.
+
+- Extended capabilities (`C0`) advertise GET CHALLENGE and key import; neither is
+  implemented (both answer `6D00`). Clear the two bits.
+- A `permanent` touch policy accepts further writes, even of the same value; the spec
+  rejects every write once it is permanent.
+- A refused or timed-out touch answers `6982`; the spec recommends `6600` (a SHOULD).
+- Docs: "until unplug" should read "until the card is reset" (a CCID power cycle also
+  clears it), and the touch-on / PIN-once presets are this project's choice: the spec's
+  baseline is touch off and one signature per PIN.
+
 ## 7. Performance / flash budget
 
-v0.3.1 release `firmware.bin` = 223 364 B / 256 KB (85 %), about 38 KB of headroom
+v0.3.2 release `firmware.bin` = 223 460 B / 256 KB (85 %), about 38 KB of headroom
 (the M5 decryption-key wrap cost about 1.3 KB; v0.3.1 KEEPALIVE about 0.2 KB).
 
 PIV applet (§4.4): ~15-25 KB (also fits).

@@ -1,7 +1,7 @@
 # Status
 
-**Current release: v0.3.1** (October 2026), a development release: v0.3.0 plus the
-Windows FIDO2 fix (CTAPHID KEEPALIVE).
+**Current release: v0.3.2** (October 2026), a development release: v0.3.0 plus the
+Windows FIDO2 fix (CTAPHID KEEPALIVE, v0.3.1) and the gpg touch-policy fix (v0.3.2).
 
 ## What v0.3 is
 
@@ -35,6 +35,21 @@ Windows FIDO2 fix (CTAPHID KEEPALIVE).
 | FIDO2 | CTAP 2.0 + CTAP 2.1 credential management, authenticatorConfig, permission tokens | EdDSA and ES256; no hmac-secret, credProtect, PIN protocol 2 |
 | OpenPGP card | 3.4.1 subset: Ed25519 sign/auth, Cv25519 decrypt, PINs, UIF, forcesig | no RSA, no key import, no KDF-DO |
 | Capacity | 29 FIDO credentials, 3 OpenPGP keys | every FIDO credential uses a chip slot |
+
+## Validation of v0.3.2
+
+Hardware runs on 20 October 2026, on the project's dongle: release `firmware.bin` sha256
+`bf3f7feb…` and debug `7886f981…`, the binaries tagged v0.3.2. The author's runs, not
+independent ones.
+
+| Suite | Release | Debug |
+|---|---|---|
+| Host tests (17 programs and 2 script tests, sanitizers on), `nix flake check` | pass | — |
+| FIDO2 suite `validate_fido_m3.py` | 60/60 | 60/60 |
+| OpenPGP APDU suite `validate-openpgp-m4.sh` | 42/42 | 42/42 |
+| OpenPGP suite `validate-openpgp` | 16/16 | 16/16 |
+| gpg end to end | 7/7 | 7/7 |
+| gpg touch and PIN policy by hand: `uif 3 off` / `on`, `forcesig`, touch timeout, PIN again after a replug | pass | — |
 
 ## Validation of v0.3.1
 
