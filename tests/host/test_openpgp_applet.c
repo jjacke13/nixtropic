@@ -198,6 +198,21 @@ static void test_defaults_and_status(void)
     CHECK(verify(0x84, "123456") == 0x6A86 && apdu(0x20, 0x01, 0x81, "123456", 6) == 0x6A86);
 }
 
+/* gpg allows `uif` only on a card that announces a button: DO 7F74 inside
+ * 6E, or by itself (scdaemon app-openpgp.c, "03 81 01 20"). */
+static void test_button_announced(void)
+{
+    static const uint8_t gfm[6] = { 0x7F, 0x74, 0x03, 0x81, 0x01, 0x20 };
+    bool found = false;
+    fresh();
+    CHECK(apdu(0xCA, 0x00, 0x6E, NULL, 0) == 0x9000);
+    for (size_t i = 0; i + sizeof gfm <= s_out_len; i++)
+        if (memcmp(&s_out[i], gfm, sizeof gfm) == 0) found = true;
+    CHECK(found);
+    CHECK(apdu(0xCA, 0x7F, 0x74, NULL, 0) == 0x9000 && s_out_len == 5   /* + SW */
+          && memcmp(s_out, &gfm[3], 3) == 0);
+}
+
 static void test_81_82_apart(void)
 {
     fresh();
@@ -771,6 +786,7 @@ int main(void)
     test_m5_damaged_wrap();
     test_m5_single_auth_path();
     test_defaults_and_status();
+    test_button_announced();
     test_81_82_apart();
     test_clearing_events();
     test_c4();

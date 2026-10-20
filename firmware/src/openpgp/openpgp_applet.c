@@ -11,7 +11,7 @@
  * INS handlers implemented:
  *
  *   0xA4 SELECT                       §7.2.1   match on AID prefix
- *   0xCA GET DATA                     §7.2.6   DOs 4F/5E/65/6E/7A/C0-CD/5B/5F2D/5F35
+ *   0xCA GET DATA                     §7.2.6   DOs 4F/5E/65/6E/7A/7F74/C0-CD/5B/5F2D/5F35
  *   0xDA PUT DATA                     §7.2.8   writable DOs only (cardholder, fpr, lang…)
  *   0x20 VERIFY                       §7.2.2   PW1.81 / PW1.82 / PW3, separate access (M4 D9)
  *   0x24 CHANGE REFERENCE DATA        §7.2.3   split at the PIN length in its binding (M4)
@@ -131,6 +131,10 @@ static const uint8_t EXT_CAPS[] = {
 static const uint8_t HISTORICAL_BYTES[] = {
     0x00, 0x73, 0x80, 0x90, 0x00
 };
+
+/* DO 7F74 General Feature Management (spec 3.4.1 §4.4.1): 81 = feature
+ * byte, 0x20 = button (SW1).  gpg's `uif` needs it ("bt=1"). */
+static const uint8_t GEN_FEATURES[] = { 0x81, 0x01, 0x20 };
 
 /* ===== Helpers ===== */
 
@@ -321,12 +325,14 @@ static int build_do_73(uint8_t *out, size_t out_max, size_t *off)
     return 0;
 }
 
-/* Application Related Data (DO 6E) — composite of 4F + 5F52 + 73. */
+/* Application Related Data (DO 6E) — composite of 4F + 5F52 + 7F74 + 73. */
 static int build_do_6e(uint8_t *out, size_t out_max, size_t *off)
 {
     if (emit_tlv(out, out_max, off, 0x004F, OPENPGP_AID, OPENPGP_AID_LEN) < 0) return -1;
     if (emit_tlv(out, out_max, off, 0x5F52, HISTORICAL_BYTES,
                  sizeof HISTORICAL_BYTES) < 0) return -1;
+    if (emit_tlv(out, out_max, off, 0x7F74, GEN_FEATURES,
+                 sizeof GEN_FEATURES) < 0) return -1;
     /* DO 73 (Discretionary Data Objects) — nested constructed. */
     return emit_constructed(out, out_max, off, 0x0073, build_do_73);
 }
@@ -383,6 +389,12 @@ static int handle_get_data(uint16_t tag, uint8_t *out, size_t out_max, size_t *o
     case 0x007A: /* Security Support Template (constructed) */
         if (emit_constructed(out, out_max, &off, 0x007A, build_do_7a) < 0)
             return emit_sw(SW_WRONG_LENGTH, out, out_max, out_len);
+        break;
+
+    case 0x7F74:   /* General Feature Management */
+        if (off + sizeof GEN_FEATURES > out_max) return emit_sw(SW_WRONG_LENGTH, out, out_max, out_len);
+        memcpy(&out[off], GEN_FEATURES, sizeof GEN_FEATURES);
+        off += sizeof GEN_FEATURES;
         break;
 
     case 0x00C0:   /* Extended capabilities */
