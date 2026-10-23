@@ -1,7 +1,28 @@
 # Hardware
 
-nixtropic targets one board: the **Tropic Square TS1302 USB devkit**. Other TROPIC01
-boards are not supported.
+nixtropic targets the **Tropic Square TROPIC01 USB devkit**: PCB revision TS1302 and,
+since 23 October 2026, TS1303. Other TROPIC01 boards are not supported. Which board and
+chip combinations have been tested is recorded in [Tested hardware](#tested-hardware).
+
+## Tested hardware
+
+One row per board and chip combination run on real hardware. A combination is
+**supported** once it has passed the full release validation in [Status](status.md);
+**basic** means only `nix run .#validate` (FIDO2 5/5, OpenPGP 16/16). Read the chip's
+part number with `nix run .#identify` (stock firmware) and its firmware with
+`nix run .#chip-fw-version`. Chip firmware older than 2.0.0 must be updated first, see
+[Flashing](flashing.md#tropic01-firmware-older-than-200).
+
+| Board (PCB) | Microcontroller | TROPIC01 P/N | Silicon | Chip FW as shipped (app / SPECT) | Chip FW now | nixtropic | Result |
+|---|---|---|---|---|---|---|---|
+| TS1302 (devkit 2.0) | STM32U535CC, 256 KB | `TR01-C2P-T101` | ACAB | 0.3.1 / 0.3.1 | 2.0.0 / 1.0.0 (updated 12 May 2026) | v0.3.2 | supported, full validation 20 Oct 2026 |
+| TS1303 (devkit 3.1) | STM32U535CE, 512 KB | `TR01-C2P-T103` | ACAB | 0.3.1 / 0.3.1 | 2.0.0 / 1.0.0 (updated 23 Oct 2026) | v0.3.2 | basic, 23 Oct 2026 |
+
+The TS1303 runs the same image: the firmware is linked for 256 KB and never writes the
+microcontroller's flash, so the larger CE part needs no separate build. Both chips take
+the default production pairing key (`sh0_prod0`). Tropic Square lists T101 and T103 as
+deprecated; the part shipped for new designs is `TR01-C2P-T301` (firmware 1.0.0), not
+tested here.
 
 ## Versions in v0.3.2
 
@@ -10,7 +31,7 @@ boards are not supported.
 | Secure element | TROPIC01 `TR01-C2P-T101`, silicon revision ACAB (production) | project dongle |
 | TROPIC01 application firmware | 2.0.0 (required) | `chip-fw-version` on the project dongle |
 | TROPIC01 SPECT firmware | 1.0.0 | same |
-| Microcontroller | STM32U535CCTx | board schematic |
+| Microcontroller | STM32U535CCTx (TS1302), STM32U535CETx (TS1303) | board schematics |
 | libtropic (TROPIC01 SDK) | 3.2.1 | `flake.lock` |
 | TinyUSB | 0.20.0 | `flake.lock` |
 | STM32U5 HAL / CMSIS device | 1.6.2 / 1.4.2 | `flake.lock` |

@@ -26,7 +26,7 @@ Windows FIDO2 fix (CTAPHID KEEPALIVE, v0.3.1) and the gpg touch-policy fix (v0.3
 
 | Area | Tested | Notes |
 |---|---|---|
-| Board | TS1302 with TROPIC01 `TR01-C2P-T101` (ACAB), chip application FW 2.0.0 / SPECT 1.0.0 | other boards unsupported; older chip FW must be updated |
+| Board | TS1302 with TROPIC01 `TR01-C2P-T101` (ACAB); TS1303 with `TR01-C2P-T103` (ACAB, basic validation only). Chip application FW 2.0.0 / SPECT 1.0.0 | full list in [Tested hardware](hardware.md#tested-hardware); other boards unsupported; older chip FW must be updated |
 | Host OS | NixOS (nixos-26.05) | Debian/Ubuntu steps documented, not CI-tested |
 | Host stack | GnuPG 2.4, pcsc-lite + patched libccid, OpenSSH via gpg-agent, libfido2 | `scdaemon` with `disable-ccid` + `pcsc-shared` |
 | Browsers | Firefox, Brave (Linux) | Chrome expected to work; macOS untested |
