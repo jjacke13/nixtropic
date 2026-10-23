@@ -26,7 +26,7 @@ Windows FIDO2 fix (CTAPHID KEEPALIVE, v0.3.1) and the gpg touch-policy fix (v0.3
 
 | Area | Tested | Notes |
 |---|---|---|
-| Board | TS1302 with TROPIC01 `TR01-C2P-T101` (ACAB); TS1303 with `TR01-C2P-T103` (ACAB, basic validation only). Chip application FW 2.0.0 / SPECT 1.0.0 | full list in [Tested hardware](hardware.md#tested-hardware); other boards unsupported; older chip FW must be updated |
+| Board | TS1302 with TROPIC01 `TR01-C2P-T101` (ACAB); TS1303 with `TR01-C2P-T103` (ACAB). Chip application FW 2.0.0 / SPECT 1.0.0 | full list in [Tested hardware](hardware.md#tested-hardware); other boards unsupported; older chip FW must be updated |
 | Host OS | NixOS (nixos-26.05) | Debian/Ubuntu steps documented, not CI-tested |
 | Host stack | GnuPG 2.4, pcsc-lite + patched libccid, OpenSSH via gpg-agent, libfido2 | `scdaemon` with `disable-ccid` + `pcsc-shared` |
 | Browsers | Firefox, Brave (Linux) | Chrome expected to work; macOS untested |
@@ -50,6 +50,11 @@ independent ones.
 | OpenPGP suite `validate-openpgp` | 16/16 | 16/16 |
 | gpg end to end | 7/7 | 7/7 |
 | gpg touch and PIN policy by hand: `uif 3 off` / `on`, `forcesig`, touch timeout, PIN again after a replug | pass | — |
+
+Second board, 23 October 2026: TS1303 with `TR01-C2P-T103` (chip firmware updated to
+2.0.0 / 1.0.0 the same day), the same release binary `bf3f7feb…`. Release only: FIDO2
+60/60, OpenPGP APDU 42/42, OpenPGP 16/16, FIDO2 basic 5/5, gpg end to end 7/7, the gpg
+checks by hand pass. See [Tested hardware](hardware.md#tested-hardware).
 
 ## Validation of v0.3.1
 

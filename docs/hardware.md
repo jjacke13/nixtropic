@@ -16,7 +16,7 @@ part number with `nix run .#identify` (stock firmware) and its firmware with
 | Board (PCB) | Microcontroller | TROPIC01 P/N | Silicon | Chip FW as shipped (app / SPECT) | Chip FW now | nixtropic | Result |
 |---|---|---|---|---|---|---|---|
 | TS1302 (devkit 2.0) | STM32U535CC, 256 KB | `TR01-C2P-T101` | ACAB | 0.3.1 / 0.3.1 | 2.0.0 / 1.0.0 (updated 12 May 2026) | v0.3.2 | supported, full validation 20 Oct 2026 |
-| TS1303 (devkit 3.1) | STM32U535CE, 512 KB | `TR01-C2P-T103` | ACAB | 0.3.1 / 0.3.1 | 2.0.0 / 1.0.0 (updated 23 Oct 2026) | v0.3.2 | basic, 23 Oct 2026 |
+| TS1303 (devkit 3.1) | STM32U535CE, 512 KB | `TR01-C2P-T103` | ACAB | 0.3.1 / 0.3.1 | 2.0.0 / 1.0.0 (updated 23 Oct 2026) | v0.3.2 | supported, full validation 23 Oct 2026 |
 
 The TS1303 runs the same image: the firmware is linked for 256 KB and never writes the
 microcontroller's flash, so the larger CE part needs no separate build. Both chips take
