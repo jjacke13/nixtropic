@@ -315,6 +315,29 @@ security hole; deferred until after FOSSCOMM.
 - Docs: "until unplug" should read "until the card is reset" (a CCID power cycle also
   clears it), and the touch-on / PIN-once presets are this project's choice: the spec's
   baseline is touch off and one signature per PIN.
+- (23 Oct 2026) The signature counter (DO `93`) must reset to `000000` when a new
+  signature key is generated (§7.2.14 p74) or imported (§4.4.3.12 p39). nixtropic resets
+  it only on TERMINATE (`openpgp_state.c`, the counter is never cleared on GENERATE).
+
+### 6.12 Check the chip's identity and firmware at boot (23 Oct 2026)
+
+Today the firmware assumes a supported chip: it never checks the part number or the
+chip firmware, so an unsupported chip or old chip firmware shows up only as odd errors
+later. Two checks, if feasible:
+
+- **Part number.** `tropic_chip_id_read()` (`lt_get_info_chip_id`, Application mode)
+  already exists, used only by the debug lt-rpc. At boot, compare the long P/N and
+  silicon revision against the [tested list](hardware.md#tested-hardware)
+  (`TR01-C2P-T101`, `TR01-C2P-T103`, ACAB).
+- **Chip firmware.** The running App and SPECT versions are cheap Application-mode reads
+  (`lt_get_info_riscv_fw_ver` / `lt_get_info_spect_fw_ver`); require 2.0.0 / 1.0.0 (or a
+  range). The four-bank header check (`tools/chip-fw-banks-main.c`, app note 007 §3
+  steps 10–11) needs a maintenance reboot, so not on every boot — at most an on-demand
+  command, if at all.
+
+Open questions: what to do on a mismatch (refuse to start, or run and report — e.g. a
+status the host can read, the LED, or the debug console); boot-time cost of the reads;
+how to allow a newly tested part without a new build. A chip/SDK change: Jan reviews it.
 
 ## 7. Performance / flash budget
 
