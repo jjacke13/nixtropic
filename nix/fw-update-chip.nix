@@ -26,6 +26,7 @@ stdenv.mkDerivation {
     mkdir -p source-build
     cp $sourceRoot/fw-update-chip-main.c   source-build/fw-update-chip-main.c
     cp $sourceRoot/chip-fw-version-main.c  source-build/chip-fw-version-main.c
+    cp $sourceRoot/chip-fw-banks-main.c    source-build/chip-fw-banks-main.c
     cp $sourceRoot/fw-update-chip-CMakeLists.txt source-build/CMakeLists.txt
     sourceRoot=source-build
   '';

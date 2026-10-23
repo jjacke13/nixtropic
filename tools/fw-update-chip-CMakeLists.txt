@@ -86,3 +86,19 @@ target_include_directories(chip-fw-version PRIVATE
 target_link_libraries(chip-fw-version PRIVATE tropic)
 
 install(TARGETS fw-update-chip chip-fw-version RUNTIME DESTINATION bin)
+
+# Read-only sibling: checks all four FW bank headers (maintenance mode).
+add_executable(chip-fw-banks
+    "${CMAKE_CURRENT_SOURCE_DIR}/chip-fw-banks-main.c")
+
+target_compile_definitions(chip-fw-banks PRIVATE
+    "LT_USB_DEVKIT_PATH=\"${LT_USB_DEVKIT_PATH}\"")
+
+target_include_directories(chip-fw-banks PRIVATE
+    "${LIBTROPIC_SRC}/cal/openssl"
+    "${LIBTROPIC_SRC}/hal/posix/usb_dongle"
+    "${LIBTROPIC_SRC}/include")
+
+target_link_libraries(chip-fw-banks PRIVATE tropic)
+
+install(TARGETS chip-fw-banks RUNTIME DESTINATION bin)
