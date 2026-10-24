@@ -29,8 +29,10 @@ Windows FIDO2 fix (CTAPHID KEEPALIVE, v0.3.1) and the gpg touch-policy fix (v0.3
 | Board | TS1302 with TROPIC01 `TR01-C2P-T101` (ACAB); TS1303 with `TR01-C2P-T103` (ACAB). Chip application FW 2.0.0 / SPECT 1.0.0 | full list in [Tested hardware](hardware.md#tested-hardware); other boards unsupported; older chip FW must be updated |
 | Host OS | NixOS (nixos-26.05) | Debian/Ubuntu steps documented, not CI-tested |
 | Host stack | GnuPG 2.4, pcsc-lite + patched libccid, OpenSSH via gpg-agent, libfido2 | `scdaemon` with `disable-ccid` + `pcsc-shared` |
-| Browsers | Firefox, Brave (Linux) | Chrome expected to work; macOS untested |
+| Browsers | Firefox, Brave (Linux); a Chromium browser (Chrome or Brave) on Windows 10 and macOS (v0.3.2) | Safari untested |
 | Windows 11 | OpenPGP card with Gpg4win/Kleopatra; FIDO2 with a PIN in Brave and Settings (v0.3.1) | FIDO2 with a PIN fails in v0.3.0 (no KEEPALIVE); see [Windows](windows.md) |
+| Windows 10 | FIDO2 registration and login with a PIN and touch (v0.3.2, physical laptop) | OpenPGP card not tested on Windows 10 |
+| macOS | FIDO2 registration and login with a PIN and touch (v0.3.2, MacBook) | OpenPGP card untested on macOS |
 | Sites | webauthn.io, webauthn.me (v0.3); Proton account 2FA (v0.2) | attestation `none` |
 | FIDO2 | CTAP 2.0 + CTAP 2.1 credential management, authenticatorConfig, permission tokens | EdDSA and ES256; no hmac-secret, credProtect, PIN protocol 2 |
 | OpenPGP card | 3.4.1 subset: Ed25519 sign/auth, Cv25519 decrypt, PINs, UIF, forcesig | no RSA, no key import, no KDF-DO |
@@ -55,6 +57,10 @@ Second board, 23 October 2026: TS1303 with `TR01-C2P-T103` (chip firmware update
 2.0.0 / 1.0.0 the same day), the same release binary `bf3f7feb…`. Release only: FIDO2
 60/60, OpenPGP APDU 42/42, OpenPGP 16/16, FIDO2 basic 5/5, gpg end to end 7/7, the gpg
 checks by hand pass. See [Tested hardware](hardware.md#tested-hardware).
+
+Other hosts, October 2026, the owner's tests with v0.3.2: on a Windows 10 laptop and on a
+MacBook, FIDO2 registration and login with a PIN and touch in a Chromium browser (Chrome or
+Brave). Both recognised the dongle with no driver install and showed it as "nixtropic".
 
 ## Validation of v0.3.1
 

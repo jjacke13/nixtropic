@@ -158,4 +158,5 @@ More WebAuthn detail: [WebAuthn notes](webauthn.md).
 ## Windows and macOS
 
 Windows has its own page: [Windows](windows.md) (OpenPGP card works; FIDO2 with a PIN
-needs v0.3.1). macOS is untested.
+needs v0.3.1). On macOS, FIDO2 works with v0.3.2 in a Chromium browser (registration and
+login, PIN set, no driver install); the OpenPGP card is untested there.

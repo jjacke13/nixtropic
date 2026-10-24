@@ -92,6 +92,8 @@ GetInfo lists no extensions; MakeCredential still answers the `credProps` extens
 | Brave / Linux | works |
 | Chrome / Linux | expected to work (same engine as Brave), not verified separately |
 | Windows 11 browsers | works from v0.3.1 (Brave, webauthn.io, PIN set); v0.3.0 failed when a PIN was set because Windows abandoned the silent PIN steps ([Windows](windows.md)) |
+| Windows 10 browsers | works with v0.3.2 (Chromium browser, PIN set, physical laptop) |
+| Chrome or Brave / macOS | works with v0.3.2 (registration and login, PIN set) |
 | Safari / macOS | untested |
 
 Troubleshooting steps: [Linux setup](linux-setup.md#fido2-troubleshooting).

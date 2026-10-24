@@ -3,7 +3,9 @@
 The dongle needs no driver on Windows: both interfaces bind to Windows' in-box class
 drivers (HID for FIDO2, the Microsoft USB CCID driver for the smart card). Tested on
 Windows 11 in a VirtualBox VM with USB passthrough: v0.3.0 on 18 October 2026, v0.3.1 on
-19 October 2026, release builds.
+19 October 2026, release builds. v0.3.2 also on a physical Windows 10 laptop (October 2026,
+the owner's test): FIDO2 registration and login with a PIN and touch in a Chromium browser
+(Chrome or Brave), no driver install; Windows shows the device as "nixtropic".
 
 | Feature | v0.3.0 | v0.3.1 |
 |---|---|---|

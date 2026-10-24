@@ -54,9 +54,12 @@ setup on other distributions:
 |---|---|
 | [Flashing](https://jjacke13.github.io/nixtropic/flashing/) | chip firmware check, DFU, Nix and non-Nix builds |
 | [Linux setup](https://jjacke13.github.io/nixtropic/linux-setup/) | pcscd, scdaemon, udev, the libccid patch |
-| [Windows](https://jjacke13.github.io/nixtropic/windows/) | Gpg4win / Kleopatra; FIDO2 with a PIN (v0.3.1) |
+| [Windows](https://jjacke13.github.io/nixtropic/windows/) | Gpg4win / Kleopatra; FIDO2 with a PIN (v0.3.1+, Windows 10 and 11) |
 | [Card setup](https://jjacke13.github.io/nixtropic/card-setup/) | PINs, touch policy, key generation, resets |
 | [Recovery](https://jjacke13.github.io/nixtropic/recovery/) | what each reset changes; DFU recovery |
+
+FIDO2 also works on macOS (Chrome or Brave, v0.3.2) with no setup; the OpenPGP card is
+untested there.
 
 ## Documentation
 
